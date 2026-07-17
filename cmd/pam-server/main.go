@@ -15,7 +15,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -26,6 +25,7 @@ import (
 	"github.com/morandeirachema/pamv1/internal/api"
 	"github.com/morandeirachema/pamv1/internal/auth"
 	"github.com/morandeirachema/pamv1/internal/config"
+	"github.com/morandeirachema/pamv1/internal/logging"
 	"github.com/morandeirachema/pamv1/internal/proxy"
 	"github.com/morandeirachema/pamv1/internal/store"
 	"github.com/morandeirachema/pamv1/internal/store/memstore"
@@ -69,6 +69,9 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	logging.Setup(cfg.LogLevel, cfg.LogFormat)
+	log := logging.Component("server")
+
 	v, err := vault.New(cfg.MasterKey)
 	if err != nil {
 		return err
@@ -79,7 +82,7 @@ func run() error {
 
 	var st store.Store
 	if cfg.DatabaseURL == "memory" {
-		slog.Warn("using ephemeral in-memory store; data is lost on restart (demo mode)")
+		log.Warn("using ephemeral in-memory store; data is lost on restart (demo mode)")
 		st = memstore.New()
 	} else {
 		st, err = pgstore.Open(ctx, cfg.DatabaseURL)
@@ -113,7 +116,7 @@ func run() error {
 		}
 		go func() {
 			if err := px.ListenAndServe(ctx, cfg.SSHAddr); err != nil {
-				slog.Error("ssh proxy stopped", "err", err)
+				log.Error("ssh proxy stopped", "err", err)
 			}
 		}()
 	}
@@ -129,14 +132,14 @@ func run() error {
 
 	errc := make(chan error, 1)
 	go func() { errc <- srv.ListenAndServe() }()
-	slog.Info("pam-server listening", "addr", cfg.ListenAddr,
-		"breakglass", cfg.BreakGlassKeyHash != "")
+	log.Info("pam-server listening", "addr", cfg.ListenAddr,
+		"breakglass", cfg.BreakGlassKeyHash != "", "log_level", cfg.LogLevel)
 
 	select {
 	case err := <-errc:
 		return err
 	case <-ctx.Done():
-		slog.Info("shutting down")
+		log.Info("shutting down")
 		shutCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		return srv.Shutdown(shutCtx)

@@ -18,8 +18,11 @@ SSH proxy; `db` is PostgreSQL.
 | 8080 | HTTP¹ | Portal + REST API | `PAM_LISTEN_ADDR` | Behind TLS in prod; expose to operators only | ✅ |
 | 2222 | SSH | Session proxy (JIT injection) | `PAM_SSH_ADDR` (`off` disables) | Expose to operators/users only | ✅ |
 
-¹ Terminate TLS at an ingress/load balancer (HTTPS is Phase 5). The container
-listens on plain HTTP internally.
+¹ **Secure protocols only.** Operators must reach the portal/API over **HTTPS** —
+terminate TLS at an ingress/load balancer (native HTTPS is Phase 5); the container
+listens on plain HTTP internally, so never expose 8080 directly off-host. Likewise
+prefer **LDAPS (636)** over LDAP and **TLS** to PostgreSQL. Plain-text variants are
+for isolated local dev only.
 
 Kubernetes Service (`deploy/k8s/service.yaml`) maps `80 → 8080` and `2222 → 2222`.
 
@@ -40,7 +43,7 @@ Kubernetes Service (`deploy/k8s/service.yaml`) maps `80 → 8080` and `2222 → 
 | E2 | pam-server (proxy) | Linux target (target zone) | 22 | SSH | JIT-injected privileged session | ✅ |
 | E3 | pam-server (proxy) | Windows target | 5985 / 5986 | WinRM | JIT session (http/https) | 🔷 P4 |
 | E4 | pam-server (proxy) | Windows target | 3389 | RDP | Recorded RDP via gateway | 🔷 P4 |
-| E5 | pam-server | Active Directory (identity zone) | 389 / 636 | LDAP / LDAPS | Authn + group→role mapping | 🔷 P3b |
+| E5 | pam-server | Active Directory (identity zone) | **636** (389 dev only) | **LDAPS** / LDAP | Authn + group→role mapping | 🔷 P3b |
 | E6 | pam-server | Active Directory (identity zone) | 88 | Kerberos | Optional Kerberos auth | 🔷 P3b |
 | E7 | pam-server | AD / target | 636 / 5986 | LDAPS / WinRM | Credential rotation (password change) | 🔷 P7 |
 | E8 | pam-server | SIEM / syslog (mgmt zone) | 514 / 6514 | Syslog / TLS | Forward audit for NIS2 retention | 🔷 P9 |

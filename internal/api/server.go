@@ -6,8 +6,10 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/morandeirachema/pamv1/internal/auth"
+	"github.com/morandeirachema/pamv1/internal/logging"
 	"github.com/morandeirachema/pamv1/internal/store"
 	"github.com/morandeirachema/pamv1/internal/vault"
 	"github.com/morandeirachema/pamv1/internal/web"
@@ -15,7 +17,10 @@ import (
 
 type ctxKey int
 
-const principalKey ctxKey = iota
+const (
+	principalKey ctxKey = iota
+	reqInfoKey
+)
 
 func withPrincipal(ctx context.Context, p *auth.Principal) context.Context {
 	return context.WithValue(ctx, principalKey, p)
@@ -32,11 +37,23 @@ func actorFrom(ctx context.Context) string {
 	return principalFrom(ctx).Name
 }
 
+// reqInfo is a per-request holder the access-log middleware places in the
+// context and the authz middleware fills with the resolved actor.
+type reqInfo struct{ actor string }
+
+func setActor(ctx context.Context, actor string) {
+	if ri, ok := ctx.Value(reqInfoKey).(*reqInfo); ok {
+		ri.actor = actor
+	}
+}
+
 type Server struct {
 	store    store.Store
 	vault    *vault.Vault
 	resolver *auth.Resolver
+	log      *slog.Logger
 	mux      *http.ServeMux
+	handler  http.Handler
 }
 
 // New builds the HTTP handler. The resolver authenticates the X-API-Key header
@@ -45,13 +62,64 @@ func New(st store.Store, v *vault.Vault, resolver *auth.Resolver) (*Server, erro
 	if resolver == nil {
 		return nil, errors.New("api: resolver is required")
 	}
-	s := &Server{store: st, vault: v, resolver: resolver, mux: http.NewServeMux()}
+	s := &Server{
+		store:    st,
+		vault:    v,
+		resolver: resolver,
+		log:      logging.Component("api"),
+		mux:      http.NewServeMux(),
+	}
 	s.routes()
+	s.handler = s.withAccessLog(s.mux)
 	return s, nil
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	s.mux.ServeHTTP(w, r)
+	s.handler.ServeHTTP(w, r)
+}
+
+// statusWriter captures the response status and byte count for the access log.
+type statusWriter struct {
+	http.ResponseWriter
+	status int
+	bytes  int
+}
+
+func (w *statusWriter) WriteHeader(code int) {
+	w.status = code
+	w.ResponseWriter.WriteHeader(code)
+}
+
+func (w *statusWriter) Write(b []byte) (int, error) {
+	if w.status == 0 {
+		w.status = http.StatusOK
+	}
+	n, err := w.ResponseWriter.Write(b)
+	w.bytes += n
+	return n, err
+}
+
+// withAccessLog logs one line per HTTP request (method, path, status, bytes,
+// duration, actor, remote). Health probes are skipped to avoid noise.
+func (s *Server) withAccessLog(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/healthz" {
+			next.ServeHTTP(w, r)
+			return
+		}
+		start := time.Now()
+		ri := &reqInfo{}
+		ctx := context.WithValue(r.Context(), reqInfoKey, ri)
+		sw := &statusWriter{ResponseWriter: w}
+		next.ServeHTTP(sw, r.WithContext(ctx))
+		if sw.status == 0 {
+			sw.status = http.StatusOK
+		}
+		s.log.Info("http request",
+			"method", r.Method, "path", r.URL.Path, "status", sw.status,
+			"bytes", sw.bytes, "dur_ms", time.Since(start).Milliseconds(),
+			"actor", ri.actor, "remote", r.RemoteAddr)
+	})
 }
 
 func (s *Server) routes() {
@@ -83,15 +151,19 @@ func (s *Server) authz(cap auth.Capability, next http.HandlerFunc) http.Handler 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		p, err := s.resolver.Resolve(r.Context(), r.Header.Get("X-API-Key"))
 		if err != nil {
+			s.log.Warn("authentication failed", "path", r.URL.Path, "remote", r.RemoteAddr)
 			writeError(w, http.StatusUnauthorized, "invalid or missing API key")
 			return
 		}
+		setActor(r.Context(), p.Name)
 		ctx := withPrincipal(r.Context(), p)
 		if p.BreakGlass {
-			slog.Warn("BREAK-GLASS access", "method", r.Method, "path", r.URL.Path, "remote", r.RemoteAddr)
+			s.log.Warn("BREAK-GLASS access", "method", r.Method, "path", r.URL.Path, "remote", r.RemoteAddr)
 			s.audit(ctx, "breakglass.access", r.Method+" "+r.URL.Path)
 		}
 		if !p.Role.Can(cap) {
+			s.log.Warn("authorization denied", "actor", p.Name, "role", string(p.Role),
+				"method", r.Method, "path", r.URL.Path)
 			s.audit(ctx, "authz.denied", r.Method+" "+r.URL.Path+" role:"+string(p.Role))
 			writeError(w, http.StatusForbidden, "your role does not permit this action")
 			return
@@ -103,8 +175,9 @@ func (s *Server) authz(cap auth.Capability, next http.HandlerFunc) http.Handler 
 func (s *Server) audit(ctx context.Context, action, detail string) {
 	e := store.AuditEvent{Actor: actorFrom(ctx), Action: action, Detail: detail}
 	if err := s.store.AppendAudit(ctx, &e); err != nil {
-		slog.Error("audit append failed", "action", action, "err", err)
+		s.log.Error("audit append failed", "action", action, "err", err)
 	}
+	s.log.Info("audit", "actor", e.Actor, "action", action, "detail", detail)
 }
 
 func (s *Server) health(w http.ResponseWriter, _ *http.Request) {

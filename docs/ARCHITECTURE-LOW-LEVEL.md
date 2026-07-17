@@ -17,6 +17,7 @@
 cmd/pam-server/main.go        # wiring, flags (-genkey, -hashkey), lifecycle
 internal/
   config/      # env (PAM_*) -> Config
+  logging/     # slog setup (json/text, level) + per-service loggers
   vault/       # AES-256-GCM encrypt/decrypt, key gen
   auth/        # roles, capabilities, Principal, Resolver (RBAC)
   store/       # Store interface + domain types + CredentialAAD
@@ -161,6 +162,20 @@ the client channel closes.
 | `PAM_SSH_ADDR` | `:2222`; `off` disables | proxy |
 | `PAM_SSH_HOST_KEY` | "" (ephemeral) | proxy host key |
 | `PAM_RECORDING_DIR` | `recordings` | proxy recordings |
+| `PAM_LOG_LEVEL` | `info` | logging (debug/info/warn/error) |
+| `PAM_LOG_FORMAT` | `json` | logging (json/text) |
+
+## 4a. Logging (operational, to stdout)
+
+`internal/logging` installs the process slog logger (`Setup`) and hands each
+component a logger tagged `service=<name>` (`Component`). Distinct from the DB
+**audit trail**: logs are for ops/debugging/SIEM, the audit trail is the security
+record. Highlights: `api` logs one line per HTTP request (method/path/status/
+actor/duration) via an access-log middleware + `statusWriter`; `proxy` logs
+connection auth, session start/end, denials, upstream errors; `store` (pgstore)
+logs the Postgres connect and traces each query at `debug` (SQL text + duration +
+rows, **never argument values**). The vault deliberately logs nothing about
+secrets. Format `json` (SIEM) or `text` (humans); collect from stdout.
 
 ## 5. Audit action vocabulary
 
@@ -198,6 +213,7 @@ the client channel closes.
 
 | Date | Change |
 |---|---|
+| 2026-07-18 | Added `logging` package (per-service slog, json/text, `PAM_LOG_LEVEL`/`PAM_LOG_FORMAT`); api access log, proxy session logs, pgstore connect + query tracer; user/admin guides |
 | 2026-07-18 | Phase 3a: `auth` package (roles admin/user/auditor/approver, capabilities, Resolver); `store.User` + user CRUD; API `authz` middleware + `/api/users`; proxy `CapConnect` gate; portal tolerates 403 |
 | 2026-07-18 | Added `proxy` package (SSH gateway, JIT, recording, host key); `store.CredentialAAD`; proxy env vars |
 | 2026-07-17 | Initial packages: config, vault, store(+mem/pg), api, web |

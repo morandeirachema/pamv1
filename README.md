@@ -12,7 +12,11 @@ Open-source **Privileged Access Management** (PAM) in Go: a hardened credential 
 
 Built step by step, **fully functional at every step**. The **JIT credential-injection SSH session proxy** ([Phase 2](ROADMAP.md#phase-2--session-proxy-with-jit-credential-injection-linuxssh-)) and **role-based access control** with four profiles ([Phase 3a](ROADMAP.md#3a--rbac-with-four-profiles-)) now work; see the [ROADMAP](ROADMAP.md) for what's next: the Active Directory login backend, Windows targets, OT/industrial adaptation and NIS2 compliance.
 
-Architecture is documented as living docs: [high-level](docs/ARCHITECTURE-HIGH-LEVEL.md), [low-level](docs/ARCHITECTURE-LOW-LEVEL.md), and a [ports & network-flow matrix](docs/PORTS-AND-FLOWS.md) for firewalling and segmentation.
+**Documentation** (all living docs, kept in step with the code):
+
+- **[User Guide](docs/USER-GUIDE.md)** — for operators/auditors/approvers: signing in, connecting through the proxy, per-role abilities.
+- **[Administrator Guide](docs/ADMIN-GUIDE.md)** — deploy, configure, manage targets/credentials/users/roles, break-glass, logging & audit.
+- **[Architecture](docs/ARCHITECTURE-HIGH-LEVEL.md)** ([low-level](docs/ARCHITECTURE-LOW-LEVEL.md)) and the **[ports & network-flow matrix](docs/PORTS-AND-FLOWS.md)** for firewalling and segmentation.
 
 ## Architecture
 
@@ -61,6 +65,7 @@ flowchart LR
 - **Target inventory** — Linux/Windows machines with ssh/winrm/rdp endpoints.
 - **Credentials API** — vault, list (never returns secret material), audited on-demand `reveal`, delete. The JSON model *cannot* serialize the ciphertext (`json:"-"`).
 - **Audit trail** — append-only record of every sensitive action, with actor attribution.
+- **Operational logs** — structured [slog](https://pkg.go.dev/log/slog) to stdout, one line per HTTP request and per proxy session, tagged by service (`server`/`api`/`proxy`/`store`); JSON for a SIEM or text for humans (`PAM_LOG_LEVEL`, `PAM_LOG_FORMAT`). Separate from the audit trail; secrets are never logged.
 - **Break-glass** — a sealed emergency key whose SHA-256 hash (never the key) lives in config; using it works instantly but screams: `break-glass` actor on every audit row plus a server warning log.
 - **AS/400 portal** — Sign On screen, menu-driven `Work with…` screens, numeric options (`4=Delete`, `5=Display`), F3/F5/F6/F12 keys, green phosphor and scanlines.
 - **PostgreSQL storage** via [pgx](https://github.com/jackc/pgx); in-memory store for tests and demos.

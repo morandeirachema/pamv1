@@ -22,6 +22,11 @@ type Config struct {
 	SSHHostKeyPath string
 	// RecordingDir is where session recordings are written.
 	RecordingDir string
+
+	// LogLevel is debug|info|warn|error (default info).
+	LogLevel string
+	// LogFormat is json|text (default json).
+	LogFormat string
 }
 
 func Load() (*Config, error) {
@@ -34,6 +39,8 @@ func Load() (*Config, error) {
 		SSHAddr:           getenv("PAM_SSH_ADDR", ":2222"),
 		SSHHostKeyPath:    os.Getenv("PAM_SSH_HOST_KEY"),
 		RecordingDir:      getenv("PAM_RECORDING_DIR", "recordings"),
+		LogLevel:          getenv("PAM_LOG_LEVEL", "info"),
+		LogFormat:         getenv("PAM_LOG_FORMAT", "json"),
 	}
 	if cfg.MasterKey == "" {
 		return nil, fmt.Errorf("PAM_MASTER_KEY is required (generate one with: pam-server -genkey)")

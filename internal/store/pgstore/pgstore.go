@@ -7,11 +7,15 @@ import (
 	"context"
 	_ "embed"
 	"errors"
+	"log/slog"
+	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/morandeirachema/pamv1/internal/logging"
 	"github.com/morandeirachema/pamv1/internal/store"
 )
 
@@ -25,10 +29,20 @@ const (
 
 type PGStore struct {
 	pool *pgxpool.Pool
+	log  *slog.Logger
 }
 
 func Open(ctx context.Context, url string) (*PGStore, error) {
-	pool, err := pgxpool.New(ctx, url)
+	log := logging.Component("store")
+	cfg, err := pgxpool.ParseConfig(url)
+	if err != nil {
+		return nil, err
+	}
+	// Trace every query at debug level (SQL text + duration + rows, never
+	// arguments — those could carry ciphertext or token hashes).
+	cfg.ConnConfig.Tracer = queryTracer{log: log}
+
+	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -40,7 +54,36 @@ func Open(ctx context.Context, url string) (*PGStore, error) {
 		pool.Close()
 		return nil, err
 	}
-	return &PGStore{pool: pool}, nil
+	log.Info("connected to postgres", "host", cfg.ConnConfig.Host, "db", cfg.ConnConfig.Database)
+	return &PGStore{pool: pool, log: log}, nil
+}
+
+// queryTracer logs each SQL statement's outcome. It implements pgx.QueryTracer.
+type queryTracer struct{ log *slog.Logger }
+
+type qtCtxKey struct{}
+
+type qtState struct {
+	start time.Time
+	sql   string
+}
+
+func (t queryTracer) TraceQueryStart(ctx context.Context, _ *pgx.Conn, d pgx.TraceQueryStartData) context.Context {
+	return context.WithValue(ctx, qtCtxKey{}, qtState{start: time.Now(), sql: d.SQL})
+}
+
+func (t queryTracer) TraceQueryEnd(ctx context.Context, _ *pgx.Conn, d pgx.TraceQueryEndData) {
+	st, _ := ctx.Value(qtCtxKey{}).(qtState)
+	sql := strings.Join(strings.Fields(st.sql), " ") // collapse whitespace to one line
+	if len(sql) > 120 {
+		sql = sql[:120] + "…"
+	}
+	if d.Err != nil && !errors.Is(d.Err, pgx.ErrNoRows) {
+		t.log.Error("query failed", "sql", sql, "err", d.Err)
+		return
+	}
+	t.log.Debug("query", "sql", sql, "rows", d.CommandTag.RowsAffected(),
+		"dur_ms", time.Since(st.start).Milliseconds())
 }
 
 func pgCode(err error) string {
