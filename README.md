@@ -12,7 +12,7 @@ Open-source **Privileged Access Management** (PAM) in Go: a hardened credential 
 
 Built step by step, **fully functional at every step**. The **JIT credential-injection SSH session proxy** ([Phase 2](ROADMAP.md#phase-2--session-proxy-with-jit-credential-injection-linuxssh-)) and **role-based access control** with four profiles ([Phase 3a](ROADMAP.md#3a--rbac-with-four-profiles-)) now work; see the [ROADMAP](ROADMAP.md) for what's next: the Active Directory login backend, Windows targets, OT/industrial adaptation and NIS2 compliance.
 
-Architecture is documented as two living docs: [high-level](docs/ARCHITECTURE-HIGH-LEVEL.md) and [low-level](docs/ARCHITECTURE-LOW-LEVEL.md).
+Architecture is documented as living docs: [high-level](docs/ARCHITECTURE-HIGH-LEVEL.md), [low-level](docs/ARCHITECTURE-LOW-LEVEL.md), and a [ports & network-flow matrix](docs/PORTS-AND-FLOWS.md) for firewalling and segmentation.
 
 ## Architecture
 
