@@ -12,6 +12,8 @@ Open-source **Privileged Access Management** (PAM) in Go: a hardened credential 
 
 Built step by step, **fully functional at every step**. The **JIT credential-injection SSH session proxy** ([Phase 2](ROADMAP.md#phase-2--session-proxy-with-jit-credential-injection-linuxssh-)), **RBAC** with four profiles ([Phase 3a](ROADMAP.md#3a--rbac-with-four-profiles-)) and **Active Directory login** over LDAPS ([Phase 3b](ROADMAP.md#3b--active-directory-connector-)) now work; see the [ROADMAP](ROADMAP.md) for what's next: Windows targets, OT/industrial adaptation and NIS2 compliance.
 
+🔎 **Live overview:** [interactive project page](https://claude.ai/code/artifact/a1b34e5b-cd84-4fc7-8389-ebb1897495f7) — what works, architecture and roadmap at a glance.
+
 📖 **[Léelo en español →](README.es.md)**
 
 **Documentation** (all living docs, kept in step with the code):

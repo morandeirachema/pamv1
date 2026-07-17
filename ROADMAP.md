@@ -49,6 +49,7 @@ The flagship: users connect *through* pamv1, never holding the credential.
 - [x] LDAP/LDAPS bind against AD ([go-ldap](https://github.com/go-ldap/ldap)): service-account search + user bind to verify the password
 - [x] AD groups → the four pamv1 roles (highest privilege wins), via `PAM_LDAP_GROUP_*`
 - [x] Portal Sign On with AD username + password; short-lived **session tokens** (`POST /api/login`, `POST /api/logout`) that work in the portal and the SSH proxy
+- [ ] **Microsoft Entra ID (Azure AD)** integration: OIDC/OAuth2 login, Entra groups / app roles → the four roles (pluggable behind the `Authenticator` interface, alongside LDAP)
 - [ ] MFA: TOTP enrollment + verification (NIS2 Art. 21(2)(j))
 - [ ] Optional Kerberos bind
 - [x] Local emergency admin kept for AD-down scenarios (bootstrap key + break-glass)

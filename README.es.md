@@ -21,6 +21,8 @@ y el **inicio de sesión con Active Directory** por LDAPS ([Fase 3b](ROADMAP.md#
 consulta el [ROADMAP](ROADMAP.md) para lo siguiente: objetivos Windows, adaptación OT/industrial
 y cumplimiento de NIS2.
 
+🔎 **Resumen interactivo:** [página del proyecto](https://claude.ai/code/artifact/b9f19443-5ad1-42d2-955f-e43ca17ac542) — qué funciona, arquitectura y hoja de ruta de un vistazo.
+
 📖 **[Read it in English →](README.md)**
 
 ## Arquitectura
