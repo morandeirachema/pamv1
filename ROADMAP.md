@@ -83,6 +83,10 @@ The flagship: users connect *through* pamv1, never holding the credential.
 - [ ] Rotation connectors: Linux (SSH `chpasswd`/key replacement), AD (LDAPS password change), Windows local (WinRM)
 - [ ] Credential checkout/check-in with max lease time
 - [ ] Discovery: scan AD/OU or IP ranges to onboard targets
+- [ ] **Account reconciliation (out-of-sync detection & remediation):**
+  - [ ] Credential reconciliation — verify each vaulted secret still authenticates to its target; flag out-of-band changes and remediate per policy (rotate to a PAM-managed secret, or re-vault the current one)
+  - [ ] Identity reconciliation — sync against AD/Entra: revoke pamv1 access for disabled/deleted directory users; surface orphaned/rogue accounts on targets not managed by the vault
+  - [ ] Reconciliation report + optional auto-remediation, scheduled and on-demand, fully audited
 
 ## Phase 8 — OT adaptation ⬜
 
