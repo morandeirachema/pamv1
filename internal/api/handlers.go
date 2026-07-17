@@ -1,6 +1,9 @@
 package api
 
 import (
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -8,6 +11,7 @@ import (
 	"net/http"
 	"strconv"
 
+	"github.com/morandeirachema/pamv1/internal/auth"
 	"github.com/morandeirachema/pamv1/internal/store"
 )
 
@@ -194,6 +198,79 @@ func (s *Server) deleteCredential(w http.ResponseWriter, r *http.Request) {
 	}
 	s.audit(r.Context(), "credential.delete", strconv.FormatInt(id, 10))
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// --- users (RBAC administration) ---
+
+type userIn struct {
+	Username string `json:"username"`
+	Role     string `json:"role"`
+}
+
+// createUser mints a new local identity and returns its access token exactly
+// once. Only the token's SHA-256 is stored; the plaintext is never persisted.
+func (s *Server) createUser(w http.ResponseWriter, r *http.Request) {
+	var in userIn
+	if !readJSON(w, r, &in) {
+		return
+	}
+	role, err := auth.ParseRole(in.Role)
+	if err != nil {
+		writeError(w, http.StatusUnprocessableEntity, `role must be "admin", "user", "auditor" or "approver"`)
+		return
+	}
+	if in.Username == "" {
+		writeError(w, http.StatusUnprocessableEntity, "username is required")
+		return
+	}
+	token, err := generateToken()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "token generation failed")
+		return
+	}
+	sum := sha256.Sum256([]byte(token))
+	u := store.User{Username: in.Username, Role: string(role), TokenHash: hex.EncodeToString(sum[:])}
+	if err := s.store.CreateUser(r.Context(), &u); err != nil {
+		storeError(w, err)
+		return
+	}
+	s.audit(r.Context(), "user.create", fmt.Sprintf("%s role:%s", u.Username, u.Role))
+	writeJSON(w, http.StatusCreated, map[string]any{
+		"id":       u.ID,
+		"username": u.Username,
+		"role":     u.Role,
+		"token":    token, // shown once; store it now
+	})
+}
+
+func (s *Server) listUsers(w http.ResponseWriter, r *http.Request) {
+	users, err := s.store.ListUsers(r.Context())
+	if err != nil {
+		storeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, users)
+}
+
+func (s *Server) deleteUser(w http.ResponseWriter, r *http.Request) {
+	id, ok := idParam(w, r)
+	if !ok {
+		return
+	}
+	if err := s.store.DeleteUser(r.Context(), id); err != nil {
+		storeError(w, err)
+		return
+	}
+	s.audit(r.Context(), "user.delete", strconv.FormatInt(id, 10))
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func generateToken() (string, error) {
+	b := make([]byte, 24)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return "pamt_" + hex.EncodeToString(b), nil
 }
 
 // --- audit ---

@@ -16,6 +16,7 @@ type Memstore struct {
 	nextID  int64
 	targets map[int64]store.Target
 	creds   map[int64]store.Credential
+	users   map[int64]store.User
 	audit   []store.AuditEvent
 }
 
@@ -23,6 +24,7 @@ func New() *Memstore {
 	return &Memstore{
 		targets: make(map[int64]store.Target),
 		creds:   make(map[int64]store.Credential),
+		users:   make(map[int64]store.User),
 	}
 }
 
@@ -147,6 +149,52 @@ func (m *Memstore) ListAudit(_ context.Context, limit int) ([]store.AuditEvent, 
 		out = append(out, m.audit[i])
 	}
 	return out, nil
+}
+
+func (m *Memstore) CreateUser(_ context.Context, u *store.User) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, existing := range m.users {
+		if existing.Username == u.Username {
+			return store.ErrConflict
+		}
+	}
+	u.ID = m.id()
+	u.CreatedAt = time.Now().UTC()
+	m.users[u.ID] = *u
+	return nil
+}
+
+func (m *Memstore) ListUsers(_ context.Context) ([]store.User, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]store.User, 0, len(m.users))
+	for _, u := range m.users {
+		out = append(out, u)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out, nil
+}
+
+func (m *Memstore) GetUserByTokenHash(_ context.Context, tokenHashHex string) (*store.User, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, u := range m.users {
+		if u.TokenHash == tokenHashHex {
+			return &u, nil
+		}
+	}
+	return nil, store.ErrNotFound
+}
+
+func (m *Memstore) DeleteUser(_ context.Context, id int64) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.users[id]; !ok {
+		return store.ErrNotFound
+	}
+	delete(m.users, id)
+	return nil
 }
 
 func (m *Memstore) Close() {}

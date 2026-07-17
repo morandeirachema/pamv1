@@ -34,10 +34,20 @@ The flagship: users connect *through* pamv1, never holding the credential.
 - [ ] Hash-chain the recordings (not just per-file hash)
 - [ ] Disable `reveal` by policy once proxy path is the norm (reveal becomes break-glass-only)
 
-## Phase 3 — Identity: Active Directory connector + RBAC ⬜
+## Phase 3 — Identity & access control 🚧
+
+### 3a — RBAC with four profiles ✅
+
+- [x] Four roles — **admin**, **user**, **auditor**, **approver** — with an authoritative role→capability matrix (`internal/auth`)
+- [x] Per-user access tokens (stored as SHA-256 only), minted by an admin via `POST /api/users`
+- [x] Enforcement in the REST API (per-route capability) and the SSH proxy (`CapConnect`); every denial audited (`authz.denied` / `session.denied`)
+- [x] Audit now attributes real usernames; portal tolerates per-role 403s
+- [ ] `approver`'s approval endpoints (access-request workflow) — arrives with the OT/approval phase
+
+### 3b — Active Directory connector ⬜
 
 - [ ] LDAP/LDAPS bind against AD ([go-ldap](https://github.com/go-ldap/ldap)); optional Kerberos
-- [ ] AD groups → pamv1 roles (admin / operator / auditor / connect-only per target group)
+- [ ] AD groups → the four pamv1 roles
 - [ ] Portal Sign On with AD username + password (replaces bootstrap API key), short-lived session tokens
 - [ ] MFA: TOTP enrollment + verification (NIS2 Art. 21(2)(j))
 - [ ] Local emergency admin kept for AD-down scenarios (ties into break-glass)

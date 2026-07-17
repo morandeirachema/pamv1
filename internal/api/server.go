@@ -3,13 +3,11 @@ package api
 
 import (
 	"context"
-	"crypto/sha256"
-	"crypto/subtle"
-	"encoding/hex"
 	"errors"
 	"log/slog"
 	"net/http"
 
+	"github.com/morandeirachema/pamv1/internal/auth"
 	"github.com/morandeirachema/pamv1/internal/store"
 	"github.com/morandeirachema/pamv1/internal/vault"
 	"github.com/morandeirachema/pamv1/internal/web"
@@ -17,39 +15,37 @@ import (
 
 type ctxKey int
 
-const actorKey ctxKey = iota
+const principalKey ctxKey = iota
 
-func withActor(ctx context.Context, actor string) context.Context {
-	return context.WithValue(ctx, actorKey, actor)
+func withPrincipal(ctx context.Context, p *auth.Principal) context.Context {
+	return context.WithValue(ctx, principalKey, p)
+}
+
+func principalFrom(ctx context.Context) *auth.Principal {
+	if p, ok := ctx.Value(principalKey).(*auth.Principal); ok {
+		return p
+	}
+	return &auth.Principal{Name: "unknown"}
 }
 
 func actorFrom(ctx context.Context) string {
-	if a, ok := ctx.Value(actorKey).(string); ok {
-		return a
-	}
-	return "unknown"
+	return principalFrom(ctx).Name
 }
 
 type Server struct {
-	store          store.Store
-	vault          *vault.Vault
-	apiKey         []byte
-	breakGlassHash []byte
-	mux            *http.ServeMux
+	store    store.Store
+	vault    *vault.Vault
+	resolver *auth.Resolver
+	mux      *http.ServeMux
 }
 
-// New builds the HTTP handler. breakGlassHashHex is the hex SHA-256 of the
-// sealed emergency key; pass "" to disable the break-glass path.
-func New(st store.Store, v *vault.Vault, apiKey, breakGlassHashHex string) (*Server, error) {
-	var bgHash []byte
-	if breakGlassHashHex != "" {
-		b, err := hex.DecodeString(breakGlassHashHex)
-		if err != nil || len(b) != sha256.Size {
-			return nil, errors.New("PAM_BREAK_GLASS_KEY_HASH must be a hex-encoded SHA-256")
-		}
-		bgHash = b
+// New builds the HTTP handler. The resolver authenticates the X-API-Key header
+// into a Principal (bootstrap admin key, break-glass key, or a per-user token).
+func New(st store.Store, v *vault.Vault, resolver *auth.Resolver) (*Server, error) {
+	if resolver == nil {
+		return nil, errors.New("api: resolver is required")
 	}
-	s := &Server{store: st, vault: v, apiKey: []byte(apiKey), breakGlassHash: bgHash, mux: http.NewServeMux()}
+	s := &Server{store: st, vault: v, resolver: resolver, mux: http.NewServeMux()}
 	s.routes()
 	return s, nil
 }
@@ -62,40 +58,45 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /healthz", s.health)
 	s.mux.HandleFunc("GET /{$}", web.Index)
 
-	s.mux.Handle("POST /api/targets", s.auth(s.createTarget))
-	s.mux.Handle("GET /api/targets", s.auth(s.listTargets))
-	s.mux.Handle("GET /api/targets/{id}", s.auth(s.getTarget))
-	s.mux.Handle("DELETE /api/targets/{id}", s.auth(s.deleteTarget))
+	s.mux.Handle("POST /api/targets", s.authz(auth.CapManageTargets, s.createTarget))
+	s.mux.Handle("GET /api/targets", s.authz(auth.CapReadInventory, s.listTargets))
+	s.mux.Handle("GET /api/targets/{id}", s.authz(auth.CapReadInventory, s.getTarget))
+	s.mux.Handle("DELETE /api/targets/{id}", s.authz(auth.CapManageTargets, s.deleteTarget))
 
-	s.mux.Handle("POST /api/credentials", s.auth(s.createCredential))
-	s.mux.Handle("GET /api/credentials", s.auth(s.listCredentials))
-	s.mux.Handle("POST /api/credentials/{id}/reveal", s.auth(s.revealCredential))
-	s.mux.Handle("DELETE /api/credentials/{id}", s.auth(s.deleteCredential))
+	s.mux.Handle("POST /api/credentials", s.authz(auth.CapManageCredentials, s.createCredential))
+	s.mux.Handle("GET /api/credentials", s.authz(auth.CapReadInventory, s.listCredentials))
+	s.mux.Handle("POST /api/credentials/{id}/reveal", s.authz(auth.CapRevealSecret, s.revealCredential))
+	s.mux.Handle("DELETE /api/credentials/{id}", s.authz(auth.CapManageCredentials, s.deleteCredential))
 
-	s.mux.Handle("GET /api/audit", s.auth(s.listAudit))
+	s.mux.Handle("GET /api/audit", s.authz(auth.CapReadAudit, s.listAudit))
+
+	s.mux.Handle("POST /api/users", s.authz(auth.CapManageUsers, s.createUser))
+	s.mux.Handle("GET /api/users", s.authz(auth.CapManageUsers, s.listUsers))
+	s.mux.Handle("DELETE /api/users/{id}", s.authz(auth.CapManageUsers, s.deleteUser))
 }
 
-// auth accepts the admin API key or, as an emergency path, the sealed
-// break-glass key. Break-glass use is deliberately loud: every request made
-// with it appends a "breakglass.access" audit event and logs a warning.
-func (s *Server) auth(next http.HandlerFunc) http.Handler {
+// authz resolves the caller into a Principal and enforces that its role holds
+// the required capability. Break-glass use is deliberately loud: every request
+// made with the emergency key appends a "breakglass.access" audit event and
+// logs a warning.
+func (s *Server) authz(cap auth.Capability, next http.HandlerFunc) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		key := []byte(r.Header.Get("X-API-Key"))
-		if subtle.ConstantTimeCompare(key, s.apiKey) == 1 {
-			next(w, r.WithContext(withActor(r.Context(), "api-key")))
+		p, err := s.resolver.Resolve(r.Context(), r.Header.Get("X-API-Key"))
+		if err != nil {
+			writeError(w, http.StatusUnauthorized, "invalid or missing API key")
 			return
 		}
-		if len(s.breakGlassHash) != 0 && len(key) != 0 {
-			sum := sha256.Sum256(key)
-			if subtle.ConstantTimeCompare(sum[:], s.breakGlassHash) == 1 {
-				ctx := withActor(r.Context(), "break-glass")
-				slog.Warn("BREAK-GLASS access", "method", r.Method, "path", r.URL.Path, "remote", r.RemoteAddr)
-				s.audit(ctx, "breakglass.access", r.Method+" "+r.URL.Path)
-				next(w, r.WithContext(ctx))
-				return
-			}
+		ctx := withPrincipal(r.Context(), p)
+		if p.BreakGlass {
+			slog.Warn("BREAK-GLASS access", "method", r.Method, "path", r.URL.Path, "remote", r.RemoteAddr)
+			s.audit(ctx, "breakglass.access", r.Method+" "+r.URL.Path)
 		}
-		writeError(w, http.StatusUnauthorized, "invalid or missing API key")
+		if !p.Role.Can(cap) {
+			s.audit(ctx, "authz.denied", r.Method+" "+r.URL.Path+" role:"+string(p.Role))
+			writeError(w, http.StatusForbidden, "your role does not permit this action")
+			return
+		}
+		next(w, r.WithContext(ctx))
 	})
 }
 

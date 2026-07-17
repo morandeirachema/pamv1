@@ -170,6 +170,52 @@ func (s *PGStore) ListAudit(ctx context.Context, limit int) ([]store.AuditEvent,
 	})
 }
 
+func (s *PGStore) CreateUser(ctx context.Context, u *store.User) error {
+	err := s.pool.QueryRow(ctx,
+		`INSERT INTO users (username, role, token_hash)
+		 VALUES ($1, $2, $3) RETURNING id, created_at`,
+		u.Username, u.Role, u.TokenHash,
+	).Scan(&u.ID, &u.CreatedAt)
+	if pgCode(err) == pgUniqueViolation {
+		return store.ErrConflict
+	}
+	return err
+}
+
+func (s *PGStore) ListUsers(ctx context.Context) ([]store.User, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT id, username, role, token_hash, created_at FROM users ORDER BY id`)
+	if err != nil {
+		return nil, err
+	}
+	return pgx.CollectRows(rows, scanUser)
+}
+
+func (s *PGStore) GetUserByTokenHash(ctx context.Context, tokenHashHex string) (*store.User, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT id, username, role, token_hash, created_at FROM users WHERE token_hash = $1`,
+		tokenHashHex)
+	if err != nil {
+		return nil, err
+	}
+	u, err := pgx.CollectExactlyOneRow(rows, scanUser)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, store.ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &u, nil
+}
+
+func (s *PGStore) DeleteUser(ctx context.Context, id int64) error {
+	tag, err := s.pool.Exec(ctx, `DELETE FROM users WHERE id = $1`, id)
+	if err == nil && tag.RowsAffected() == 0 {
+		return store.ErrNotFound
+	}
+	return err
+}
+
 func (s *PGStore) Close() {
 	s.pool.Close()
 }
@@ -184,4 +230,10 @@ func scanCredential(row pgx.CollectableRow) (store.Credential, error) {
 	var c store.Credential
 	err := row.Scan(&c.ID, &c.TargetID, &c.Username, &c.SecretType, &c.SecretEnc, &c.CreatedAt, &c.RotatedAt)
 	return c, err
+}
+
+func scanUser(row pgx.CollectableRow) (store.User, error) {
+	var u store.User
+	err := row.Scan(&u.ID, &u.Username, &u.Role, &u.TokenHash, &u.CreatedAt)
+	return u, err
 }

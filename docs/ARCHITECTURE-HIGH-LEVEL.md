@@ -4,7 +4,7 @@
 > boundaries, data flows or trust zones. Keep it conceptual — implementation
 > detail belongs in [ARCHITECTURE-LOW-LEVEL.md](ARCHITECTURE-LOW-LEVEL.md).
 >
-> Last updated: 2026-07-18 · Reflects: **Phase 2** (session proxy + JIT injection). See [ROADMAP](../ROADMAP.md).
+> Last updated: 2026-07-18 · Reflects: **Phase 3a** (RBAC + four profiles) on top of Phase 2 (session proxy + JIT injection). See [ROADMAP](../ROADMAP.md).
 
 ## 1. Purpose
 
@@ -20,8 +20,9 @@ designed to fit IT and OT (industrial) environments and to support NIS2 obligati
 ```mermaid
 flowchart TB
     subgraph Z0["Zone: operators (untrusted)"]
-        ADMIN["  Admin / Operator  "]
-        AUD["  Auditor  "]
+        ADMIN["  Admin  "]
+        USER["  User  "]
+        AUD["  Auditor / Approver  "]
     end
 
     subgraph Z1["Zone: pamv1 control plane (trusted)"]
@@ -43,7 +44,7 @@ flowchart TB
     IDP["  Active Directory*  "]
 
     ADMIN --> PORTAL --> API
-    ADMIN -->|"ssh"| PROXY
+    USER -->|"ssh"| PROXY
     AUD --> PORTAL
     API --> VAULT
     PROXY --> VAULT
@@ -66,9 +67,24 @@ flowchart TB
 | **Audit** | Append-only trail of every sensitive action | ✅ Phase 1 |
 | **Break-glass** | Sealed emergency access, loud + audited | ✅ Phase 1 |
 | **Session Proxy** | Broker SSH; **JIT credential injection**; record sessions | ✅ Phase 2 |
-| **AD Connector** | Identity (users/groups), RBAC, MFA | ⬜ Phase 3 |
+| **RBAC** | Four profiles (admin/user/auditor/approver), per-user tokens | ✅ Phase 3a |
+| **AD Connector** | LDAP/Kerberos identity, AD groups → roles, MFA | ⬜ Phase 3b |
 | **Windows access** | WinRM/RDP with JIT credentials | ⬜ Phase 4 |
 | **Credential lifecycle** | Rotation, checkout/check-in, discovery | ⬜ Phase 7 |
+
+## 3a. Roles (RBAC)
+
+Four profiles, enforced identically by the API and the proxy through a shared
+capability matrix:
+
+| Role | Can | Cannot |
+|---|---|---|
+| **admin** | everything: manage targets/credentials/users, reveal secrets, connect, read audit | — |
+| **user** | connect to targets through the proxy, read the inventory | manage, reveal, read audit |
+| **auditor** | read the inventory and the audit trail | manage, reveal, connect |
+| **approver** | read inventory + audit, approve/deny access requests (endpoints: later phase) | manage, reveal, connect |
+
+Identity today is a per-user access token (or the bootstrap admin key / break-glass key); AD-backed login with group→role mapping arrives in Phase 3b.
 
 ## 4. Key flows
 
@@ -135,5 +151,6 @@ flowchart LR
 
 | Date | Change |
 |---|---|
+| 2026-07-18 | Phase 3a: RBAC with four profiles (admin/user/auditor/approver), per-user tokens, enforced in API + proxy |
 | 2026-07-18 | Phase 2: SSH session proxy with JIT injection + recording added |
 | 2026-07-17 | Phase 1: vault, inventory, audit, break-glass, portal, IaC |

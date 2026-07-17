@@ -71,13 +71,23 @@
     });
     if (res.status === 204) return null;
     const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error((data.error || res.statusText).toUpperCase());
+    if (!res.ok) {
+      const err = new Error((data.error || res.statusText).toUpperCase());
+      err.status = res.status;
+      throw err;
+    }
     return data;
   }
 
+  // Load each panel independently so a role without a given capability (a 403)
+  // still gets a working portal — the panels it may not see just stay empty.
   async function load() {
+    const get = async (path) => {
+      try { return await api("GET", path); }
+      catch (e) { if (e.status === 403) return []; throw e; }
+    };
     [targets, creds, audit] = await Promise.all([
-      api("GET", "/api/targets"), api("GET", "/api/credentials"), api("GET", "/api/audit?limit=30"),
+      get("/api/targets"), get("/api/credentials"), get("/api/audit?limit=30"),
     ]);
   }
 

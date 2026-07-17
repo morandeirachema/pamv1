@@ -5,7 +5,7 @@
 > the codebase; the conceptual view lives in
 > [ARCHITECTURE-HIGH-LEVEL.md](ARCHITECTURE-HIGH-LEVEL.md).
 >
-> Last updated: 2026-07-18 · Reflects: **Phase 2**. Commit the doc update with the code change.
+> Last updated: 2026-07-18 · Reflects: **Phase 3a** (RBAC + four profiles). Commit the doc update with the code change.
 
 ## 1. Language, layout, dependencies
 
@@ -18,10 +18,11 @@ cmd/pam-server/main.go        # wiring, flags (-genkey, -hashkey), lifecycle
 internal/
   config/      # env (PAM_*) -> Config
   vault/       # AES-256-GCM encrypt/decrypt, key gen
+  auth/        # roles, capabilities, Principal, Resolver (RBAC)
   store/       # Store interface + domain types + CredentialAAD
     memstore/  # in-memory impl (tests, demo)
     pgstore/   # PostgreSQL impl (embedded schema.sql)
-  api/         # REST handlers, auth middleware, break-glass
+  api/         # REST handlers, authz middleware, user administration
   proxy/       # SSH gateway, JIT injection, session recording, host key
   web/         # embedded AS/400 portal (static/index.html)
 ```
@@ -46,26 +47,50 @@ AAD matches on both encrypt and decrypt paths.
 Schema (`pgstore/schema.sql`, applied idempotently on startup): `targets`,
 `credentials` (FK `ON DELETE CASCADE`), `audit_events`.
 
-### 2.3 `api`
+### 2.3 `auth` *(Phase 3a)*
+
+RBAC. Four `Role`s — `admin`, `user`, `auditor`, `approver` — each granted a set
+of `Capability` values by the authoritative `roleCaps` matrix (`Role.Can(cap)`).
+`Principal{Name, Role, BreakGlass}` is the authenticated identity.
+
+`Resolver.Resolve(ctx, key)` maps a presented key to a Principal, trying in
+order: the bootstrap admin key (`PAM_API_KEY`) → `admin`; the break-glass key →
+`admin` with `BreakGlass=true`; else a per-user token, looked up by its SHA-256
+via `store.GetUserByTokenHash`. Shared by `api` and `proxy` so both enforce the
+same identities and roles. `auth` imports `store` (no cycle).
+
+Capability grants: admin = all; user = `CapReadInventory`+`CapConnect`; auditor =
+`CapReadInventory`+`CapReadAudit`; approver = auditor + `CapApprove` (approval
+endpoints arrive with the OT/approval phase).
+
+### 2.4 `api`
 
 - Router: Go 1.22+ `http.ServeMux` pattern methods (`GET /api/targets/{id}` …).
-- `auth` middleware: constant-time compare of `X-API-Key` against `PAM_API_KEY`;
-  falls back to break-glass (below). Injects an actor string into the request context.
+- `authz(cap, handler)` middleware: resolves the `X-API-Key` into a Principal via
+  `auth.Resolver`, emits the loud `breakglass.access` audit if applicable, then
+  enforces `Principal.Role.Can(cap)` (403 + `authz.denied` audit otherwise). The
+  Principal goes in the request context; `actorFrom` reads its name for audit.
+- Each route declares its required capability (e.g. `POST /api/targets` needs
+  `CapManageTargets`, `GET /api/audit` needs `CapReadAudit`).
+- User administration (`CapManageUsers`): `POST /api/users` mints a token and
+  returns it **once**; only the SHA-256 is stored. `GET`/`DELETE /api/users`.
 - Handlers validate input (os_type ∈ {linux,windows}, protocol ∈ {ssh,winrm,rdp}),
   translate store errors to HTTP codes, and append audit events.
-- `reveal` decrypts on demand and is audited; it is the temporary escape hatch
-  until the proxy is the norm (see roadmap Phase 2 note).
+- `reveal` (needs `CapRevealSecret`, admin only) decrypts on demand and is audited.
 
-### 2.4 `proxy`  *(Phase 2)*
+### 2.5 `proxy`  *(Phase 2, RBAC in 3a)*
 
 SSH gateway. See §3 for the wire-level flow.
 
-- `New(store, vault, apiKey, Config)` → `Proxy`; `ListenAndServe(ctx, addr)` or
+- `New(store, vault, resolver, Config)` → `Proxy`; `ListenAndServe(ctx, addr)` or
   `Serve(ctx, ln)` (tests inject a `127.0.0.1:0` listener).
-- **Auth** (`authenticate`): `PasswordCallback` compares the SSH password to the
-  PAM API key (constant time). The SSH *username* selects the target:
-  `splitLogin` parses `creduser@target` (rightmost `@`) or bare `target`.
-  Result stashed in `ssh.Permissions.Extensions`.
+- **Auth** (`authenticate`): `PasswordCallback` resolves the SSH password (a PAM
+  key or per-user token) into a Principal via `auth.Resolver`. The SSH *username*
+  selects the target: `splitLogin` parses `creduser@target` (rightmost `@`) or
+  bare `target`. Principal name/role + target stashed in `ssh.Permissions.Extensions`.
+- **Authz**: after the handshake, a connection whose role lacks `CapConnect`
+  (e.g. `auditor`, `approver`) is rejected with a `session.denied` audit before
+  any target is resolved.
 - **Resolve** (`resolve`): after handshake, look up target by name (must be
   `protocol=ssh`), pick the credential (matching `creduser` or first), and
   **decrypt the secret** — this is the JIT moment; plaintext lives only here.
@@ -82,11 +107,13 @@ SSH gateway. See §3 for the wire-level flow.
 - **Host key** (`hostkey.go`): `PAM_SSH_HOST_KEY` PEM path (persisted, generated
   if missing) or ephemeral ed25519.
 
-### 2.5 `web`
+### 2.6 `web`
 
 Single embedded `static/index.html` (`//go:embed`). 5250-style terminal UI:
-Sign On, menu, "Work with…" screens, F-keys, asciicast-free plain JS calling the
-REST API with the API key. Served with a strict CSP.
+Sign On, menu, "Work with…" screens, F-keys, plain JS calling the REST API with
+the key/token entered at Sign On. Panels load independently and tolerate a 403,
+so a non-admin role gets a working portal (panels it can't see stay empty).
+Served with a strict CSP.
 
 ## 3. Proxy wire flow (per connection)
 
@@ -138,8 +165,10 @@ the client channel closes.
 ## 5. Audit action vocabulary
 
 `target.create` · `target.delete` · `credential.create` · `credential.reveal` ·
-`credential.delete` · `breakglass.access` · `session.start` · `session.record` ·
-`session.end` · `session.denied` · `session.error`.
+`credential.delete` · `user.create` · `user.delete` · `authz.denied` ·
+`breakglass.access` · `session.start` · `session.record` · `session.end` ·
+`session.denied` · `session.error`. The actor is the Principal name
+(`bootstrap-admin`, `break-glass`, or a username).
 
 ## 6. Security-relevant invariants (do not regress)
 
@@ -149,19 +178,26 @@ the client channel closes.
 4. Every code path that reveals or uses a secret appends an audit event.
 5. Break-glass config holds only the SHA-256 hash, never the plaintext key.
 6. Proxy plaintext secret is confined to `resolve`→`dialUpstream`; never logged.
+7. User access tokens are stored only as `TokenHash` (`json:"-"`); the plaintext
+   is returned once at creation and never persisted or re-derivable.
+8. Every protected route/connection declares a capability; the role→capability
+   matrix in `auth` is the single source of truth (don't inline role checks).
 
 ## 7. Testing
 
 - `vault`: roundtrip, AAD binding, tamper detection, version rejection, nonce uniqueness.
-- `api`: full CRUD flow, auth required, secret-non-leak, cascade delete, break-glass audited, validation/conflict.
+- `auth`: role→capability matrix, role parsing, resolver (bootstrap/break-glass/token/unknown).
+- `api`: full CRUD flow, auth required, secret-non-leak, cascade delete, break-glass audited, validation/conflict, **RBAC** (user/auditor/approver each allowed only their capabilities).
 - `proxy`: **end-to-end JIT injection** against an in-process upstream sshd that
   accepts only the vaulted password (proves the client never had it), plus wrong-key
-  rejection, unknown-target denial, credential selector, and recording hash match.
+  rejection, unknown-target denial, credential selector, recording hash match, and
+  **auditor-denied connect** (RBAC gate).
 - CI runs `gofmt -l`, `go vet`, `go build`, `go test -race`, and a Docker build.
 
 ## 8. Change log
 
 | Date | Change |
 |---|---|
+| 2026-07-18 | Phase 3a: `auth` package (roles admin/user/auditor/approver, capabilities, Resolver); `store.User` + user CRUD; API `authz` middleware + `/api/users`; proxy `CapConnect` gate; portal tolerates 403 |
 | 2026-07-18 | Added `proxy` package (SSH gateway, JIT, recording, host key); `store.CredentialAAD`; proxy env vars |
 | 2026-07-17 | Initial packages: config, vault, store(+mem/pg), api, web |

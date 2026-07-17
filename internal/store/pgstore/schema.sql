@@ -29,3 +29,13 @@ CREATE TABLE IF NOT EXISTS audit_events (
 );
 
 CREATE INDEX IF NOT EXISTS audit_events_action_idx ON audit_events (action);
+
+CREATE TABLE IF NOT EXISTS users (
+    id         BIGSERIAL PRIMARY KEY,
+    username   TEXT NOT NULL UNIQUE,
+    role       TEXT NOT NULL,
+    token_hash TEXT NOT NULL UNIQUE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS users_token_hash_idx ON users (token_hash);

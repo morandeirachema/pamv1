@@ -55,6 +55,17 @@ type AuditEvent struct {
 	Detail string    `json:"detail"`
 }
 
+// User is a local identity with a role. The access token is stored only as a
+// hex SHA-256 (TokenHash, never serialized); the plaintext token is shown to
+// the admin exactly once, at creation.
+type User struct {
+	ID        int64     `json:"id"`
+	Username  string    `json:"username"`
+	Role      string    `json:"role"` // admin | user | auditor
+	TokenHash string    `json:"-"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
 type Store interface {
 	CreateTarget(ctx context.Context, t *Target) error
 	ListTargets(ctx context.Context) ([]Target, error)
@@ -69,6 +80,11 @@ type Store interface {
 
 	AppendAudit(ctx context.Context, e *AuditEvent) error
 	ListAudit(ctx context.Context, limit int) ([]AuditEvent, error)
+
+	CreateUser(ctx context.Context, u *User) error
+	ListUsers(ctx context.Context) ([]User, error)
+	GetUserByTokenHash(ctx context.Context, tokenHashHex string) (*User, error)
+	DeleteUser(ctx context.Context, id int64) error
 
 	Close()
 }

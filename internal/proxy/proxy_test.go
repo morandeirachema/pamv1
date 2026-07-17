@@ -17,6 +17,7 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
+	"github.com/morandeirachema/pamv1/internal/auth"
 	"github.com/morandeirachema/pamv1/internal/proxy"
 	"github.com/morandeirachema/pamv1/internal/store"
 	"github.com/morandeirachema/pamv1/internal/store/memstore"
@@ -131,7 +132,11 @@ func serveUpstream(conn net.Conn, cfg *ssh.ServerConfig, output string) {
 // startProxy launches the proxy on an ephemeral port and returns its address.
 func startProxy(t *testing.T, st store.Store, v *vault.Vault, recDir string) string {
 	t.Helper()
-	px, err := proxy.New(st, v, proxyAPIKey, proxy.Config{
+	resolver, err := auth.NewResolver(st, proxyAPIKey, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	px, err := proxy.New(st, v, resolver, proxy.Config{
 		HostKey:      mustSigner(t),
 		RecordingDir: recDir,
 		DialTimeout:  5 * time.Second,
@@ -320,6 +325,40 @@ func waitForAudit(t *testing.T, st store.Store, want ...string) (map[string]bool
 			return seen, recDetail
 		}
 		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// TestAuditorCannotConnect verifies the RBAC gate on the proxy: an auditor
+// authenticates (valid token) but may not open a session.
+func TestAuditorCannotConnect(t *testing.T) {
+	host, port := startUpstream(t, upstreamUser, upstreamSecret, targetOutput)
+	st := memstore.New()
+	v := mustVault(t)
+	seedTarget(t, st, v, host, port)
+
+	// Register an auditor user with a known token.
+	const auditorToken = "pamt-auditor-token"
+	sum := sha256.Sum256([]byte(auditorToken))
+	if err := st.CreateUser(context.Background(), &store.User{
+		Username: "theo", Role: "auditor", TokenHash: hex.EncodeToString(sum[:]),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	addr := startProxy(t, st, v, t.TempDir())
+
+	client, err := dialProxy(t, addr, "web-01", auditorToken)
+	if err != nil {
+		t.Fatalf("auditor auth should pass: %v", err)
+	}
+	defer client.Close()
+	if sess, err := client.NewSession(); err == nil {
+		sess.Close()
+		t.Fatal("auditor must not be able to open a proxied session")
+	}
+
+	seen, _ := waitForAudit(t, st, "session.denied")
+	if !seen["session.denied"] {
+		t.Fatal("auditor connect attempt must be audited as session.denied")
 	}
 }
 

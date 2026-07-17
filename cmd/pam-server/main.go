@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/morandeirachema/pamv1/internal/api"
+	"github.com/morandeirachema/pamv1/internal/auth"
 	"github.com/morandeirachema/pamv1/internal/config"
 	"github.com/morandeirachema/pamv1/internal/proxy"
 	"github.com/morandeirachema/pamv1/internal/store"
@@ -88,7 +89,12 @@ func run() error {
 	}
 	defer st.Close()
 
-	handler, err := api.New(st, v, cfg.APIKey, cfg.BreakGlassKeyHash)
+	resolver, err := auth.NewResolver(st, cfg.APIKey, cfg.BreakGlassKeyHash)
+	if err != nil {
+		return err
+	}
+
+	handler, err := api.New(st, v, resolver)
 	if err != nil {
 		return err
 	}
@@ -98,7 +104,7 @@ func run() error {
 		if err != nil {
 			return fmt.Errorf("ssh host key: %w", err)
 		}
-		px, err := proxy.New(st, v, cfg.APIKey, proxy.Config{
+		px, err := proxy.New(st, v, resolver, proxy.Config{
 			HostKey:      hostKey,
 			RecordingDir: cfg.RecordingDir,
 		})

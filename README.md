@@ -10,7 +10,7 @@
 
 Open-source **Privileged Access Management** (PAM) in Go: a hardened credential vault, target inventory for Linux/Windows, append-only audit trail, break-glass emergency access, and an unapologetically **AS/400-style admin portal** — because touching a PAM should *feel* serious.
 
-Built step by step, **fully functional at every step**. The **JIT credential-injection SSH session proxy** now works ([Phase 2](ROADMAP.md#phase-2--session-proxy-with-jit-credential-injection-linuxssh-)); see the [ROADMAP](ROADMAP.md) for what's next: Active Directory connector, Windows targets, OT/industrial adaptation and NIS2 compliance.
+Built step by step, **fully functional at every step**. The **JIT credential-injection SSH session proxy** ([Phase 2](ROADMAP.md#phase-2--session-proxy-with-jit-credential-injection-linuxssh-)) and **role-based access control** with four profiles ([Phase 3a](ROADMAP.md#3a--rbac-with-four-profiles-)) now work; see the [ROADMAP](ROADMAP.md) for what's next: the Active Directory login backend, Windows targets, OT/industrial adaptation and NIS2 compliance.
 
 Architecture is documented as two living docs: [high-level](docs/ARCHITECTURE-HIGH-LEVEL.md) and [low-level](docs/ARCHITECTURE-LOW-LEVEL.md).
 
@@ -52,8 +52,9 @@ flowchart LR
 
 \* dashed components (AD connector, Windows) land in [Phase 3–4](ROADMAP.md); the SSH proxy with JIT injection is live.
 
-## What works today (Phases 1–2)
+## What works today (Phases 1–3a)
 
+- **Role-based access control** — four profiles (`admin`, `user`, `auditor`, `approver`) with a single role→capability matrix enforced by *both* the REST API and the SSH proxy. Admins mint per-user access tokens (stored only as SHA-256); every denial is audited and the audit trail attributes real usernames.
 - **Session proxy with JIT injection** — operators connect through an SSH gateway; the proxy authenticates them, pulls the credential from the vault, **decrypts it only at connection time**, injects it into the upstream SSH session and records everything. Proven end-to-end by an integration test where the upstream accepts *only* the vaulted password the client never possessed.
 - **Session recording** — each session captured in [asciicast v2](https://docs.asciinema.org/manual/asciicast/v2/) format, hashed with SHA-256, and the hash written to the audit trail for tamper evidence.
 - **Hardened vault** — secrets encrypted with [AES-256-GCM](https://pkg.go.dev/crypto/cipher) before they touch the database; random nonce per secret; AAD binds each ciphertext to its owning target (a copied token fails to decrypt); versioned `v1:` token format keeps the door open for key rotation.
@@ -64,6 +65,32 @@ flowchart LR
 - **AS/400 portal** — Sign On screen, menu-driven `Work with…` screens, numeric options (`4=Delete`, `5=Display`), F3/F5/F6/F12 keys, green phosphor and scanlines.
 - **PostgreSQL storage** via [pgx](https://github.com/jackc/pgx); in-memory store for tests and demos.
 - **IaC deployment** — [Docker](https://docs.docker.com/) (distroless, non-root), [docker-compose](https://docs.docker.com/compose/) with hardened Postgres, [Kubernetes](https://kubernetes.io/) manifests under the restricted Pod Security Standard, and a [Terraform](https://developer.hashicorp.com/terraform) module.
+
+## Roles & users
+
+Four profiles, enforced identically by the API and the proxy:
+
+| Role | Can | Cannot |
+|---|---|---|
+| `admin` | manage targets/credentials/users, reveal secrets, connect, read audit | — |
+| `user` | connect to targets through the proxy, read the inventory | manage, reveal, read audit |
+| `auditor` | read the inventory and the audit trail | manage, reveal, connect |
+| `approver` | read inventory + audit, approve access requests* | manage, reveal, connect |
+
+`*` approval endpoints arrive in a later phase; the role and its capability exist now.
+
+An admin creates a user and receives that user's access token **once**:
+
+```bash
+curl -H "X-API-Key: $PAM_API_KEY" -X POST http://localhost:8080/api/users \
+  -d '{"username":"alice","role":"user"}'
+# → {"id":1,"username":"alice","role":"user","token":"pamt_…"}   (store it now)
+```
+
+The user then presents that token as `X-API-Key` (portal Sign On) or as the SSH
+proxy password. The bootstrap `PAM_API_KEY` is the `admin` identity; the
+break-glass key is also `admin` (audited loudly). AD login with group→role
+mapping is [Phase 3b](ROADMAP.md#3b--active-directory-connector-).
 
 ## Connect through the proxy (JIT injection)
 

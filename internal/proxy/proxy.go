@@ -15,7 +15,6 @@ package proxy
 
 import (
 	"context"
-	"crypto/subtle"
 	"errors"
 	"fmt"
 	"io"
@@ -27,6 +26,7 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
+	"github.com/morandeirachema/pamv1/internal/auth"
 	"github.com/morandeirachema/pamv1/internal/store"
 	"github.com/morandeirachema/pamv1/internal/vault"
 )
@@ -41,7 +41,7 @@ type Config struct {
 type Proxy struct {
 	store        store.Store
 	vault        *vault.Vault
-	apiKey       []byte
+	resolver     *auth.Resolver
 	sshCfg       *ssh.ServerConfig
 	hostKey      ssh.Signer
 	recordingDir string
@@ -51,9 +51,12 @@ type Proxy struct {
 	ln net.Listener
 }
 
-func New(st store.Store, v *vault.Vault, apiKey string, cfg Config) (*Proxy, error) {
+func New(st store.Store, v *vault.Vault, resolver *auth.Resolver, cfg Config) (*Proxy, error) {
 	if cfg.HostKey == nil {
 		return nil, errors.New("proxy: HostKey is required")
+	}
+	if resolver == nil {
+		return nil, errors.New("proxy: resolver is required")
 	}
 	if cfg.RecordingDir == "" {
 		cfg.RecordingDir = "recordings"
@@ -64,7 +67,7 @@ func New(st store.Store, v *vault.Vault, apiKey string, cfg Config) (*Proxy, err
 	p := &Proxy{
 		store:        st,
 		vault:        v,
-		apiKey:       []byte(apiKey),
+		resolver:     resolver,
 		hostKey:      cfg.HostKey,
 		recordingDir: cfg.RecordingDir,
 		dialTimeout:  cfg.DialTimeout,
@@ -74,16 +77,20 @@ func New(st store.Store, v *vault.Vault, apiKey string, cfg Config) (*Proxy, err
 	return p, nil
 }
 
-// authenticate accepts any login whose password matches the PAM API key and
-// stashes the requested target/credential in the connection permissions;
-// target resolution happens after the handshake so auth stays cheap.
+// authenticate resolves the SSH password (a PAM key or per-user token) into a
+// Principal and stashes it with the requested target/credential in the
+// connection permissions; the role check and target resolution happen after
+// the handshake.
 func (p *Proxy) authenticate(c ssh.ConnMetadata, password []byte) (*ssh.Permissions, error) {
-	if subtle.ConstantTimeCompare(password, p.apiKey) != 1 {
+	principal, err := p.resolver.Resolve(context.Background(), string(password))
+	if err != nil {
 		return nil, fmt.Errorf("pamv1: authentication failed")
 	}
 	credUser, targetName := splitLogin(c.User())
 	return &ssh.Permissions{Extensions: map[string]string{
 		"login":     c.User(),
+		"principal": principal.Name,
+		"role":      string(principal.Role),
 		"target":    targetName,
 		"cred_user": credUser,
 	}}, nil
@@ -150,27 +157,38 @@ func (p *Proxy) handleConn(ctx context.Context, nConn net.Conn) {
 	go ssh.DiscardRequests(reqs)
 
 	ext := sconn.Permissions.Extensions
+	actor := ext["principal"]
 	login := ext["login"]
+	role := auth.Role(ext["role"])
+
+	// auditor (and any role without CapConnect) may authenticate but not open
+	// sessions through the proxy.
+	if !role.Can(auth.CapConnect) {
+		p.audit(ctx, actor, "session.denied",
+			fmt.Sprintf("login:%s role:%s reason:role may not connect", login, role))
+		rejectAll(chans, ssh.Prohibited, "pamv1: your role may not open sessions")
+		return
+	}
 
 	target, cred, secret, err := p.resolve(ctx, ext["target"], ext["cred_user"])
 	if err != nil {
-		p.audit(ctx, login, "session.denied", fmt.Sprintf("login:%s reason:%v", login, err))
+		p.audit(ctx, actor, "session.denied", fmt.Sprintf("login:%s reason:%v", login, err))
 		rejectAll(chans, ssh.Prohibited, "pamv1: "+err.Error())
 		return
 	}
 
 	upstream, err := p.dialUpstream(target, cred, secret)
 	if err != nil {
-		p.audit(ctx, login, "session.error",
+		p.audit(ctx, actor, "session.error",
 			fmt.Sprintf("target:%s host:%s:%d error:%v", target.Name, target.Host, target.Port, err))
 		rejectAll(chans, ssh.ConnectionFailed, "pamv1: upstream connection failed")
 		return
 	}
 	defer upstream.Close()
 
-	p.audit(ctx, login, "session.start",
+	p.audit(ctx, actor, "session.start",
 		fmt.Sprintf("target:%s host:%s:%d cred_user:%s", target.Name, target.Host, target.Port, cred.Username))
-	defer p.audit(ctx, login, "session.end", "target:"+target.Name)
+	defer p.audit(ctx, actor, "session.end", "target:"+target.Name)
 
 	var wg sync.WaitGroup
 	for nc := range chans {
@@ -181,7 +199,7 @@ func (p *Proxy) handleConn(ctx context.Context, nConn net.Conn) {
 		wg.Add(1)
 		go func(nc ssh.NewChannel) {
 			defer wg.Done()
-			p.handleSession(ctx, nc, upstream, target, cred, login)
+			p.handleSession(ctx, nc, upstream, target, cred, actor)
 		}(nc)
 	}
 	wg.Wait()
@@ -254,7 +272,7 @@ func (p *Proxy) dialUpstream(target *store.Target, cred *store.Credential, secre
 	return ssh.Dial("tcp", fmt.Sprintf("%s:%d", target.Host, target.Port), cfg)
 }
 
-func (p *Proxy) handleSession(ctx context.Context, nc ssh.NewChannel, upstream *ssh.Client, target *store.Target, cred *store.Credential, login string) {
+func (p *Proxy) handleSession(ctx context.Context, nc ssh.NewChannel, upstream *ssh.Client, target *store.Target, cred *store.Credential, actor string) {
 	clientChan, clientReqs, err := nc.Accept()
 	if err != nil {
 		return
@@ -269,7 +287,7 @@ func (p *Proxy) handleSession(ctx context.Context, nc ssh.NewChannel, upstream *
 	defer upChan.Close()
 
 	now := time.Now()
-	title := fmt.Sprintf("%d_%s_%s", now.UnixNano(), target.Name, login)
+	title := fmt.Sprintf("%d_%s_%s", now.UnixNano(), target.Name, actor)
 	rec, err := newRecording(p.recordingDir, title, now)
 	if err != nil {
 		slog.Error("proxy: recording setup failed", "err", err)
@@ -301,7 +319,7 @@ func (p *Proxy) handleSession(ctx context.Context, nc ssh.NewChannel, upstream *
 
 	if rec != nil {
 		path, sum, n := rec.Close()
-		p.audit(ctx, login, "session.record",
+		p.audit(ctx, actor, "session.record",
 			fmt.Sprintf("target:%s cred_user:%s file:%s bytes:%d sha256:%s",
 				target.Name, cred.Username, path, n, sum))
 	}

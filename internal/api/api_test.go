@@ -13,6 +13,8 @@ import (
 	"testing"
 
 	"github.com/morandeirachema/pamv1/internal/api"
+	"github.com/morandeirachema/pamv1/internal/auth"
+	"github.com/morandeirachema/pamv1/internal/store"
 	"github.com/morandeirachema/pamv1/internal/store/memstore"
 	"github.com/morandeirachema/pamv1/internal/vault"
 )
@@ -23,7 +25,9 @@ const (
 	secretPassword = "S3cret-P@ssw0rd!"
 )
 
-func newTestServer(t *testing.T) *httptest.Server {
+// newTestServerStore returns a running server and its backing store so tests
+// can seed users with specific roles.
+func newTestServerStore(t *testing.T) (*httptest.Server, store.Store) {
 	t.Helper()
 	masterKey, err := vault.GenerateMasterKey()
 	if err != nil {
@@ -33,14 +37,40 @@ func newTestServer(t *testing.T) *httptest.Server {
 	if err != nil {
 		t.Fatal(err)
 	}
+	st := memstore.New()
 	bgHash := sha256.Sum256([]byte(breakGlassKey))
-	handler, err := api.New(memstore.New(), v, testAPIKey, hex.EncodeToString(bgHash[:]))
+	resolver, err := auth.NewResolver(st, testAPIKey, hex.EncodeToString(bgHash[:]))
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler, err := api.New(st, v, resolver)
 	if err != nil {
 		t.Fatal(err)
 	}
 	srv := httptest.NewServer(handler)
 	t.Cleanup(srv.Close)
+	return srv, st
+}
+
+func newTestServer(t *testing.T) *httptest.Server {
+	t.Helper()
+	srv, _ := newTestServerStore(t)
 	return srv
+}
+
+// seedUser creates a user with the given role and returns its token.
+func seedUser(t *testing.T, srv *httptest.Server, username, role string) string {
+	t.Helper()
+	status, data := do(t, srv, http.MethodPost, "/api/users", testAPIKey,
+		map[string]any{"username": username, "role": role})
+	if status != http.StatusCreated {
+		t.Fatalf("seed user %s: status %d body %s", username, status, data)
+	}
+	tok, _ := jsonMap(t, data)["token"].(string)
+	if tok == "" {
+		t.Fatalf("seed user %s: no token returned: %s", username, data)
+	}
+	return tok
 }
 
 func do(t *testing.T, srv *httptest.Server, method, path, apiKey string, body any) (int, []byte) {
@@ -177,6 +207,59 @@ func TestValidationAndConflicts(t *testing.T) {
 	}
 	if status, _ = do(t, srv, http.MethodPost, "/api/targets", testAPIKey, payload); status != http.StatusConflict {
 		t.Fatalf("duplicate name: %d, want 409", status)
+	}
+}
+
+func TestRBAC(t *testing.T) {
+	srv := newTestServer(t)
+
+	userTok := seedUser(t, srv, "alice", "user")
+	auditorTok := seedUser(t, srv, "theo", "auditor")
+	approverTok := seedUser(t, srv, "peggy", "approver")
+
+	// Seed a target + credential as admin so read/reveal paths have data.
+	_, data := do(t, srv, http.MethodPost, "/api/targets", testAPIKey, map[string]any{
+		"name": "db-01", "host": "10.0.0.9", "os_type": "linux", "protocol": "ssh",
+	})
+	targetID := int64(jsonMap(t, data)["id"].(float64))
+	_, data = do(t, srv, http.MethodPost, "/api/credentials", testAPIKey, map[string]any{
+		"target_id": targetID, "username": "root", "secret": secretPassword,
+	})
+	credID := int64(jsonMap(t, data)["id"].(float64))
+
+	type tc struct {
+		name, method, path, key string
+		body                    any
+		want                    int
+	}
+	newTarget := map[string]any{"name": "x", "host": "h", "os_type": "linux", "protocol": "ssh"}
+	cases := []tc{
+		// user: can read inventory, cannot manage / reveal / audit / users
+		{"user reads targets", http.MethodGet, "/api/targets", userTok, nil, 200},
+		{"user cannot create target", http.MethodPost, "/api/targets", userTok, newTarget, 403},
+		{"user cannot reveal", http.MethodPost, "/api/credentials/" + itoa(credID) + "/reveal", userTok, nil, 403},
+		{"user cannot read audit", http.MethodGet, "/api/audit", userTok, nil, 403},
+		{"user cannot list users", http.MethodGet, "/api/users", userTok, nil, 403},
+		// auditor: reads audit + inventory, nothing else
+		{"auditor reads audit", http.MethodGet, "/api/audit", auditorTok, nil, 200},
+		{"auditor reads targets", http.MethodGet, "/api/targets", auditorTok, nil, 200},
+		{"auditor cannot create target", http.MethodPost, "/api/targets", auditorTok, newTarget, 403},
+		{"auditor cannot reveal", http.MethodPost, "/api/credentials/" + itoa(credID) + "/reveal", auditorTok, nil, 403},
+		// approver: reads audit + inventory, cannot manage or reveal
+		{"approver reads audit", http.MethodGet, "/api/audit", approverTok, nil, 200},
+		{"approver cannot create target", http.MethodPost, "/api/targets", approverTok, newTarget, 403},
+		{"approver cannot reveal", http.MethodPost, "/api/credentials/" + itoa(credID) + "/reveal", approverTok, nil, 403},
+		// admin (bootstrap): everything
+		{"admin reveals", http.MethodPost, "/api/credentials/" + itoa(credID) + "/reveal", testAPIKey, nil, 200},
+		{"admin reads audit", http.MethodGet, "/api/audit", testAPIKey, nil, 200},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			status, body := do(t, srv, c.method, c.path, c.key, c.body)
+			if status != c.want {
+				t.Fatalf("%s: status %d, want %d (%s)", c.name, status, c.want, body)
+			}
+		})
 	}
 }
 

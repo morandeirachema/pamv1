@@ -1,0 +1,106 @@
+package auth
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
+	"testing"
+
+	"github.com/morandeirachema/pamv1/internal/store"
+)
+
+func TestRoleCapabilities(t *testing.T) {
+	cases := []struct {
+		role Role
+		cap  Capability
+		want bool
+	}{
+		{RoleAdmin, CapManageUsers, true},
+		{RoleAdmin, CapRevealSecret, true},
+		{RoleUser, CapConnect, true},
+		{RoleUser, CapReadInventory, true},
+		{RoleUser, CapRevealSecret, false},
+		{RoleUser, CapReadAudit, false},
+		{RoleUser, CapManageTargets, false},
+		{RoleAuditor, CapReadAudit, true},
+		{RoleAuditor, CapReadInventory, true},
+		{RoleAuditor, CapConnect, false},
+		{RoleAuditor, CapManageTargets, false},
+		{RoleAuditor, CapRevealSecret, false},
+		{RoleAuditor, CapApprove, false},
+		{RoleApprover, CapApprove, true},
+		{RoleApprover, CapReadAudit, true},
+		{RoleApprover, CapReadInventory, true},
+		{RoleApprover, CapConnect, false},
+		{RoleApprover, CapManageTargets, false},
+		{RoleApprover, CapRevealSecret, false},
+		{RoleAdmin, CapApprove, true},
+		{RoleUser, CapApprove, false},
+	}
+	for _, c := range cases {
+		if got := c.role.Can(c.cap); got != c.want {
+			t.Errorf("%s.Can(%d) = %v, want %v", c.role, c.cap, got, c.want)
+		}
+	}
+}
+
+func TestParseRole(t *testing.T) {
+	for _, ok := range []string{"admin", "user", "auditor", "approver"} {
+		if _, err := ParseRole(ok); err != nil {
+			t.Errorf("ParseRole(%q) unexpected error: %v", ok, err)
+		}
+	}
+	if _, err := ParseRole("root"); err == nil {
+		t.Error("ParseRole(root) should fail")
+	}
+}
+
+type fakeUsers map[string]*store.User // tokenHashHex -> user
+
+func (f fakeUsers) GetUserByTokenHash(_ context.Context, h string) (*store.User, error) {
+	if u, ok := f[h]; ok {
+		return u, nil
+	}
+	return nil, store.ErrNotFound
+}
+
+func hashOf(tok string) string {
+	sum := sha256.Sum256([]byte(tok))
+	return hex.EncodeToString(sum[:])
+}
+
+func TestResolve(t *testing.T) {
+	bg := sha256.Sum256([]byte("emergency"))
+	users := fakeUsers{
+		hashOf("alice-token"): {Username: "alice", Role: "user"},
+		hashOf("theo-token"):  {Username: "theo", Role: "auditor"},
+		hashOf("broken"):      {Username: "bad", Role: "wizard"},
+	}
+	r, err := NewResolver(users, "bootstrap", hex.EncodeToString(bg[:]))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+
+	check := func(key, name string, role Role, breakglass bool) {
+		t.Helper()
+		p, err := r.Resolve(ctx, key)
+		if err != nil {
+			t.Fatalf("Resolve(%q) error: %v", key, err)
+		}
+		if p.Name != name || p.Role != role || p.BreakGlass != breakglass {
+			t.Fatalf("Resolve(%q) = %+v, want name=%s role=%s bg=%v", key, p, name, role, breakglass)
+		}
+	}
+	check("bootstrap", "bootstrap-admin", RoleAdmin, false)
+	check("emergency", "break-glass", RoleAdmin, true)
+	check("alice-token", "alice", RoleUser, false)
+	check("theo-token", "theo", RoleAuditor, false)
+
+	for _, bad := range []string{"", "nope", "broken"} {
+		if _, err := r.Resolve(ctx, bad); !errors.Is(err, ErrUnauthorized) {
+			t.Fatalf("Resolve(%q) = %v, want ErrUnauthorized", bad, err)
+		}
+	}
+}
