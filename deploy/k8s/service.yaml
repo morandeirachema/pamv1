@@ -13,3 +13,6 @@ spec:
     - name: http
       port: 80
       targetPort: http
+    - name: ssh
+      port: 2222
+      targetPort: ssh

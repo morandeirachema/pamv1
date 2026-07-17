@@ -1,11 +1,18 @@
 # pamv1
 
+> ⚠️ **For learning purposes.** This is an educational project built to explore how a
+> Privileged Access Management system works end to end. It has **not** been security-audited
+> and is **not** production-ready — do not use it to guard real privileged credentials.
+> Use it to learn, experiment and contribute.
+
 [![CI](https://github.com/morandeirachema/pamv1/actions/workflows/ci.yml/badge.svg)](https://github.com/morandeirachema/pamv1/actions/workflows/ci.yml)
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
 Open-source **Privileged Access Management** (PAM) in Go: a hardened credential vault, target inventory for Linux/Windows, append-only audit trail, break-glass emergency access, and an unapologetically **AS/400-style admin portal** — because touching a PAM should *feel* serious.
 
-Built step by step, **fully functional at every step**. See the [ROADMAP](ROADMAP.md) for where this is going: JIT credential-injection session proxy, Active Directory connector, OT/industrial adaptation and NIS2 compliance.
+Built step by step, **fully functional at every step**. The **JIT credential-injection SSH session proxy** now works ([Phase 2](ROADMAP.md#phase-2--session-proxy-with-jit-credential-injection-linuxssh-)); see the [ROADMAP](ROADMAP.md) for what's next: Active Directory connector, Windows targets, OT/industrial adaptation and NIS2 compliance.
+
+Architecture is documented as two living docs: [high-level](docs/ARCHITECTURE-HIGH-LEVEL.md) and [low-level](docs/ARCHITECTURE-LOW-LEVEL.md).
 
 ## Architecture
 
@@ -38,15 +45,17 @@ flowchart LR
     API --> VAULT
     VAULT --> DB
     API -.-> ADC
-    PROXY -.-> VAULT
-    PROXY -.-> LNX
+    PROXY --> VAULT
+    PROXY --> LNX
     PROXY -.-> WIN
 ```
 
-\* dashed components land in [Phase 2–4](ROADMAP.md).
+\* dashed components (AD connector, Windows) land in [Phase 3–4](ROADMAP.md); the SSH proxy with JIT injection is live.
 
-## What works today (Phase 1)
+## What works today (Phases 1–2)
 
+- **Session proxy with JIT injection** — operators connect through an SSH gateway; the proxy authenticates them, pulls the credential from the vault, **decrypts it only at connection time**, injects it into the upstream SSH session and records everything. Proven end-to-end by an integration test where the upstream accepts *only* the vaulted password the client never possessed.
+- **Session recording** — each session captured in [asciicast v2](https://docs.asciinema.org/manual/asciicast/v2/) format, hashed with SHA-256, and the hash written to the audit trail for tamper evidence.
 - **Hardened vault** — secrets encrypted with [AES-256-GCM](https://pkg.go.dev/crypto/cipher) before they touch the database; random nonce per secret; AAD binds each ciphertext to its owning target (a copied token fails to decrypt); versioned `v1:` token format keeps the door open for key rotation.
 - **Target inventory** — Linux/Windows machines with ssh/winrm/rdp endpoints.
 - **Credentials API** — vault, list (never returns secret material), audited on-demand `reveal`, delete. The JSON model *cannot* serialize the ciphertext (`json:"-"`).
@@ -55,6 +64,22 @@ flowchart LR
 - **AS/400 portal** — Sign On screen, menu-driven `Work with…` screens, numeric options (`4=Delete`, `5=Display`), F3/F5/F6/F12 keys, green phosphor and scanlines.
 - **PostgreSQL storage** via [pgx](https://github.com/jackc/pgx); in-memory store for tests and demos.
 - **IaC deployment** — [Docker](https://docs.docker.com/) (distroless, non-root), [docker-compose](https://docs.docker.com/compose/) with hardened Postgres, [Kubernetes](https://kubernetes.io/) manifests under the restricted Pod Security Standard, and a [Terraform](https://developer.hashicorp.com/terraform) module.
+
+## Connect through the proxy (JIT injection)
+
+Once a target and its credential are vaulted, operators reach the target **through** pamv1
+— the secret is decrypted only for the upstream dial and is never shown:
+
+```bash
+# username selects the target; SSH password is your PAM API key (Phase 2 bootstrap auth)
+ssh -p 2222 web-01@pam-host                 # first credential of target "web-01"
+ssh -p 2222 root@web-01@pam-host            # a specific credential (user "root")
+```
+
+The proxy authenticates you, pulls `root`'s password from the vault, injects it into the
+upstream SSH connection, records the session (asciicast v2) with a SHA-256 in the audit
+trail, and proxies your I/O. You never see the credential. Recordings go to
+`PAM_RECORDING_DIR`; disable the proxy with `PAM_SSH_ADDR=off`.
 
 ## Quickstart
 
@@ -106,7 +131,10 @@ terraform apply \
 | `PAM_API_KEY` | yes | Admin API key (header `X-API-Key`, portal Sign On) |
 | `PAM_DATABASE_URL` | yes | `postgres://…` or `memory` (ephemeral demo) |
 | `PAM_BREAK_GLASS_KEY_HASH` | no | Hex SHA-256 of the sealed emergency key; empty disables break-glass |
-| `PAM_LISTEN_ADDR` | no | Listen address, default `:8080` |
+| `PAM_LISTEN_ADDR` | no | HTTP listen address, default `:8080` |
+| `PAM_SSH_ADDR` | no | SSH proxy address, default `:2222`; `off` disables it |
+| `PAM_SSH_HOST_KEY` | no | Path to persist the proxy host key (PEM); empty = ephemeral |
+| `PAM_RECORDING_DIR` | no | Where session recordings are written, default `recordings` |
 
 ## Break-glass procedure
 

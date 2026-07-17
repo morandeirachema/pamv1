@@ -22,15 +22,17 @@ Status: ✅ done · 🚧 in progress · ⬜ planned
 - [x] **Storage**: PostgreSQL (pgx) with embedded idempotent schema; in-memory store for tests/demo
 - [x] **Deploy as IaC**: Dockerfile (distroless, non-root), docker-compose with hardened Postgres (scram-sha-256), K8s manifests (restricted PSS), Terraform module
 
-## Phase 2 — Session proxy with JIT credential injection (Linux/SSH) ⬜
+## Phase 2 — Session proxy with JIT credential injection (Linux/SSH) 🚧
 
 The flagship: users connect *through* pamv1, never holding the credential.
 
-- [ ] SSH gateway (`golang.org/x/crypto/ssh`): user opens `ssh user@target@pam-proxy`, proxy authenticates the user, checks policy, pulls the credential from the vault and injects it **just-in-time** into the upstream connection
-- [ ] Session recording (typescript/asciicast format) stored + hash-chained for tamper evidence
+- [x] SSH gateway (`golang.org/x/crypto/ssh`): user opens `ssh user@target@pam-proxy`, proxy authenticates the user, pulls the credential from the vault and injects it **just-in-time** into the upstream connection
+- [x] Session recording (asciicast v2) stored with a SHA-256 written to the audit trail (tamper evidence)
+- [x] Per-session audit events (start, record, end, denied, error)
+- [ ] Policy engine / per-target authorization (currently any valid API key can reach any target)
 - [ ] Live session listing and kill-switch in portal/API
-- [ ] Per-session audit events (start, end, recording pointer)
-- [ ] Disable `reveal` by policy once proxy path exists (reveal becomes break-glass-only)
+- [ ] Hash-chain the recordings (not just per-file hash)
+- [ ] Disable `reveal` by policy once proxy path is the norm (reveal becomes break-glass-only)
 
 ## Phase 3 — Identity: Active Directory connector + RBAC ⬜
 

@@ -25,6 +25,7 @@ import (
 
 	"github.com/morandeirachema/pamv1/internal/api"
 	"github.com/morandeirachema/pamv1/internal/config"
+	"github.com/morandeirachema/pamv1/internal/proxy"
 	"github.com/morandeirachema/pamv1/internal/store"
 	"github.com/morandeirachema/pamv1/internal/store/memstore"
 	"github.com/morandeirachema/pamv1/internal/store/pgstore"
@@ -90,6 +91,25 @@ func run() error {
 	handler, err := api.New(st, v, cfg.APIKey, cfg.BreakGlassKeyHash)
 	if err != nil {
 		return err
+	}
+
+	if cfg.SSHAddr != "off" {
+		hostKey, err := proxy.LoadOrCreateHostKey(cfg.SSHHostKeyPath)
+		if err != nil {
+			return fmt.Errorf("ssh host key: %w", err)
+		}
+		px, err := proxy.New(st, v, cfg.APIKey, proxy.Config{
+			HostKey:      hostKey,
+			RecordingDir: cfg.RecordingDir,
+		})
+		if err != nil {
+			return err
+		}
+		go func() {
+			if err := px.ListenAndServe(ctx, cfg.SSHAddr); err != nil {
+				slog.Error("ssh proxy stopped", "err", err)
+			}
+		}()
 	}
 
 	srv := &http.Server{

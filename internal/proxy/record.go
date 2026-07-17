@@ -1,0 +1,92 @@
+package proxy
+
+import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"encoding/pem"
+	"hash"
+	"io"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"time"
+)
+
+func encodePEM(b *pem.Block) []byte { return pem.EncodeToMemory(b) }
+
+// Recording writes a session's terminal output in asciicast v2 format while
+// hashing the same bytes, so the audit trail can store a tamper-evident
+// SHA-256 of the recording. Safe for concurrent Write.
+type Recording struct {
+	path   string
+	f      *os.File
+	enc    *json.Encoder
+	hasher hash.Hash
+	start  time.Time
+
+	mu sync.Mutex
+	n  int64
+}
+
+func newRecording(dir, title string, now time.Time) (*Recording, error) {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return nil, err
+	}
+	path := filepath.Join(dir, sanitize(title)+".cast")
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	hasher := sha256.New()
+	enc := json.NewEncoder(io.MultiWriter(f, hasher))
+	header := map[string]any{
+		"version":   2,
+		"width":     80,
+		"height":    24,
+		"timestamp": now.Unix(),
+		"title":     title,
+	}
+	r := &Recording{path: path, f: f, enc: enc, hasher: hasher, start: now}
+	if err := enc.Encode(header); err != nil {
+		f.Close()
+		return nil, err
+	}
+	return r, nil
+}
+
+// Write records p as an asciicast "o" (output) event.
+func (r *Recording) Write(p []byte) (int, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	ev := []any{time.Since(r.start).Seconds(), "o", string(p)}
+	if err := r.enc.Encode(ev); err != nil {
+		return 0, err
+	}
+	r.n += int64(len(p))
+	return len(p), nil
+}
+
+// Close flushes the file and returns the recording path, byte count and the
+// hex SHA-256 of the file's contents.
+func (r *Recording) Close() (path, sha256hex string, n int64) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.f.Close()
+	return r.path, hex.EncodeToString(r.hasher.Sum(nil)), r.n
+}
+
+func sanitize(s string) string {
+	var b strings.Builder
+	for _, c := range s {
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9',
+			c == '-', c == '_', c == '.', c == '@':
+			b.WriteRune(c)
+		default:
+			b.WriteByte('-')
+		}
+	}
+	return b.String()
+}

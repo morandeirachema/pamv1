@@ -15,6 +15,13 @@ type Config struct {
 	// (optional; empty disables the break-glass path). Only the hash lives
 	// in config so the plaintext key can be kept sealed offline.
 	BreakGlassKeyHash string
+
+	// SSHAddr is the session-proxy listen address; "off" disables it.
+	SSHAddr string
+	// SSHHostKeyPath persists the proxy host key; empty = ephemeral key.
+	SSHHostKeyPath string
+	// RecordingDir is where session recordings are written.
+	RecordingDir string
 }
 
 func Load() (*Config, error) {
@@ -24,6 +31,9 @@ func Load() (*Config, error) {
 		MasterKey:         os.Getenv("PAM_MASTER_KEY"),
 		APIKey:            os.Getenv("PAM_API_KEY"),
 		BreakGlassKeyHash: os.Getenv("PAM_BREAK_GLASS_KEY_HASH"),
+		SSHAddr:           getenv("PAM_SSH_ADDR", ":2222"),
+		SSHHostKeyPath:    os.Getenv("PAM_SSH_HOST_KEY"),
+		RecordingDir:      getenv("PAM_RECORDING_DIR", "recordings"),
 	}
 	if cfg.MasterKey == "" {
 		return nil, fmt.Errorf("PAM_MASTER_KEY is required (generate one with: pam-server -genkey)")

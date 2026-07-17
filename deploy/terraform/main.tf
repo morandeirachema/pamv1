@@ -65,6 +65,10 @@ resource "kubernetes_deployment" "pam" {
             type = "RuntimeDefault"
           }
         }
+        volume {
+          name = "data"
+          empty_dir {}
+        }
         container {
           name  = "pam-server"
           image = var.image
@@ -72,10 +76,26 @@ resource "kubernetes_deployment" "pam" {
             container_port = 8080
             name           = "http"
           }
+          port {
+            container_port = 2222
+            name           = "ssh"
+          }
           env_from {
             secret_ref {
               name = kubernetes_secret.pam.metadata[0].name
             }
+          }
+          env {
+            name  = "PAM_SSH_HOST_KEY"
+            value = "/data/ssh_host_key"
+          }
+          env {
+            name  = "PAM_RECORDING_DIR"
+            value = "/data/recordings"
+          }
+          volume_mount {
+            name       = "data"
+            mount_path = "/data"
           }
           security_context {
             allow_privilege_escalation = false
@@ -127,6 +147,11 @@ resource "kubernetes_service" "pam" {
       name        = "http"
       port        = 80
       target_port = "http"
+    }
+    port {
+      name        = "ssh"
+      port        = 2222
+      target_port = "ssh"
     }
   }
 }

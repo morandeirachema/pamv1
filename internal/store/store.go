@@ -6,6 +6,7 @@ package store
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 )
 
@@ -13,6 +14,13 @@ var (
 	ErrNotFound = errors.New("store: not found")
 	ErrConflict = errors.New("store: already exists")
 )
+
+// CredentialAAD is the additional-authenticated-data string that binds a
+// vaulted secret to its owning target. The API and the session proxy must
+// use the same value or decryption fails.
+func CredentialAAD(targetID int64) string {
+	return fmt.Sprintf("target:%d", targetID)
+}
 
 // Target is a machine reachable through the PAM (a future proxy session
 // connects to it injecting a vaulted credential just-in-time).

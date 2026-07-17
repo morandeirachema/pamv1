@@ -26,9 +26,19 @@ spec:
           ports:
             - containerPort: 8080
               name: http
+            - containerPort: 2222
+              name: ssh
           envFrom:
             - secretRef:
                 name: pam-secrets
+          env:
+            - name: PAM_SSH_HOST_KEY
+              value: /data/ssh_host_key
+            - name: PAM_RECORDING_DIR
+              value: /data/recordings
+          volumeMounts:
+            - name: data
+              mountPath: /data
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
@@ -51,3 +61,8 @@ spec:
               memory: 64Mi
             limits:
               memory: 256Mi
+      volumes:
+        # Writable state (host key + recordings) since the root FS is read-only.
+        # Swap for a PersistentVolumeClaim to retain recordings across restarts.
+        - name: data
+          emptyDir: {}
