@@ -1,0 +1,41 @@
+services:
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: pam
+      POSTGRES_USER: pam
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_INITDB_ARGS: "--auth-host=scram-sha-256 --auth-local=scram-sha-256"
+    command:
+      - postgres
+      - -c
+      - password_encryption=scram-sha-256
+      - -c
+      - log_connections=on
+      - -c
+      - log_disconnections=on
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pam -d pam"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  pam:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      PAM_DATABASE_URL: postgres://pam:${POSTGRES_PASSWORD}@db:5432/pam?sslmode=disable
+      PAM_MASTER_KEY: ${PAM_MASTER_KEY:?set PAM_MASTER_KEY in .env}
+      PAM_API_KEY: ${PAM_API_KEY:?set PAM_API_KEY in .env}
+      PAM_BREAK_GLASS_KEY_HASH: ${PAM_BREAK_GLASS_KEY_HASH:-}
+    ports:
+      - "127.0.0.1:8080:8080"
+
+volumes:
+  pgdata:

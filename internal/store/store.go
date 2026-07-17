@@ -1,0 +1,66 @@
+// Package store defines the persistence contract for the PAM inventory,
+// vaulted credentials and the audit trail. The production implementation
+// is PostgreSQL (pgstore); memstore backs tests and ephemeral demos.
+package store
+
+import (
+	"context"
+	"errors"
+	"time"
+)
+
+var (
+	ErrNotFound = errors.New("store: not found")
+	ErrConflict = errors.New("store: already exists")
+)
+
+// Target is a machine reachable through the PAM (a future proxy session
+// connects to it injecting a vaulted credential just-in-time).
+type Target struct {
+	ID        int64     `json:"id"`
+	Name      string    `json:"name"`
+	Host      string    `json:"host"`
+	Port      int       `json:"port"`
+	OSType    string    `json:"os_type"`  // linux | windows
+	Protocol  string    `json:"protocol"` // ssh | winrm | rdp
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// Credential is a privileged account on a Target. SecretEnc is always an
+// encrypted vault token — plaintext never touches the store or the JSON
+// encoder (note the "-" tag).
+type Credential struct {
+	ID         int64      `json:"id"`
+	TargetID   int64      `json:"target_id"`
+	Username   string     `json:"username"`
+	SecretType string     `json:"secret_type"` // password | ssh_key
+	SecretEnc  string     `json:"-"`
+	CreatedAt  time.Time  `json:"created_at"`
+	RotatedAt  *time.Time `json:"rotated_at,omitempty"`
+}
+
+type AuditEvent struct {
+	ID     int64     `json:"id"`
+	TS     time.Time `json:"ts"`
+	Actor  string    `json:"actor"`
+	Action string    `json:"action"`
+	Detail string    `json:"detail"`
+}
+
+type Store interface {
+	CreateTarget(ctx context.Context, t *Target) error
+	ListTargets(ctx context.Context) ([]Target, error)
+	GetTarget(ctx context.Context, id int64) (*Target, error)
+	DeleteTarget(ctx context.Context, id int64) error
+
+	CreateCredential(ctx context.Context, c *Credential) error
+	// ListCredentials returns credentials for one target, or all when targetID is 0.
+	ListCredentials(ctx context.Context, targetID int64) ([]Credential, error)
+	GetCredential(ctx context.Context, id int64) (*Credential, error)
+	DeleteCredential(ctx context.Context, id int64) error
+
+	AppendAudit(ctx context.Context, e *AuditEvent) error
+	ListAudit(ctx context.Context, limit int) ([]AuditEvent, error)
+
+	Close()
+}

@@ -1,0 +1,293 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PAMV1 — Privileged Access Management</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0; background: #050705; color: #2eff7b;
+    font: 16px/1.35 "IBM Plex Mono", ui-monospace, "Cascadia Mono", Menlo, Consolas, monospace;
+    text-shadow: 0 0 5px rgba(46, 255, 123, .35);
+    display: flex; justify-content: center;
+  }
+  body::after { /* CRT scanlines */
+    content: ""; position: fixed; inset: 0; pointer-events: none;
+    background: repeating-linear-gradient(0deg, rgba(0,0,0,.22) 0 1px, transparent 1px 3px);
+  }
+  #term { width: 100%; max-width: 960px; padding: 12px 16px; white-space: pre-wrap; }
+  a, .green { color: #2eff7b; }
+  .white { color: #eaffea; text-shadow: 0 0 5px rgba(234,255,234,.35); }
+  .cyan  { color: #4be0e0; text-shadow: 0 0 5px rgba(75,224,224,.35); }
+  .red   { color: #ff4d4d; text-shadow: 0 0 5px rgba(255,77,77,.45); }
+  .blink { animation: blink 1s steps(1) infinite; }
+  @keyframes blink { 50% { opacity: 0; } }
+  .row { display: flex; justify-content: space-between; }
+  hr { border: 0; border-top: 1px solid #123c1f; margin: 6px 0; }
+  table { width: 100%; border-collapse: collapse; }
+  td, th { text-align: left; padding: 1px 8px 1px 0; font-weight: normal; white-space: nowrap; }
+  th { color: #eaffea; }
+  td.detail { white-space: normal; }
+  input, select {
+    font: inherit; color: #2eff7b; background: #041407;
+    border: 0; border-bottom: 1px solid #2eff7b; outline: none; padding: 0 2px;
+    text-shadow: inherit; caret-color: #2eff7b;
+  }
+  select { border: 1px solid #123c1f; }
+  input:focus { background: #0a2a12; }
+  input.opt { width: 3ch; text-align: center; text-transform: uppercase; }
+  .fkeys { color: #4be0e0; margin-top: 8px; }
+  .msg { min-height: 1.3em; color: #eaffea; }
+  .msg.err { color: #ff4d4d; }
+  form.inline { display: inline; }
+  label { display: block; }
+  .indent { margin-left: 4ch; }
+</style>
+</head>
+<body>
+<div id="term"></div>
+<script>
+(() => {
+  const term = document.getElementById("term");
+  let apiKey = sessionStorage.getItem("pam_api_key") || "";
+  let screen = apiKey ? "main" : "signon";
+  let back = "main";
+  let msg = "", msgErr = false;
+  let targets = [], creds = [], audit = [], viewCred = null;
+
+  const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  const pad = (s, n) => esc(String(s ?? "")).padEnd(n);
+  const now = () => { const d = new Date(), z = (x) => String(x).padStart(2, "0");
+    return `${z(d.getDate())}/${z(d.getMonth() + 1)}/${String(d.getFullYear()).slice(2)}  ${z(d.getHours())}:${z(d.getMinutes())}:${z(d.getSeconds())}`; };
+
+  async function api(method, path, body) {
+    const res = await fetch(path, {
+      method,
+      headers: { "X-API-Key": apiKey, ...(body ? { "Content-Type": "application/json" } : {}) },
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    if (res.status === 204) return null;
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error((data.error || res.statusText).toUpperCase());
+    return data;
+  }
+
+  async function load() {
+    [targets, creds, audit] = await Promise.all([
+      api("GET", "/api/targets"), api("GET", "/api/credentials"), api("GET", "/api/audit?limit=30"),
+    ]);
+  }
+
+  const say = (t, err) => { msg = t; msgErr = !!err; };
+
+  function head(id, title) {
+    return `<div class="row"><span class="white">${id}</span><span>${title}</span><span class="white">SYSTEM: PAMV1</span></div>` +
+           `<div class="row"><span></span><span class="cyan">${now()}</span></div><hr>`;
+  }
+  const fkeys = (t) => `<hr><div class="fkeys">${t}</div>` +
+    `<div class="msg${msgErr ? " err" : ""}">${esc(msg)}</div>`;
+
+  function render() {
+    ({
+      signon() {
+        term.innerHTML = `
+<div style="text-align:center" class="white">Sign On</div>
+<div class="indent">
+                                    System  . . . . . :   <span class="white">PAMV1</span>
+                                    Subsystem . . . . :   <span class="white">QPAM</span>
+                                    Display . . . . . :   <span class="white">QPADEV0001</span>
+</div>
+
+<form id="f-signon" class="indent">
+  <label>API key . . . . . . . . . . . . . . :  <input id="in-key" type="password" size="28" autocomplete="off" autofocus></label>
+</form>
+
+<div class="cyan indent">Press Enter to sign on.</div>
+${fkeys("")}
+<div class="red indent">UNAUTHORIZED USE OF THIS SYSTEM IS PROHIBITED AND AUDITED.</div>`;
+        document.getElementById("f-signon").onsubmit = async (ev) => {
+          ev.preventDefault();
+          apiKey = document.getElementById("in-key").value.trim();
+          try { await load(); sessionStorage.setItem("pam_api_key", apiKey); say("SIGN ON COMPLETE."); go("main"); }
+          catch (e) { say("CPF1120: " + e.message, true); render(); }
+        };
+      },
+
+      main() {
+        term.innerHTML = `${head("PAMMAIN", "PAMV1 Main Menu")}
+Select one of the following:
+
+<div class="indent">1. Work with targets
+2. Work with credentials
+3. Display audit trail
+
+90. Sign off
+</div>
+<form id="f-cmd">Selection or command
+===&gt; <input id="in-cmd" size="30" autofocus></form>
+${fkeys("F3=Sign off   F5=Refresh")}`;
+        document.getElementById("f-cmd").onsubmit = (ev) => {
+          ev.preventDefault();
+          const c = document.getElementById("in-cmd").value.trim();
+          if (c === "1") go("targets");
+          else if (c === "2") go("creds");
+          else if (c === "3") go("audit");
+          else if (c === "90") signoff();
+          else { say("CPF0001: SELECTION " + c.toUpperCase() + " NOT VALID.", true); render(); }
+        };
+      },
+
+      targets() {
+        back = "main";
+        term.innerHTML = `${head("PAMWRKTGT", "Work with Targets")}
+Type options, press Enter.
+  <span class="cyan">4=Delete   5=Work with credentials</span>
+
+<form id="f-list"><table>
+<tr><th>Opt</th><th>ID</th><th>Name</th><th>Host</th><th>Port</th><th>OS</th><th>Proto</th></tr>
+${targets.map((t) => `<tr><td><input class="opt" name="o${t.id}" maxlength="1"></td><td>${t.id}</td><td>${pad(t.name, 18)}</td><td>${pad(t.host, 22)}</td><td>${t.port}</td><td>${pad(t.os_type, 8)}</td><td>${esc(t.protocol)}</td></tr>`).join("")}
+</table>${targets.length ? "" : `<div class="cyan indent">(No targets defined. Press F6 to add.)</div>`}
+<input type="submit" hidden></form>
+${fkeys("F3=Exit   F5=Refresh   F6=Add target   F12=Cancel")}`;
+        document.getElementById("f-list").onsubmit = async (ev) => {
+          ev.preventDefault();
+          try {
+            for (const t of targets) {
+              const o = ev.target["o" + t.id]?.value.trim();
+              if (o === "4") { await api("DELETE", `/api/targets/${t.id}`); say(`TARGET ${t.name.toUpperCase()} DELETED.`); }
+              else if (o === "5") { await load(); go("creds"); return; }
+              else if (o) { say("CPF0002: OPTION " + o.toUpperCase() + " NOT VALID.", true); }
+            }
+            await load(); render();
+          } catch (e) { say("CPF9999: " + e.message, true); render(); }
+        };
+      },
+
+      targetadd() {
+        back = "targets";
+        term.innerHTML = `${head("PAMADDTGT", "Add Target")}
+Type choices, press Enter.
+
+<form id="f-add" class="indent">
+<label>Name  . . . . . . . :  <input name="name" size="20" required autofocus></label>
+<label>Host  . . . . . . . :  <input name="host" size="24" required></label>
+<label>Port  . . . . . . . :  <input name="port" type="number" value="22" min="1" max="65535" size="6" required></label>
+<label>OS type . . . . . . :  <select name="os_type"><option>linux</option><option>windows</option></select>   <span class="cyan">linux, windows</span></label>
+<label>Protocol  . . . . . :  <select name="protocol"><option>ssh</option><option>winrm</option><option>rdp</option></select>   <span class="cyan">ssh, winrm, rdp</span></label>
+<input type="submit" hidden>
+</form>
+${fkeys("F3=Exit   F12=Cancel")}`;
+        document.getElementById("f-add").onsubmit = async (ev) => {
+          ev.preventDefault();
+          const f = Object.fromEntries(new FormData(ev.target));
+          f.port = Number(f.port);
+          try { await api("POST", "/api/targets", f); await load(); say(`TARGET ${f.name.toUpperCase()} ADDED.`); go("targets"); }
+          catch (e) { say("CPF9898: " + e.message, true); render(); }
+        };
+      },
+
+      creds() {
+        back = "main";
+        const tn = Object.fromEntries(targets.map((t) => [t.id, t.name]));
+        term.innerHTML = `${head("PAMWRKCRD", "Work with Vaulted Credentials")}
+Type options, press Enter.
+  <span class="cyan">4=Delete   5=Display secret (audited)</span>
+
+<form id="f-list"><table>
+<tr><th>Opt</th><th>ID</th><th>Target</th><th>User</th><th>Type</th><th>Secret</th></tr>
+${creds.map((c) => `<tr><td><input class="opt" name="o${c.id}" maxlength="1"></td><td>${c.id}</td><td>${pad(tn[c.target_id] || c.target_id, 18)}</td><td>${pad(c.username, 14)}</td><td>${pad(c.secret_type, 8)}</td><td>********</td></tr>`).join("")}
+</table>${creds.length ? "" : `<div class="cyan indent">(Vault is empty. Press F6 to add.)</div>`}
+<input type="submit" hidden></form>
+${fkeys("F3=Exit   F5=Refresh   F6=Add credential   F12=Cancel")}`;
+        document.getElementById("f-list").onsubmit = async (ev) => {
+          ev.preventDefault();
+          try {
+            for (const c of creds) {
+              const o = ev.target["o" + c.id]?.value.trim();
+              if (o === "4") { await api("DELETE", `/api/credentials/${c.id}`); say(`CREDENTIAL ${c.id} DELETED.`); }
+              else if (o === "5") { viewCred = await api("POST", `/api/credentials/${c.id}/reveal`); go("credview"); return; }
+              else if (o) { say("CPF0002: OPTION " + o.toUpperCase() + " NOT VALID.", true); }
+            }
+            await load(); render();
+          } catch (e) { say("CPF9999: " + e.message, true); render(); }
+        };
+      },
+
+      credadd() {
+        back = "creds";
+        term.innerHTML = `${head("PAMADDCRD", "Add Credential to Vault")}
+Type choices, press Enter.  <span class="cyan">Secret is encrypted (AES-256-GCM) before storage.</span>
+
+<form id="f-add" class="indent">
+<label>Target ID . . . . . :  <input name="target_id" type="number" min="1" size="6" required autofocus>   <span class="cyan">${targets.map((t) => `${t.id}=${esc(t.name)}`).join("  ") || "no targets defined"}</span></label>
+<label>Username  . . . . . :  <input name="username" size="16" required></label>
+<label>Secret  . . . . . . :  <input name="secret" type="password" size="28" required autocomplete="new-password"></label>
+<label>Secret type . . . . :  <select name="secret_type"><option>password</option><option>ssh_key</option></select>   <span class="cyan">password, ssh_key</span></label>
+<input type="submit" hidden>
+</form>
+${fkeys("F3=Exit   F12=Cancel")}`;
+        document.getElementById("f-add").onsubmit = async (ev) => {
+          ev.preventDefault();
+          const f = Object.fromEntries(new FormData(ev.target));
+          f.target_id = Number(f.target_id);
+          try { await api("POST", "/api/credentials", f); await load(); say(`CREDENTIAL FOR ${f.username.toUpperCase()} VAULTED.`); go("creds"); }
+          catch (e) { say("CPF9898: " + e.message, true); render(); }
+        };
+      },
+
+      credview() {
+        back = "creds";
+        const c = viewCred || {};
+        term.innerHTML = `${head("PAMDSPSEC", "Display Secret")}
+<span class="red blink">SECRET DISPLAYED — THIS ACCESS HAS BEEN WRITTEN TO THE AUDIT TRAIL.</span>
+
+<div class="indent">
+Credential ID . . . :  <span class="white">${esc(c.id)}</span>
+Target ID . . . . . :  <span class="white">${esc(c.target_id)}</span>
+Username  . . . . . :  <span class="white">${esc(c.username)}</span>
+Secret type . . . . :  <span class="white">${esc(c.secret_type)}</span>
+
+Secret  . . . . . . :  <span class="white">${esc(c.secret)}</span>
+</div>
+${fkeys("F3=Exit   F12=Cancel")}`;
+      },
+
+      audit() {
+        back = "main";
+        term.innerHTML = `${head("PAMDSPAUD", "Display Audit Trail")}
+<table>
+<tr><th>Timestamp</th><th>Actor</th><th>Action</th><th>Detail</th></tr>
+${audit.map((e) => { const bg = e.actor === "break-glass";
+  return `<tr${bg ? ` class="red"` : ""}><td class="cyan">${esc(e.ts.replace("T", " ").slice(0, 19))}</td><td>${bg ? `<span class="red blink">BREAK-GLASS</span>` : esc(e.actor)}</td><td>${esc(e.action)}</td><td class="detail">${esc(e.detail)}</td></tr>`; }).join("")}
+</table>${audit.length ? "" : `<div class="cyan indent">(Audit trail is empty.)</div>`}
+${fkeys("F3=Exit   F5=Refresh   F12=Cancel")}`;
+      },
+    })[screen]();
+  }
+
+  function go(s) { screen = s; render(); msg = ""; msgErr = false; }
+  function signoff() { apiKey = ""; sessionStorage.removeItem("pam_api_key"); say("SIGN OFF COMPLETE."); go("signon"); }
+
+  window.addEventListener("keydown", async (ev) => {
+    const k = ev.key;
+    if (!["F3", "F5", "F6", "F12"].includes(k)) return;
+    ev.preventDefault();
+    if (screen === "signon") return;
+    try {
+      if (k === "F3") { screen === "main" ? signoff() : go("main"); }
+      else if (k === "F5") { await load(); say("DISPLAY REFRESHED."); render(); }
+      else if (k === "F6" && screen === "targets") go("targetadd");
+      else if (k === "F6" && screen === "creds") go("credadd");
+      else if (k === "F12") go(back);
+    } catch (e) { say("CPF9999: " + e.message, true); render(); }
+  });
+
+  setInterval(() => { const el = term.querySelector(".row .cyan"); if (el) el.textContent = now(); }, 1000);
+  if (apiKey) { load().then(render).catch(() => { screen = "signon"; render(); }); } else render();
+})();
+</script>
+</body>
+</html>

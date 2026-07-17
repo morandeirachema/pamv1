@@ -1,0 +1,9 @@
+/pam-server
+*.test
+coverage.out
+dist/
+.env
+.terraform/
+*.tfstate
+*.tfstate.backup
+*.tfvars

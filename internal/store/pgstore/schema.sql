@@ -1,0 +1,31 @@
+CREATE TABLE IF NOT EXISTS targets (
+    id         BIGSERIAL PRIMARY KEY,
+    name       TEXT NOT NULL UNIQUE,
+    host       TEXT NOT NULL,
+    port       INT  NOT NULL DEFAULT 22,
+    os_type    TEXT NOT NULL,
+    protocol   TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS credentials (
+    id          BIGSERIAL PRIMARY KEY,
+    target_id   BIGINT NOT NULL REFERENCES targets(id) ON DELETE CASCADE,
+    username    TEXT NOT NULL,
+    secret_type TEXT NOT NULL DEFAULT 'password',
+    secret_enc  TEXT NOT NULL,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    rotated_at  TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS credentials_target_idx ON credentials (target_id);
+
+CREATE TABLE IF NOT EXISTS audit_events (
+    id     BIGSERIAL PRIMARY KEY,
+    ts     TIMESTAMPTZ NOT NULL DEFAULT now(),
+    actor  TEXT NOT NULL,
+    action TEXT NOT NULL,
+    detail TEXT NOT NULL DEFAULT ''
+);
+
+CREATE INDEX IF NOT EXISTS audit_events_action_idx ON audit_events (action);
