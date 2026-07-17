@@ -90,22 +90,24 @@ type Principal struct {
 	BreakGlass bool // authenticated via the emergency key; use is audited loudly
 }
 
-// UserLookup is the slice of the store the resolver needs.
-type UserLookup interface {
+// Directory is the slice of the store the resolver needs: per-user tokens and
+// login sessions, both looked up by token hash.
+type Directory interface {
 	GetUserByTokenHash(ctx context.Context, tokenHashHex string) (*store.User, error)
+	GetSessionByTokenHash(ctx context.Context, tokenHashHex string) (*store.Session, error)
 }
 
 // Resolver authenticates a presented key into a Principal.
 type Resolver struct {
-	users          UserLookup
+	dir            Directory
 	apiKey         []byte
 	breakGlassHash []byte
 }
 
 // NewResolver builds a Resolver. breakGlassHashHex may be empty to disable the
 // break-glass path; otherwise it must be a hex-encoded SHA-256.
-func NewResolver(users UserLookup, apiKey, breakGlassHashHex string) (*Resolver, error) {
-	r := &Resolver{users: users, apiKey: []byte(apiKey)}
+func NewResolver(dir Directory, apiKey, breakGlassHashHex string) (*Resolver, error) {
+	r := &Resolver{dir: dir, apiKey: []byte(apiKey)}
 	if breakGlassHashHex != "" {
 		b, err := hex.DecodeString(breakGlassHashHex)
 		if err != nil || len(b) != sha256.Size {
@@ -129,14 +131,21 @@ func (r *Resolver) Resolve(ctx context.Context, key string) (*Principal, error) 
 	if len(r.breakGlassHash) != 0 && subtle.ConstantTimeCompare(sum[:], r.breakGlassHash) == 1 {
 		return &Principal{Name: "break-glass", Role: RoleAdmin, BreakGlass: true}, nil
 	}
-	if r.users != nil {
-		u, err := r.users.GetUserByTokenHash(ctx, hex.EncodeToString(sum[:]))
-		if err == nil {
-			role, perr := ParseRole(u.Role)
-			if perr != nil {
-				return nil, ErrUnauthorized
+	hash := hex.EncodeToString(sum[:])
+	if r.dir != nil {
+		// Per-user access token (local identity).
+		if u, err := r.dir.GetUserByTokenHash(ctx, hash); err == nil {
+			if role, perr := ParseRole(u.Role); perr == nil {
+				return &Principal{Name: u.Username, Role: role}, nil
 			}
-			return &Principal{Name: u.Username, Role: role}, nil
+			return nil, ErrUnauthorized
+		}
+		// Login session token (e.g. Active Directory).
+		if s, err := r.dir.GetSessionByTokenHash(ctx, hash); err == nil {
+			if role, perr := ParseRole(s.Role); perr == nil {
+				return &Principal{Name: s.Username, Role: role}, nil
+			}
+			return nil, ErrUnauthorized
 		}
 	}
 	return nil, ErrUnauthorized

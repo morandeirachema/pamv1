@@ -51,14 +51,17 @@ type Server struct {
 	store    store.Store
 	vault    *vault.Vault
 	resolver *auth.Resolver
+	authn    auth.Authenticator // password login (e.g. AD); nil if not configured
 	log      *slog.Logger
 	mux      *http.ServeMux
 	handler  http.Handler
 }
 
 // New builds the HTTP handler. The resolver authenticates the X-API-Key header
-// into a Principal (bootstrap admin key, break-glass key, or a per-user token).
-func New(st store.Store, v *vault.Vault, resolver *auth.Resolver) (*Server, error) {
+// into a Principal (bootstrap admin key, break-glass key, per-user token, or a
+// login session). authn (optional) backs POST /api/login with a password
+// identity source such as Active Directory; pass nil to disable password login.
+func New(st store.Store, v *vault.Vault, resolver *auth.Resolver, authn auth.Authenticator) (*Server, error) {
 	if resolver == nil {
 		return nil, errors.New("api: resolver is required")
 	}
@@ -66,6 +69,7 @@ func New(st store.Store, v *vault.Vault, resolver *auth.Resolver) (*Server, erro
 		store:    st,
 		vault:    v,
 		resolver: resolver,
+		authn:    authn,
 		log:      logging.Component("api"),
 		mux:      http.NewServeMux(),
 	}
@@ -126,6 +130,9 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /healthz", s.health)
 	s.mux.HandleFunc("GET /{$}", web.Index)
 
+	s.mux.HandleFunc("POST /api/login", s.login) // public: this IS authentication
+	s.mux.Handle("POST /api/logout", s.authenticated(s.logout))
+
 	s.mux.Handle("POST /api/targets", s.authz(auth.CapManageTargets, s.createTarget))
 	s.mux.Handle("GET /api/targets", s.authz(auth.CapReadInventory, s.listTargets))
 	s.mux.Handle("GET /api/targets/{id}", s.authz(auth.CapReadInventory, s.getTarget))
@@ -169,6 +176,20 @@ func (s *Server) authz(cap auth.Capability, next http.HandlerFunc) http.Handler 
 			return
 		}
 		next(w, r.WithContext(ctx))
+	})
+}
+
+// authenticated resolves the caller into a Principal without a capability
+// check (used by endpoints any signed-in identity may call, e.g. logout).
+func (s *Server) authenticated(next http.HandlerFunc) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		p, err := s.resolver.Resolve(r.Context(), r.Header.Get("X-API-Key"))
+		if err != nil {
+			writeError(w, http.StatusUnauthorized, "invalid or missing API key")
+			return
+		}
+		setActor(r.Context(), p.Name)
+		next(w, r.WithContext(withPrincipal(r.Context(), p)))
 	})
 }
 

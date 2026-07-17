@@ -12,19 +12,21 @@ import (
 )
 
 type Memstore struct {
-	mu      sync.Mutex
-	nextID  int64
-	targets map[int64]store.Target
-	creds   map[int64]store.Credential
-	users   map[int64]store.User
-	audit   []store.AuditEvent
+	mu       sync.Mutex
+	nextID   int64
+	targets  map[int64]store.Target
+	creds    map[int64]store.Credential
+	users    map[int64]store.User
+	sessions map[int64]store.Session
+	audit    []store.AuditEvent
 }
 
 func New() *Memstore {
 	return &Memstore{
-		targets: make(map[int64]store.Target),
-		creds:   make(map[int64]store.Credential),
-		users:   make(map[int64]store.User),
+		targets:  make(map[int64]store.Target),
+		creds:    make(map[int64]store.Credential),
+		users:    make(map[int64]store.User),
+		sessions: make(map[int64]store.Session),
 	}
 }
 
@@ -195,6 +197,42 @@ func (m *Memstore) DeleteUser(_ context.Context, id int64) error {
 	}
 	delete(m.users, id)
 	return nil
+}
+
+func (m *Memstore) CreateSession(_ context.Context, s *store.Session) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	s.ID = m.id()
+	s.CreatedAt = time.Now().UTC()
+	m.sessions[s.ID] = *s
+	return nil
+}
+
+func (m *Memstore) GetSessionByTokenHash(_ context.Context, tokenHashHex string) (*store.Session, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	now := time.Now()
+	for _, s := range m.sessions {
+		if s.TokenHash == tokenHashHex {
+			if now.After(s.ExpiresAt) {
+				return nil, store.ErrNotFound
+			}
+			return &s, nil
+		}
+	}
+	return nil, store.ErrNotFound
+}
+
+func (m *Memstore) DeleteSession(_ context.Context, tokenHashHex string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for id, s := range m.sessions {
+		if s.TokenHash == tokenHashHex {
+			delete(m.sessions, id)
+			return nil
+		}
+	}
+	return store.ErrNotFound
 }
 
 func (m *Memstore) Close() {}

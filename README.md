@@ -1,16 +1,18 @@
 # pamv1
 
-> ⚠️ **For learning purposes.** This is an educational project built to explore how a
-> Privileged Access Management system works end to end. It has **not** been security-audited
-> and is **not** production-ready — do not use it to guard real privileged credentials.
-> Use it to learn, experiment and contribute.
+> ⚠️ **Alpha · for learning purposes.** This is an early-stage (**alpha**) educational
+> project built to explore how a Privileged Access Management system works end to end. It has
+> **not** been security-audited and is **not** production-ready — do not use it to guard real
+> privileged credentials. Use it to learn, experiment and contribute.
 
 [![CI](https://github.com/morandeirachema/pamv1/actions/workflows/ci.yml/badge.svg)](https://github.com/morandeirachema/pamv1/actions/workflows/ci.yml)
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
 Open-source **Privileged Access Management** (PAM) in Go: a hardened credential vault, target inventory for Linux/Windows, append-only audit trail, break-glass emergency access, and an unapologetically **AS/400-style admin portal** — because touching a PAM should *feel* serious.
 
-Built step by step, **fully functional at every step**. The **JIT credential-injection SSH session proxy** ([Phase 2](ROADMAP.md#phase-2--session-proxy-with-jit-credential-injection-linuxssh-)) and **role-based access control** with four profiles ([Phase 3a](ROADMAP.md#3a--rbac-with-four-profiles-)) now work; see the [ROADMAP](ROADMAP.md) for what's next: the Active Directory login backend, Windows targets, OT/industrial adaptation and NIS2 compliance.
+Built step by step, **fully functional at every step**. The **JIT credential-injection SSH session proxy** ([Phase 2](ROADMAP.md#phase-2--session-proxy-with-jit-credential-injection-linuxssh-)), **RBAC** with four profiles ([Phase 3a](ROADMAP.md#3a--rbac-with-four-profiles-)) and **Active Directory login** over LDAPS ([Phase 3b](ROADMAP.md#3b--active-directory-connector-)) now work; see the [ROADMAP](ROADMAP.md) for what's next: Windows targets, OT/industrial adaptation and NIS2 compliance.
+
+📖 **[Léelo en español →](README.es.md)**
 
 **Documentation** (all living docs, kept in step with the code):
 
@@ -59,6 +61,7 @@ flowchart LR
 ## What works today (Phases 1–3a)
 
 - **Role-based access control** — four profiles (`admin`, `user`, `auditor`, `approver`) with a single role→capability matrix enforced by *both* the REST API and the SSH proxy. Admins mint per-user access tokens (stored only as SHA-256); every denial is audited and the audit trail attributes real usernames.
+- **Active Directory login** — sign in with an AD username + password over **LDAPS**; AD groups map to the four roles (highest privilege wins) and `POST /api/login` issues a short-lived session token that works in the portal and the proxy. Local tokens and break-glass remain as the AD-down emergency path.
 - **Session proxy with JIT injection** — operators connect through an SSH gateway; the proxy authenticates them, pulls the credential from the vault, **decrypts it only at connection time**, injects it into the upstream SSH session and records everything. Proven end-to-end by an integration test where the upstream accepts *only* the vaulted password the client never possessed.
 - **Session recording** — each session captured in [asciicast v2](https://docs.asciinema.org/manual/asciicast/v2/) format, hashed with SHA-256, and the hash written to the audit trail for tamper evidence.
 - **Hardened vault (envelope encryption)** — each secret is sealed with a per-secret [AES-256-GCM](https://pkg.go.dev/crypto/cipher) data key that is wrapped by a **pluggable Key Encryption Key (KEK)**: a `local` key for dev/test, or **[HashiCorp Vault Transit](https://developer.hashicorp.com/vault/docs/secrets/transit)** in production so the root key never leaves the KMS. AAD binds each ciphertext to its owning target (a copied token fails to decrypt); versioned `v2:` tokens.

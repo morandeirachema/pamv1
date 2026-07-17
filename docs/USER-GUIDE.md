@@ -43,16 +43,22 @@ An administrator assigns you one of four roles:
 
 ¹ The approval workflow arrives in a later release.
 
-## 3. Getting your access token
+## 3. How you sign in
 
-Your administrator creates your user and gives you a **token** that looks like
-`pamt_1a2b3c…`. It is shown only once, so store it in your password manager.
+There are two ways, depending on how your organization set things up:
 
-You present this token in two places:
-- as the **API key** in the portal Sign On, and
-- as the **SSH password** when connecting through the proxy.
+- **Active Directory (AD) login** — you sign in with your **AD username and
+  password**. On the portal Sign On screen, fill *User* and *Password*. pamv1
+  gives you a **session token** valid for 12 hours; the portal keeps it for you.
+  For the SSH proxy, first get a token from the login endpoint (your admin can
+  script this) and use it as the SSH password. Your role comes from your AD groups.
+- **Access token** — your administrator creates your user and gives you a
+  **token** like `pamt_1a2b3c…`, shown only once (store it in your password
+  manager). Use it as the *access token* on the Sign On screen (leave Password
+  blank), or as the **SSH password** when connecting through the proxy.
 
-If you lose it, an admin deletes your user and creates a new one.
+If your session expires, just sign in again. If you lose a token, an admin issues
+a new one.
 
 ## 4. Using the portal
 
@@ -61,7 +67,8 @@ green-screen terminal — the austerity is deliberate, to remind you that you're
 touching privileged systems.
 
 1. Open the portal URL your admin gave you (over **HTTPS**).
-2. On the **Sign On** screen, type your token in the *API key* field and press **Enter**.
+2. On the **Sign On** screen, either fill *User* + *Password* (AD login) or put your
+   token in *access token* (leave Password blank), then press **Enter**.
 3. Use the numbered menu to move around; the function keys work like a real 5250:
 
 | Key | Action |
@@ -139,6 +146,7 @@ emergency access and always deserve a look.
 
 | Date | Change |
 |---|---|
+| 2026-07-18 | Phase 3b: Active Directory login (username + password → session token) added to Sign On |
 | 2026-07-18 | Initial user guide (Phase 3a): roles, tokens, portal Sign On, connecting via the SSH proxy, audit review |
 
 *Questions an admin should answer live in the [Administrator Guide](ADMIN-GUIDE.md).*

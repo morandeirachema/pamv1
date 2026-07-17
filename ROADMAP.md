@@ -44,13 +44,14 @@ The flagship: users connect *through* pamv1, never holding the credential.
 - [x] Audit now attributes real usernames; portal tolerates per-role 403s
 - [ ] `approver`'s approval endpoints (access-request workflow) — arrives with the OT/approval phase
 
-### 3b — Active Directory connector ⬜
+### 3b — Active Directory connector 🚧
 
-- [ ] LDAP/LDAPS bind against AD ([go-ldap](https://github.com/go-ldap/ldap)); optional Kerberos
-- [ ] AD groups → the four pamv1 roles
-- [ ] Portal Sign On with AD username + password (replaces bootstrap API key), short-lived session tokens
+- [x] LDAP/LDAPS bind against AD ([go-ldap](https://github.com/go-ldap/ldap)): service-account search + user bind to verify the password
+- [x] AD groups → the four pamv1 roles (highest privilege wins), via `PAM_LDAP_GROUP_*`
+- [x] Portal Sign On with AD username + password; short-lived **session tokens** (`POST /api/login`, `POST /api/logout`) that work in the portal and the SSH proxy
 - [ ] MFA: TOTP enrollment + verification (NIS2 Art. 21(2)(j))
-- [ ] Local emergency admin kept for AD-down scenarios (ties into break-glass)
+- [ ] Optional Kerberos bind
+- [x] Local emergency admin kept for AD-down scenarios (bootstrap key + break-glass)
 
 ## Phase 4 — Windows targets ⬜
 

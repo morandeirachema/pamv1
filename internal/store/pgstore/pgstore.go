@@ -259,6 +259,39 @@ func (s *PGStore) DeleteUser(ctx context.Context, id int64) error {
 	return err
 }
 
+func (s *PGStore) CreateSession(ctx context.Context, sess *store.Session) error {
+	return s.pool.QueryRow(ctx,
+		`INSERT INTO sessions (username, role, token_hash, expires_at)
+		 VALUES ($1, $2, $3, $4) RETURNING id, created_at`,
+		sess.Username, sess.Role, sess.TokenHash, sess.ExpiresAt,
+	).Scan(&sess.ID, &sess.CreatedAt)
+}
+
+func (s *PGStore) GetSessionByTokenHash(ctx context.Context, tokenHashHex string) (*store.Session, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT id, username, role, token_hash, created_at, expires_at
+		 FROM sessions WHERE token_hash = $1 AND expires_at > now()`, tokenHashHex)
+	if err != nil {
+		return nil, err
+	}
+	sess, err := pgx.CollectExactlyOneRow(rows, scanSession)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, store.ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &sess, nil
+}
+
+func (s *PGStore) DeleteSession(ctx context.Context, tokenHashHex string) error {
+	tag, err := s.pool.Exec(ctx, `DELETE FROM sessions WHERE token_hash = $1`, tokenHashHex)
+	if err == nil && tag.RowsAffected() == 0 {
+		return store.ErrNotFound
+	}
+	return err
+}
+
 func (s *PGStore) Close() {
 	s.pool.Close()
 }
@@ -279,4 +312,10 @@ func scanUser(row pgx.CollectableRow) (store.User, error) {
 	var u store.User
 	err := row.Scan(&u.ID, &u.Username, &u.Role, &u.TokenHash, &u.CreatedAt)
 	return u, err
+}
+
+func scanSession(row pgx.CollectableRow) (store.Session, error) {
+	var s store.Session
+	err := row.Scan(&s.ID, &s.Username, &s.Role, &s.TokenHash, &s.CreatedAt, &s.ExpiresAt)
+	return s, err
 }

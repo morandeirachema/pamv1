@@ -2,6 +2,7 @@ package api_test
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -29,6 +30,12 @@ const (
 // can seed users with specific roles.
 func newTestServerStore(t *testing.T) (*httptest.Server, store.Store) {
 	t.Helper()
+	return newTestServerAuthn(t, nil)
+}
+
+// newTestServerAuthn builds a server with an optional password authenticator.
+func newTestServerAuthn(t *testing.T, authn auth.Authenticator) (*httptest.Server, store.Store) {
+	t.Helper()
 	masterKey, err := vault.GenerateMasterKey()
 	if err != nil {
 		t.Fatal(err)
@@ -43,7 +50,7 @@ func newTestServerStore(t *testing.T) (*httptest.Server, store.Store) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler, err := api.New(st, v, resolver)
+	handler, err := api.New(st, v, resolver, authn)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -260,6 +267,71 @@ func TestRBAC(t *testing.T) {
 				t.Fatalf("%s: status %d, want %d (%s)", c.name, status, c.want, body)
 			}
 		})
+	}
+}
+
+// fakeAuthenticator stands in for the AD/LDAP password authenticator.
+type fakeAuthenticator struct {
+	username, password string
+	role               auth.Role
+}
+
+func (f fakeAuthenticator) Authenticate(_ context.Context, u, p string) (*auth.Principal, error) {
+	if u == f.username && p == f.password {
+		return &auth.Principal{Name: u, Role: f.role}, nil
+	}
+	return nil, auth.ErrUnauthorized
+}
+
+func TestLoginSession(t *testing.T) {
+	srv, _ := newTestServerAuthn(t, fakeAuthenticator{username: "ad-alice", password: "pw", role: auth.RoleUser})
+
+	// Wrong password is rejected.
+	if status, _ := do(t, srv, http.MethodPost, "/api/login", "", map[string]any{
+		"username": "ad-alice", "password": "nope",
+	}); status != http.StatusUnauthorized {
+		t.Fatalf("bad login: status %d, want 401", status)
+	}
+
+	// Successful login returns a session token.
+	status, data := do(t, srv, http.MethodPost, "/api/login", "", map[string]any{
+		"username": "ad-alice", "password": "pw",
+	})
+	if status != http.StatusCreated {
+		t.Fatalf("login: status %d body %s", status, data)
+	}
+	m := jsonMap(t, data)
+	token, _ := m["token"].(string)
+	if token == "" || m["role"] != "user" {
+		t.Fatalf("unexpected login response: %s", data)
+	}
+
+	// The session token authenticates like any identity and carries the role:
+	// a user may read the inventory but not manage it.
+	if status, _ := do(t, srv, http.MethodGet, "/api/targets", token, nil); status != http.StatusOK {
+		t.Fatalf("session token should read targets: %d", status)
+	}
+	if status, _ := do(t, srv, http.MethodPost, "/api/targets", token, map[string]any{
+		"name": "x", "host": "h", "os_type": "linux", "protocol": "ssh",
+	}); status != http.StatusForbidden {
+		t.Fatalf("user session should not manage targets: %d", status)
+	}
+
+	// Logout revokes it.
+	if status, _ := do(t, srv, http.MethodPost, "/api/logout", token, nil); status != http.StatusNoContent {
+		t.Fatalf("logout: %d", status)
+	}
+	if status, _ := do(t, srv, http.MethodGet, "/api/targets", token, nil); status != http.StatusUnauthorized {
+		t.Fatalf("revoked session should be 401, got %d", status)
+	}
+}
+
+func TestLoginNotConfigured(t *testing.T) {
+	srv := newTestServer(t) // no authenticator
+	if status, _ := do(t, srv, http.MethodPost, "/api/login", "", map[string]any{
+		"username": "x", "password": "y",
+	}); status != http.StatusServiceUnavailable {
+		t.Fatalf("login without authenticator: status %d, want 503", status)
 	}
 }
 

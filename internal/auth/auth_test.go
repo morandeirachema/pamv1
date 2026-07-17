@@ -56,11 +56,22 @@ func TestParseRole(t *testing.T) {
 	}
 }
 
-type fakeUsers map[string]*store.User // tokenHashHex -> user
+// fakeDir implements auth.Directory for tests.
+type fakeDir struct {
+	users    map[string]*store.User    // tokenHashHex -> user
+	sessions map[string]*store.Session // tokenHashHex -> session
+}
 
-func (f fakeUsers) GetUserByTokenHash(_ context.Context, h string) (*store.User, error) {
-	if u, ok := f[h]; ok {
+func (f fakeDir) GetUserByTokenHash(_ context.Context, h string) (*store.User, error) {
+	if u, ok := f.users[h]; ok {
 		return u, nil
+	}
+	return nil, store.ErrNotFound
+}
+
+func (f fakeDir) GetSessionByTokenHash(_ context.Context, h string) (*store.Session, error) {
+	if s, ok := f.sessions[h]; ok {
+		return s, nil
 	}
 	return nil, store.ErrNotFound
 }
@@ -72,12 +83,17 @@ func hashOf(tok string) string {
 
 func TestResolve(t *testing.T) {
 	bg := sha256.Sum256([]byte("emergency"))
-	users := fakeUsers{
-		hashOf("alice-token"): {Username: "alice", Role: "user"},
-		hashOf("theo-token"):  {Username: "theo", Role: "auditor"},
-		hashOf("broken"):      {Username: "bad", Role: "wizard"},
+	dir := fakeDir{
+		users: map[string]*store.User{
+			hashOf("alice-token"): {Username: "alice", Role: "user"},
+			hashOf("theo-token"):  {Username: "theo", Role: "auditor"},
+			hashOf("broken"):      {Username: "bad", Role: "wizard"},
+		},
+		sessions: map[string]*store.Session{
+			hashOf("ad-session"): {Username: "ad-alice", Role: "approver"},
+		},
 	}
-	r, err := NewResolver(users, "bootstrap", hex.EncodeToString(bg[:]))
+	r, err := NewResolver(dir, "bootstrap", hex.EncodeToString(bg[:]))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -97,6 +113,7 @@ func TestResolve(t *testing.T) {
 	check("emergency", "break-glass", RoleAdmin, true)
 	check("alice-token", "alice", RoleUser, false)
 	check("theo-token", "theo", RoleAuditor, false)
+	check("ad-session", "ad-alice", RoleApprover, false) // login session token
 
 	for _, bad := range []string{"", "nope", "broken"} {
 		if _, err := r.Resolve(ctx, bad); !errors.Is(err, ErrUnauthorized) {

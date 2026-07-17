@@ -68,7 +68,7 @@ flowchart TB
 | **Break-glass** | Sealed emergency access, loud + audited | ✅ Phase 1 |
 | **Session Proxy** | Broker SSH; **JIT credential injection**; record sessions | ✅ Phase 2 |
 | **RBAC** | Four profiles (admin/user/auditor/approver), per-user tokens | ✅ Phase 3a |
-| **AD Connector** | LDAP/Kerberos identity, AD groups → roles, MFA | ⬜ Phase 3b |
+| **AD Connector** | LDAPS login, AD groups → roles, session tokens (MFA next) | 🚧 Phase 3b |
 | **Windows access** | WinRM/RDP with JIT credentials | ⬜ Phase 4 |
 | **Credential lifecycle** | Rotation, checkout/check-in, discovery | ⬜ Phase 7 |
 
@@ -151,6 +151,7 @@ flowchart LR
 
 | Date | Change |
 |---|---|
+| 2026-07-18 | Phase 3b: Active Directory login over LDAPS, AD groups → roles, session tokens (`/api/login`); envelope-encrypted vault + operational logging |
 | 2026-07-18 | Phase 3a: RBAC with four profiles (admin/user/auditor/approver), per-user tokens, enforced in API + proxy |
 | 2026-07-18 | Phase 2: SSH session proxy with JIT injection + recording added |
 | 2026-07-17 | Phase 1: vault, inventory, audit, break-glass, portal, IaC |

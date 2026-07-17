@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/morandeirachema/pamv1/internal/auth"
 	"github.com/morandeirachema/pamv1/internal/store"
@@ -197,6 +198,72 @@ func (s *Server) deleteCredential(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.audit(r.Context(), "credential.delete", strconv.FormatInt(id, 10))
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// --- login sessions (Active Directory / password identities) ---
+
+// sessionTTL is how long a login session token is valid.
+const sessionTTL = 12 * time.Hour
+
+type loginIn struct {
+	Username string `json:"username"`
+	Password string `json:"password"`
+}
+
+// login verifies a username + password against the configured identity source
+// (e.g. Active Directory) and issues a short-lived session token. The token is
+// used as X-API-Key (portal) or the SSH proxy password, exactly like a per-user
+// token — its role comes from the user's directory groups.
+func (s *Server) login(w http.ResponseWriter, r *http.Request) {
+	if s.authn == nil {
+		writeError(w, http.StatusServiceUnavailable, "password login is not configured")
+		return
+	}
+	var in loginIn
+	if !readJSON(w, r, &in) {
+		return
+	}
+	principal, err := s.authn.Authenticate(r.Context(), in.Username, in.Password)
+	if err != nil {
+		s.log.Warn("login failed", "user", in.Username, "remote", r.RemoteAddr)
+		writeError(w, http.StatusUnauthorized, "invalid credentials")
+		return
+	}
+	token, err := generateToken()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "token generation failed")
+		return
+	}
+	sum := sha256.Sum256([]byte(token))
+	sess := store.Session{
+		Username:  principal.Name,
+		Role:      string(principal.Role),
+		TokenHash: hex.EncodeToString(sum[:]),
+		ExpiresAt: time.Now().Add(sessionTTL).UTC(),
+	}
+	if err := s.store.CreateSession(r.Context(), &sess); err != nil {
+		storeError(w, err)
+		return
+	}
+	setActor(r.Context(), principal.Name)
+	s.audit(withPrincipal(r.Context(), principal), "login",
+		fmt.Sprintf("user:%s role:%s", principal.Name, principal.Role))
+	writeJSON(w, http.StatusCreated, map[string]any{
+		"token":      token,
+		"username":   principal.Name,
+		"role":       principal.Role,
+		"expires_at": sess.ExpiresAt,
+	})
+}
+
+// logout revokes the caller's own session token.
+func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
+	sum := sha256.Sum256([]byte(r.Header.Get("X-API-Key")))
+	// Best-effort: only session tokens exist in the table; other identities
+	// (bootstrap/token) simply have nothing to delete.
+	_ = s.store.DeleteSession(r.Context(), hex.EncodeToString(sum[:]))
+	s.audit(r.Context(), "logout", actorFrom(r.Context()))
 	w.WriteHeader(http.StatusNoContent)
 }
 

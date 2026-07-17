@@ -112,17 +112,37 @@
 </div>
 
 <form id="f-signon" class="indent">
-  <label>API key . . . . . . . . . . . . . . :  <input id="in-key" type="password" size="28" autocomplete="off" autofocus></label>
+  <label>User . . . . . . . . . . . . . . . :  <input id="in-user" size="28" autocomplete="username" autofocus></label>
+  <label>Password . . . . . . . . . . . . . :  <input id="in-pass" type="password" size="28" autocomplete="current-password"></label>
+  <label>...or access token . . . . . . . . :  <input id="in-key" type="password" size="28" autocomplete="off"></label>
 </form>
 
-<div class="cyan indent">Press Enter to sign on.</div>
+<div class="cyan indent">Directory (AD) users: enter User + Password. Token users: leave Password blank
+and enter the access token. Press Enter to sign on.</div>
 ${fkeys("")}
 <div class="red indent">UNAUTHORIZED USE OF THIS SYSTEM IS PROHIBITED AND AUDITED.</div>`;
         document.getElementById("f-signon").onsubmit = async (ev) => {
           ev.preventDefault();
-          apiKey = document.getElementById("in-key").value.trim();
-          try { await load(); sessionStorage.setItem("pam_api_key", apiKey); say("SIGN ON COMPLETE."); go("main"); }
-          catch (e) { say("CPF1120: " + e.message, true); render(); }
+          const user = document.getElementById("in-user").value.trim();
+          const pass = document.getElementById("in-pass").value;
+          const tok = document.getElementById("in-key").value.trim();
+          try {
+            if (pass) {
+              const res = await fetch("/api/login", {
+                method: "POST", headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ username: user, password: pass }),
+              });
+              const d = await res.json().catch(() => ({}));
+              if (!res.ok) throw new Error((d.error || res.statusText).toUpperCase());
+              apiKey = d.token;
+            } else {
+              apiKey = tok || user;
+            }
+            await load();
+            sessionStorage.setItem("pam_api_key", apiKey);
+            say("SIGN ON COMPLETE.");
+            go("main");
+          } catch (e) { say("CPF1120: " + e.message, true); render(); }
         };
       },
 

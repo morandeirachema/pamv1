@@ -64,6 +64,22 @@ func fatal(err error) {
 	os.Exit(1)
 }
 
+// ldapGroupRoleMap builds the group-DN → role map from the PAM_LDAP_GROUP_* env
+// vars, lower-casing DNs to match the case-insensitive comparison in auth.
+func ldapGroupRoleMap(cfg *config.Config) map[string]auth.Role {
+	m := map[string]auth.Role{}
+	add := func(dn string, role auth.Role) {
+		if dn != "" {
+			m[strings.ToLower(dn)] = role
+		}
+	}
+	add(cfg.LDAPGroupAdmin, auth.RoleAdmin)
+	add(cfg.LDAPGroupUser, auth.RoleUser)
+	add(cfg.LDAPGroupAuditor, auth.RoleAuditor)
+	add(cfg.LDAPGroupApprover, auth.RoleApprover)
+	return m
+}
+
 func run() error {
 	cfg, err := config.Load()
 	if err != nil {
@@ -105,7 +121,25 @@ func run() error {
 		return err
 	}
 
-	handler, err := api.New(st, v, resolver)
+	var authn auth.Authenticator
+	if cfg.LDAPURL != "" {
+		ldapAuth, err := auth.NewLDAPAuthenticator(auth.LDAPConfig{
+			URL:                cfg.LDAPURL,
+			BindDN:             cfg.LDAPBindDN,
+			BindPassword:       cfg.LDAPBindPassword,
+			BaseDN:             cfg.LDAPBaseDN,
+			UserFilter:         cfg.LDAPUserFilter,
+			InsecureSkipVerify: cfg.LDAPInsecureSkipVerify,
+			GroupRoleMap:       ldapGroupRoleMap(cfg),
+		})
+		if err != nil {
+			return fmt.Errorf("ldap: %w", err)
+		}
+		authn = ldapAuth
+		log.Info("active directory login enabled", "url", cfg.LDAPURL, "insecure_skip_verify", cfg.LDAPInsecureSkipVerify)
+	}
+
+	handler, err := api.New(st, v, resolver, authn)
 	if err != nil {
 		return err
 	}

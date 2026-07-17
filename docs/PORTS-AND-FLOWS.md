@@ -43,7 +43,7 @@ Kubernetes Service (`deploy/k8s/service.yaml`) maps `80 → 8080` and `2222 → 
 | E2 | pam-server (proxy) | Linux target (target zone) | 22 | SSH | JIT-injected privileged session | ✅ |
 | E3 | pam-server (proxy) | Windows target | 5985 / 5986 | WinRM | JIT session (http/https) | 🔷 P4 |
 | E4 | pam-server (proxy) | Windows target | 3389 | RDP | Recorded RDP via gateway | 🔷 P4 |
-| E5 | pam-server | Active Directory (identity zone) | **636** (389 dev only) | **LDAPS** / LDAP | Authn + group→role mapping | 🔷 P3b |
+| E5 | pam-server | Active Directory (identity zone) | **636** (389 dev only) | **LDAPS** / LDAP | Authn + group→role mapping | ✅ |
 | E6 | pam-server | Active Directory (identity zone) | 88 | Kerberos | Optional Kerberos auth | 🔷 P3b |
 | E7 | pam-server | AD / target | 636 / 5986 | LDAPS / WinRM | Credential rotation (password change) | 🔷 P7 |
 | E8 | pam-server | SIEM / syslog (mgmt zone) | 514 / 6514 | Syslog / TLS | Forward audit for NIS2 retention | 🔷 P9 |
@@ -83,7 +83,7 @@ flowchart LR
     S -->|"E1 5432"| DB
     S -->|"E2 22"| L
     S -.->|"E3/E4 5985/3389"| W
-    S -.->|"E5/E6 389/636/88"| ID
+    S -->|"E5 636 ldaps"| ID
 ```
 
 Solid = implemented · dashed = planned.

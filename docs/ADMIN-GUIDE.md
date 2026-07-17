@@ -213,8 +213,32 @@ curl -H "X-API-Key: $PAM_API_KEY" -X DELETE http://localhost:8080/api/users/1
 `*` approval endpoints arrive in a later phase; the capability exists now.
 
 Give the user their token; they use it in the portal Sign On or as the SSH proxy
-password (see the [User Guide](USER-GUIDE.md)). AD-backed login (username +
-password, group→role) with **LDAPS** and MFA is planned in
+password (see the [User Guide](USER-GUIDE.md)).
+
+### Active Directory login (optional)
+
+Instead of (or alongside) local tokens, users can sign in with their **AD
+username + password**. Set `PAM_LDAP_URL` (use **LDAPS**) and map AD groups to
+the four roles:
+
+```bash
+PAM_LDAP_URL=ldaps://dc.example.com:636
+PAM_LDAP_BIND_DN=CN=svc-pam,OU=Service,DC=example,DC=com
+PAM_LDAP_BIND_PASSWORD=…            # service account for user search
+PAM_LDAP_BASE_DN=DC=example,DC=com
+PAM_LDAP_USER_FILTER=(sAMAccountName=%s)
+PAM_LDAP_GROUP_ADMIN=CN=PAM-Admins,OU=Groups,DC=example,DC=com
+PAM_LDAP_GROUP_USER=CN=PAM-Users,OU=Groups,DC=example,DC=com
+PAM_LDAP_GROUP_AUDITOR=CN=PAM-Auditors,OU=Groups,DC=example,DC=com
+PAM_LDAP_GROUP_APPROVER=CN=PAM-Approvers,OU=Groups,DC=example,DC=com
+```
+
+How it works: pam-server binds the service account, finds the user, verifies the
+password by binding as them, and derives the role from group membership (highest
+privilege wins). `POST /api/login` then returns a **session token** (12h) that
+works in the portal and the SSH proxy exactly like a per-user token. A user in no
+mapped group is rejected. Keep the bootstrap `PAM_API_KEY` and break-glass key as
+the local emergency path if AD is unreachable. MFA (TOTP) is the next step in
 [Phase 3b](../ROADMAP.md#3b--active-directory-connector-).
 
 ---
@@ -326,6 +350,7 @@ evidence). Replay with [asciinema](https://asciinema.org/): `asciinema play <fil
 
 | Date | Change |
 |---|---|
+| 2026-07-18 | Phase 3b: Active Directory login setup (LDAPS, group→role, session tokens); envelope-encryption KEK config |
 | 2026-07-18 | Initial admin guide (Phase 3a): deployment, config, target/credential/user management, break-glass, logging & audit, hardening, troubleshooting |
 
 *See also the [User Guide](USER-GUIDE.md) and the [ROADMAP](../ROADMAP.md).*

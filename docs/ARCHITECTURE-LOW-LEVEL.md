@@ -70,9 +70,17 @@ of `Capability` values by the authoritative `roleCaps` matrix (`Role.Can(cap)`).
 
 `Resolver.Resolve(ctx, key)` maps a presented key to a Principal, trying in
 order: the bootstrap admin key (`PAM_API_KEY`) → `admin`; the break-glass key →
-`admin` with `BreakGlass=true`; else a per-user token, looked up by its SHA-256
-via `store.GetUserByTokenHash`. Shared by `api` and `proxy` so both enforce the
-same identities and roles. `auth` imports `store` (no cycle).
+`admin` with `BreakGlass=true`; a per-user token (`store.GetUserByTokenHash`);
+then a **login session token** (`store.GetSessionByTokenHash`, non-expired).
+Shared by `api` and `proxy` so both enforce the same identities and roles.
+`auth` imports `store` (no cycle).
+
+**Active Directory login** (`ldap.go`, Phase 3b): the `Authenticator` interface
+verifies username+password. `LDAPAuthenticator` binds a service account, searches
+the user under `BaseDN`, reads `memberOf`, re-binds as the user to verify the
+password, and maps groups → role (`roleForGroups`, highest privilege wins). The
+LDAP connection is behind an `ldapConn` interface so tests inject a fake; the
+real dial uses LDAPS. `POST /api/login` issues a session token (see `api`).
 
 Capability grants: admin = all; user = `CapReadInventory`+`CapConnect`; auditor =
 `CapReadInventory`+`CapReadAudit`; approver = auditor + `CapApprove` (approval
@@ -89,6 +97,10 @@ endpoints arrive with the OT/approval phase).
   `CapManageTargets`, `GET /api/audit` needs `CapReadAudit`).
 - User administration (`CapManageUsers`): `POST /api/users` mints a token and
   returns it **once**; only the SHA-256 is stored. `GET`/`DELETE /api/users`.
+- Login (`authn` optional): `POST /api/login` (public) verifies username+password
+  via the configured `Authenticator` and issues a session token (12h TTL, stored
+  as SHA-256) with the role from the directory; `POST /api/logout` revokes it.
+  Returns 503 when no authenticator is configured.
 - Handlers validate input (os_type ∈ {linux,windows}, protocol ∈ {ssh,winrm,rdp}),
   translate store errors to HTTP codes, and append audit events.
 - `reveal` (needs `CapRevealSecret`, admin only) decrypts on demand and is audited.
@@ -181,6 +193,11 @@ the client channel closes.
 | `PAM_KEK_PROVIDER` | `local` | vault KEK: `local` (dev/test) or `vault-transit` |
 | `PAM_MASTER_KEY` | — (local only) | local KEK key (base64, dev/test) |
 | `PAM_KEK_TRANSIT_ADDR` / `_TOKEN` / `_KEY` | — | HashiCorp Vault Transit KEK (production) |
+| `PAM_LDAP_URL` | — (disabled) | AD/LDAP login; `ldaps://…` enables `/api/login` |
+| `PAM_LDAP_BIND_DN` / `_BIND_PASSWORD` | — | service account for user search |
+| `PAM_LDAP_BASE_DN` / `_USER_FILTER` | — / `(sAMAccountName=%s)` | search base + filter |
+| `PAM_LDAP_GROUP_ADMIN` / `_USER` / `_AUDITOR` / `_APPROVER` | — | group DN → role |
+| `PAM_LDAP_INSECURE_SKIP_VERIFY` | `false` | disable TLS verify (dev only) |
 
 ## 4a. Logging (operational, to stdout)
 
@@ -197,10 +214,10 @@ secrets. Format `json` (SIEM) or `text` (humans); collect from stdout.
 ## 5. Audit action vocabulary
 
 `target.create` · `target.delete` · `credential.create` · `credential.reveal` ·
-`credential.delete` · `user.create` · `user.delete` · `authz.denied` ·
-`breakglass.access` · `session.start` · `session.record` · `session.end` ·
-`session.denied` · `session.error`. The actor is the Principal name
-(`bootstrap-admin`, `break-glass`, or a username).
+`credential.delete` · `user.create` · `user.delete` · `login` · `logout` ·
+`authz.denied` · `breakglass.access` · `session.start` · `session.record` ·
+`session.end` · `session.denied` · `session.error`. The actor is the Principal
+name (`bootstrap-admin`, `break-glass`, or a username).
 
 ## 6. Security-relevant invariants (do not regress)
 
@@ -221,8 +238,8 @@ secrets. Format `json` (SIEM) or `text` (humans); collect from stdout.
 ## 7. Testing
 
 - `vault`: envelope roundtrip, AAD binding, tamper detection, version rejection, distinct tokens; local KEK wrap/unwrap + tamper; KEK factory; **Transit KMS** wrap/unwrap and full envelope over a mock Vault Transit server.
-- `auth`: role→capability matrix, role parsing, resolver (bootstrap/break-glass/token/unknown).
-- `api`: full CRUD flow, auth required, secret-non-leak, cascade delete, break-glass audited, validation/conflict, **RBAC** (user/auditor/approver each allowed only their capabilities).
+- `auth`: role→capability matrix, role parsing, resolver (bootstrap/break-glass/token/**session**/unknown); **LDAP** authenticate (success, highest-privilege-wins, wrong password, no mapped group, unknown user) against a fake `ldapConn`.
+- `api`: full CRUD flow, auth required, secret-non-leak, cascade delete, break-glass audited, validation/conflict, **RBAC** (user/auditor/approver each allowed only their capabilities), **login session** (issue → use with role enforcement → logout revokes), login-not-configured 503.
 - `proxy`: **end-to-end JIT injection** against an in-process upstream sshd that
   accepts only the vaulted password (proves the client never had it), plus wrong-key
   rejection, unknown-target denial, credential selector, recording hash match, and
@@ -233,6 +250,7 @@ secrets. Format `json` (SIEM) or `text` (humans); collect from stdout.
 
 | Date | Change |
 |---|---|
+| 2026-07-18 | Phase 3b: AD/LDAP login (`ldap.go`, `Authenticator`); login sessions (`store.Session`, `/api/login` + `/api/logout`); resolver session support; portal Sign On with user+password; `PAM_LDAP_*` env |
 | 2026-07-18 | Vault envelope encryption + pluggable KEK (`kek.go`, `transit.go`); `v2:` token format; ctx-aware Encrypt/Decrypt; `local` (dev/test) + `vault-transit` (production) providers; `PAM_KEK_*` env |
 | 2026-07-18 | Added `logging` package (per-service slog, json/text, `PAM_LOG_LEVEL`/`PAM_LOG_FORMAT`); api access log, proxy session logs, pgstore connect + query tracer; user/admin guides |
 | 2026-07-18 | Phase 3a: `auth` package (roles admin/user/auditor/approver, capabilities, Resolver); `store.User` + user CRUD; API `authz` middleware + `/api/users`; proxy `CapConnect` gate; portal tolerates 403 |

@@ -61,9 +61,20 @@ type AuditEvent struct {
 type User struct {
 	ID        int64     `json:"id"`
 	Username  string    `json:"username"`
-	Role      string    `json:"role"` // admin | user | auditor
+	Role      string    `json:"role"` // admin | user | auditor | approver
 	TokenHash string    `json:"-"`
 	CreatedAt time.Time `json:"created_at"`
+}
+
+// Session is a short-lived bearer token issued after a password login (e.g.
+// Active Directory). Only the token's hex SHA-256 is stored (never serialized).
+type Session struct {
+	ID        int64     `json:"id"`
+	Username  string    `json:"username"`
+	Role      string    `json:"role"`
+	TokenHash string    `json:"-"`
+	CreatedAt time.Time `json:"created_at"`
+	ExpiresAt time.Time `json:"expires_at"`
 }
 
 type Store interface {
@@ -85,6 +96,11 @@ type Store interface {
 	ListUsers(ctx context.Context) ([]User, error)
 	GetUserByTokenHash(ctx context.Context, tokenHashHex string) (*User, error)
 	DeleteUser(ctx context.Context, id int64) error
+
+	CreateSession(ctx context.Context, s *Session) error
+	// GetSessionByTokenHash returns a non-expired session, or ErrNotFound.
+	GetSessionByTokenHash(ctx context.Context, tokenHashHex string) (*Session, error)
+	DeleteSession(ctx context.Context, tokenHashHex string) error
 
 	Close()
 }

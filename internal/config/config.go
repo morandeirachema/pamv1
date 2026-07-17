@@ -35,6 +35,18 @@ type Config struct {
 	TransitAddr  string
 	TransitToken string
 	TransitKey   string
+
+	// LDAP* configure Active Directory / LDAP login. Empty LDAPURL disables it.
+	LDAPURL                string
+	LDAPBindDN             string
+	LDAPBindPassword       string
+	LDAPBaseDN             string
+	LDAPUserFilter         string
+	LDAPInsecureSkipVerify bool
+	LDAPGroupAdmin         string
+	LDAPGroupUser          string
+	LDAPGroupAuditor       string
+	LDAPGroupApprover      string
 }
 
 func Load() (*Config, error) {
@@ -53,6 +65,17 @@ func Load() (*Config, error) {
 		TransitAddr:       os.Getenv("PAM_KEK_TRANSIT_ADDR"),
 		TransitToken:      os.Getenv("PAM_KEK_TRANSIT_TOKEN"),
 		TransitKey:        os.Getenv("PAM_KEK_TRANSIT_KEY"),
+
+		LDAPURL:                os.Getenv("PAM_LDAP_URL"),
+		LDAPBindDN:             os.Getenv("PAM_LDAP_BIND_DN"),
+		LDAPBindPassword:       os.Getenv("PAM_LDAP_BIND_PASSWORD"),
+		LDAPBaseDN:             os.Getenv("PAM_LDAP_BASE_DN"),
+		LDAPUserFilter:         os.Getenv("PAM_LDAP_USER_FILTER"),
+		LDAPInsecureSkipVerify: os.Getenv("PAM_LDAP_INSECURE_SKIP_VERIFY") == "true",
+		LDAPGroupAdmin:         os.Getenv("PAM_LDAP_GROUP_ADMIN"),
+		LDAPGroupUser:          os.Getenv("PAM_LDAP_GROUP_USER"),
+		LDAPGroupAuditor:       os.Getenv("PAM_LDAP_GROUP_AUDITOR"),
+		LDAPGroupApprover:      os.Getenv("PAM_LDAP_GROUP_APPROVER"),
 	}
 	// MasterKey is required only for the local KEK provider; a KMS-backed
 	// provider (e.g. vault-transit) holds the key material instead. The KEK

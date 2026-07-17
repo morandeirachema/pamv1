@@ -39,3 +39,14 @@ CREATE TABLE IF NOT EXISTS users (
 );
 
 CREATE INDEX IF NOT EXISTS users_token_hash_idx ON users (token_hash);
+
+CREATE TABLE IF NOT EXISTS sessions (
+    id         BIGSERIAL PRIMARY KEY,
+    username   TEXT NOT NULL,
+    role       TEXT NOT NULL,
+    token_hash TEXT NOT NULL UNIQUE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    expires_at TIMESTAMPTZ NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS sessions_token_hash_idx ON sessions (token_hash);
