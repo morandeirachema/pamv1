@@ -27,6 +27,14 @@ type Config struct {
 	LogLevel string
 	// LogFormat is json|text (default json).
 	LogFormat string
+
+	// KEKProvider selects the vault Key Encryption Key backend:
+	// "local" (default, dev/test — uses MasterKey) or "vault-transit".
+	KEKProvider string
+	// Transit* configure the HashiCorp Vault Transit KEK (production).
+	TransitAddr  string
+	TransitToken string
+	TransitKey   string
 }
 
 func Load() (*Config, error) {
@@ -41,9 +49,16 @@ func Load() (*Config, error) {
 		RecordingDir:      getenv("PAM_RECORDING_DIR", "recordings"),
 		LogLevel:          getenv("PAM_LOG_LEVEL", "info"),
 		LogFormat:         getenv("PAM_LOG_FORMAT", "json"),
+		KEKProvider:       getenv("PAM_KEK_PROVIDER", "local"),
+		TransitAddr:       os.Getenv("PAM_KEK_TRANSIT_ADDR"),
+		TransitToken:      os.Getenv("PAM_KEK_TRANSIT_TOKEN"),
+		TransitKey:        os.Getenv("PAM_KEK_TRANSIT_KEY"),
 	}
-	if cfg.MasterKey == "" {
-		return nil, fmt.Errorf("PAM_MASTER_KEY is required (generate one with: pam-server -genkey)")
+	// MasterKey is required only for the local KEK provider; a KMS-backed
+	// provider (e.g. vault-transit) holds the key material instead. The KEK
+	// factory validates provider-specific settings at startup.
+	if cfg.KEKProvider == "local" && cfg.MasterKey == "" {
+		return nil, fmt.Errorf("PAM_MASTER_KEY is required for the local KEK (generate one with: pam-server -genkey), or set PAM_KEK_PROVIDER")
 	}
 	if cfg.APIKey == "" {
 		return nil, fmt.Errorf("PAM_API_KEY is required")

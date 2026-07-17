@@ -127,7 +127,7 @@ func (s *Server) createCredential(w http.ResponseWriter, r *http.Request) {
 		storeError(w, err)
 		return
 	}
-	enc, err := s.vault.Encrypt(in.Secret, store.CredentialAAD(target.ID))
+	enc, err := s.vault.Encrypt(r.Context(), in.Secret, store.CredentialAAD(target.ID))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "encryption failed")
 		return
@@ -172,7 +172,7 @@ func (s *Server) revealCredential(w http.ResponseWriter, r *http.Request) {
 		storeError(w, err)
 		return
 	}
-	secret, err := s.vault.Decrypt(c.SecretEnc, store.CredentialAAD(c.TargetID))
+	secret, err := s.vault.Decrypt(r.Context(), c.SecretEnc, store.CredentialAAD(c.TargetID))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "decryption failed")
 		return

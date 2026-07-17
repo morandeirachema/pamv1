@@ -259,7 +259,7 @@ func (p *Proxy) resolve(ctx context.Context, targetName, credUser string) (*stor
 	if cred == nil {
 		return nil, nil, "", fmt.Errorf("no matching credential for target %q", targetName)
 	}
-	secret, err := p.vault.Decrypt(cred.SecretEnc, store.CredentialAAD(target.ID))
+	secret, err := p.vault.Decrypt(ctx, cred.SecretEnc, store.CredentialAAD(target.ID))
 	if err != nil {
 		return nil, nil, "", errors.New("credential decryption failed")
 	}

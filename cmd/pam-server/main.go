@@ -72,10 +72,18 @@ func run() error {
 	logging.Setup(cfg.LogLevel, cfg.LogFormat)
 	log := logging.Component("server")
 
-	v, err := vault.New(cfg.MasterKey)
+	kek, err := vault.NewKEK(vault.KEKOptions{
+		Provider:     cfg.KEKProvider,
+		MasterKey:    cfg.MasterKey,
+		TransitAddr:  cfg.TransitAddr,
+		TransitToken: cfg.TransitToken,
+		TransitKey:   cfg.TransitKey,
+	})
 	if err != nil {
 		return err
 	}
+	v := vault.NewWithKEK(kek)
+	log.Info("vault ready", "kek", kek.ID())
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

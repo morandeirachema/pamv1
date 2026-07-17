@@ -171,7 +171,7 @@ func seedTarget(t *testing.T, st store.Store, v *vault.Vault, host string, port 
 	if err := st.CreateTarget(ctx, target); err != nil {
 		t.Fatal(err)
 	}
-	enc, err := v.Encrypt(upstreamSecret, store.CredentialAAD(target.ID))
+	enc, err := v.Encrypt(context.Background(), upstreamSecret, store.CredentialAAD(target.ID))
 	if err != nil {
 		t.Fatal(err)
 	}

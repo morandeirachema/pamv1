@@ -32,10 +32,24 @@ internal/
 
 ### 2.1 `vault`
 
-- `Vault.Encrypt(plaintext, aad) -> "v1:" + base64(nonce||ciphertext)`.
-- AES-256-GCM, 12-byte random nonce per call, `aad` authenticated but not stored.
-- Token format is **versioned** (`v1:`) to allow key rotation (`v2:`) in Phase 5.
-- `GenerateMasterKey()` → 32 random bytes, urlsafe-base64. Key comes from `PAM_MASTER_KEY`.
+**Envelope encryption** (the KMS/PAM-vendor pattern). Each secret is sealed with
+a fresh random **data key** (AES-256-GCM, 12-byte nonce, `aad` authenticated),
+and that data key is **wrapped by a KEK** (Key Encryption Key). Token format is
+versioned: `"v2:" + base64url( uint16(len(wrappedDEK)) || wrappedDEK || nonce ||
+ciphertext )`. `Encrypt(ctx, plaintext, aad)` / `Decrypt(ctx, token, aad)` are
+context-aware because a KMS KEK makes network calls; data keys are zeroed after use.
+
+The **KEK is pluggable** (`KEK` interface, `NewKEK(KEKOptions)`):
+
+- `LocalKEK` — AES-256-GCM key from `PAM_MASTER_KEY` (base64). **Dev/test only** —
+  the key sits in an env var.
+- `TransitKEK` — HashiCorp [Vault Transit](https://developer.hashicorp.com/vault/docs/secrets/transit)
+  over HTTPS (`transit.go`); the KEK never leaves Vault, wrap/unwrap round-trip
+  the data key. **Production / vendor-aligned.** AWS KMS / PKCS#11 HSM are the
+  next providers (same interface).
+
+`GenerateMasterKey()` → 32 random bytes, urlsafe-base64 (seeds the local KEK).
+Selected by `PAM_KEK_PROVIDER` (`local` | `vault-transit`).
 
 ### 2.2 `store`
 
@@ -164,6 +178,9 @@ the client channel closes.
 | `PAM_RECORDING_DIR` | `recordings` | proxy recordings |
 | `PAM_LOG_LEVEL` | `info` | logging (debug/info/warn/error) |
 | `PAM_LOG_FORMAT` | `json` | logging (json/text) |
+| `PAM_KEK_PROVIDER` | `local` | vault KEK: `local` (dev/test) or `vault-transit` |
+| `PAM_MASTER_KEY` | — (local only) | local KEK key (base64, dev/test) |
+| `PAM_KEK_TRANSIT_ADDR` / `_TOKEN` / `_KEY` | — | HashiCorp Vault Transit KEK (production) |
 
 ## 4a. Logging (operational, to stdout)
 
@@ -190,6 +207,9 @@ secrets. Format `json` (SIEM) or `text` (humans); collect from stdout.
 1. `Credential.SecretEnc` must never be serialized to any client (`json:"-"`).
 2. All key/secret comparisons use `crypto/subtle.ConstantTimeCompare`.
 3. Vault AAD on decrypt must equal AAD on encrypt (`store.CredentialAAD`).
+3a. Envelope encryption: per-secret data keys are wrapped by the KEK and zeroed
+   after use; the base64 `PAM_MASTER_KEY` (local KEK) is dev/test only —
+   production uses a KMS-backed KEK.
 4. Every code path that reveals or uses a secret appends an audit event.
 5. Break-glass config holds only the SHA-256 hash, never the plaintext key.
 6. Proxy plaintext secret is confined to `resolve`→`dialUpstream`; never logged.
@@ -200,7 +220,7 @@ secrets. Format `json` (SIEM) or `text` (humans); collect from stdout.
 
 ## 7. Testing
 
-- `vault`: roundtrip, AAD binding, tamper detection, version rejection, nonce uniqueness.
+- `vault`: envelope roundtrip, AAD binding, tamper detection, version rejection, distinct tokens; local KEK wrap/unwrap + tamper; KEK factory; **Transit KMS** wrap/unwrap and full envelope over a mock Vault Transit server.
 - `auth`: role→capability matrix, role parsing, resolver (bootstrap/break-glass/token/unknown).
 - `api`: full CRUD flow, auth required, secret-non-leak, cascade delete, break-glass audited, validation/conflict, **RBAC** (user/auditor/approver each allowed only their capabilities).
 - `proxy`: **end-to-end JIT injection** against an in-process upstream sshd that
@@ -213,6 +233,7 @@ secrets. Format `json` (SIEM) or `text` (humans); collect from stdout.
 
 | Date | Change |
 |---|---|
+| 2026-07-18 | Vault envelope encryption + pluggable KEK (`kek.go`, `transit.go`); `v2:` token format; ctx-aware Encrypt/Decrypt; `local` (dev/test) + `vault-transit` (production) providers; `PAM_KEK_*` env |
 | 2026-07-18 | Added `logging` package (per-service slog, json/text, `PAM_LOG_LEVEL`/`PAM_LOG_FORMAT`); api access log, proxy session logs, pgstore connect + query tracer; user/admin guides |
 | 2026-07-18 | Phase 3a: `auth` package (roles admin/user/auditor/approver, capabilities, Resolver); `store.User` + user CRUD; API `authz` middleware + `/api/users`; proxy `CapConnect` gate; portal tolerates 403 |
 | 2026-07-18 | Added `proxy` package (SSH gateway, JIT, recording, host key); `store.CredentialAAD`; proxy env vars |

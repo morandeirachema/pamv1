@@ -60,9 +60,11 @@ The flagship: users connect *through* pamv1, never holding the credential.
 
 ## Phase 5 — Hardening: database, vault, transport ⬜
 
+- [x] **Envelope encryption** with a pluggable KEK: per-secret data keys wrapped by a Key Encryption Key; `local` KEK (dev/test) + **HashiCorp Vault Transit** KEK (production, KEK never leaves the KMS)
+- [ ] More KEK providers on the same interface: AWS KMS, PKCS#11 HSM
+- [ ] Vault key rotation (re-encrypt job; rotate the KEK / re-wrap data keys)
 - [ ] Postgres TLS (verify-full), scram-sha-256 enforced, least-privilege DB role, [pgAudit](https://www.pgaudit.org/)
 - [ ] Versioned migrations (tern/goose) replacing startup schema
-- [ ] Vault key rotation (`v2:` tokens, re-encrypt job) and optional KMS/HSM envelope (AWS KMS / Vault Transit / PKCS#11)
 - [ ] HTTPS with managed certs; strict headers; rate limiting on auth endpoints
 - [ ] Backup/restore runbook with encrypted backups
 

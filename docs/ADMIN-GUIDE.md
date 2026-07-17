@@ -137,7 +137,9 @@ All configuration is environment variables (12-factor). Full descriptions in
 
 | Variable | Required | Default | Purpose |
 |---|---|---|---|
-| `PAM_MASTER_KEY` | ✅ | — | Vault encryption key (`-genkey`). **Back it up securely.** |
+| `PAM_KEK_PROVIDER` | | `local` | Vault key backend: `local` (dev/test) or `vault-transit` (production). |
+| `PAM_MASTER_KEY` | local only | — | Local KEK key (`-genkey`). **Back it up securely.** Dev/test only. |
+| `PAM_KEK_TRANSIT_ADDR` / `_TOKEN` / `_KEY` | transit only | — | HashiCorp Vault Transit KEK (production). |
 | `PAM_API_KEY` | ✅ | — | Bootstrap admin key (X-API-Key / SSH password). |
 | `PAM_DATABASE_URL` | ✅ | — | `postgres://…` (use `sslmode=verify-full`) or `memory` for demo. |
 | `PAM_BREAK_GLASS_KEY_HASH` | | (off) | Hex SHA-256 of the sealed emergency key. |
@@ -297,7 +299,12 @@ evidence). Replay with [asciinema](https://asciinema.org/): `asciinema play <fil
 
 - **Secure protocols only.** Front the portal/API with **HTTPS**; use `sslmode=verify-full`
   to Postgres; prefer **LDAPS** for AD. Plain HTTP/LDAP only in isolated dev.
-- **Protect `PAM_MASTER_KEY`.** It decrypts the entire vault. Back it up out-of-band; a DB dump without it is useless (that's the point).
+- **Vault key management (envelope encryption).** Secrets are sealed with per-secret
+  data keys that are wrapped by a Key Encryption Key (KEK). In **production use a
+  KMS-backed KEK** (`PAM_KEK_PROVIDER=vault-transit`, [HashiCorp Vault Transit](https://developer.hashicorp.com/vault/docs/secrets/transit))
+  so the root key never leaves the KMS. The `local` KEK (`PAM_MASTER_KEY`, base64
+  in an env var) is **for development and tests only**.
+- **Protect `PAM_MASTER_KEY`** (local KEK). It wraps the entire vault. Back it up out-of-band; a DB dump without it is useless (that's the point). With a KMS KEK there is no local key to protect.
 - **Rotate** the bootstrap `PAM_API_KEY` and any per-user tokens periodically; delete users who no longer need access.
 - **Least privilege on the network:** see the [ports & flow matrix](PORTS-AND-FLOWS.md) for the firewall/NetworkPolicy baseline. The database must be unreachable from operator and target zones.
 - Planned hardening (Postgres TLS enforcement, migrations, vault key rotation, native HTTPS, rate limiting) is [Phase 5](../ROADMAP.md#phase-5--hardening-database-vault-transport-).
