@@ -91,13 +91,17 @@ func (p *Proxy) authenticate(c ssh.ConnMetadata, password []byte) (*ssh.Permissi
 		return nil, fmt.Errorf("pamv1: authentication failed")
 	}
 	credUser, targetName := splitLogin(c.User())
-	return &ssh.Permissions{Extensions: map[string]string{
+	ext := map[string]string{
 		"login":     c.User(),
 		"principal": principal.Name,
 		"role":      string(principal.Role),
 		"target":    targetName,
 		"cred_user": credUser,
-	}}, nil
+	}
+	if principal.EnrollOnly {
+		ext["enroll_only"] = "true"
+	}
+	return &ssh.Permissions{Extensions: ext}, nil
 }
 
 // splitLogin parses "creduser@target" (rightmost @ separates the target) or
@@ -167,6 +171,14 @@ func (p *Proxy) handleConn(ctx context.Context, nConn net.Conn) {
 	remote := sconn.RemoteAddr().String()
 	p.log.Info("connection authenticated", "actor", actor, "role", string(role),
 		"login", login, "remote", remote)
+
+	// An enrollment-only session (MFA setup pending) may not open sessions.
+	if ext["enroll_only"] == "true" {
+		p.log.Warn("session denied: mfa enrollment incomplete", "actor", actor, "remote", remote)
+		p.audit(ctx, actor, "session.denied", "login:"+login+" reason:mfa-enrollment-incomplete")
+		rejectAll(chans, ssh.Prohibited, "pamv1: complete MFA enrollment first")
+		return
+	}
 
 	// auditor (and any role without CapConnect) may authenticate but not open
 	// sessions through the proxy.

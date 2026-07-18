@@ -118,9 +118,14 @@ endpoints arrive with the OT/approval phase).
 - MFA (`internal/mfa`, self-service, authenticated): `POST /api/mfa/enroll`
   generates a TOTP secret (returned once, plus an `otpauth://` URI), stored
   **vault-encrypted** (AAD `mfa:<user>`), unconfirmed; `POST /api/mfa/verify`
-  confirms it with a code; `GET /api/mfa` reports status; `DELETE /api/mfa`
-  disables it. Enforcement is per-user opt-in and applies to the password-login
-  path (bearer tokens are non-interactive).
+  confirms it with a code; `POST /api/mfa/recovery-codes` issues 10 single-use
+  backup codes (hashes stored); `GET /api/mfa` status; `DELETE /api/mfa` disables.
+  A login OTP accepts a TOTP code **or** a recovery code (consumed on use).
+- **Enforce-MFA policy** (`Options.MFARequired`, `PAM_MFA_REQUIRED`): when a user
+  with no confirmed MFA logs in, they get an **enrollment-only session**
+  (`store.Session.Scope="enroll"` → `Principal.EnrollOnly`) that only the MFA
+  endpoints accept — `authz` and the proxy reject it (403 / `session.denied`)
+  until enrollment is confirmed and the user re-logs in with a full session.
 - Handlers validate input (os_type ∈ {linux,windows}, protocol ∈ {ssh,winrm,rdp}),
   translate store errors to HTTP codes, and append audit events.
 - `reveal` (needs `CapRevealSecret`, admin only) decrypts on demand and is audited.
@@ -221,6 +226,7 @@ the client channel closes.
 | `PAM_ENTRA_TENANT_ID` | — (disabled) | Entra ID login; set to enable |
 | `PAM_ENTRA_CLIENT_ID` / `_CLIENT_SECRET` / `_SCOPE` / `_AUTHORITY_HOST` | — | Entra app registration |
 | `PAM_ENTRA_ROLE_ADMIN` / `_USER` / `_AUDITOR` / `_APPROVER` | — | Entra app-role/group → role |
+| `PAM_MFA_REQUIRED` | `false` | require a confirmed TOTP factor for password login |
 
 ## 4a. Logging (operational, to stdout)
 
@@ -238,9 +244,9 @@ secrets. Format `json` (SIEM) or `text` (humans); collect from stdout.
 
 `target.create` · `target.delete` · `credential.create` · `credential.reveal` ·
 `credential.delete` · `user.create` · `user.delete` · `login` · `logout` ·
-`mfa.enroll` · `mfa.confirm` · `mfa.disable` · `authz.denied` ·
-`breakglass.access` · `session.start` · `session.record` · `session.end` ·
-`session.denied` · `session.error`. The actor is the Principal name
+`mfa.enroll` · `mfa.confirm` · `mfa.disable` · `mfa.recovery_generated` ·
+`mfa.recovery_used` · `authz.denied` · `breakglass.access` · `session.start` ·
+`session.record` · `session.end` · `session.denied` · `session.error`. The actor is the Principal name
 (`bootstrap-admin`, `break-glass`, or a username).
 
 ## 6. Security-relevant invariants (do not regress)
@@ -253,7 +259,8 @@ secrets. Format `json` (SIEM) or `text` (humans); collect from stdout.
    production uses a KMS-backed KEK.
 4. Every code path that reveals or uses a secret appends an audit event.
 4a. TOTP secrets are stored vault-encrypted (AAD `mfa:<user>`), returned only
-   once at enrollment, and compared in constant time (`crypto/subtle`).
+   once at enrollment, and compared in constant time (`crypto/subtle`). Recovery
+   codes are stored only as SHA-256 hashes, shown once, and single-use.
 5. Break-glass config holds only the SHA-256 hash, never the plaintext key.
 6. Proxy plaintext secret is confined to `resolve`→`dialUpstream`; never logged.
 7. User access tokens are stored only as `TokenHash` (`json:"-"`); the plaintext
@@ -267,7 +274,7 @@ secrets. Format `json` (SIEM) or `text` (humans); collect from stdout.
 - `auth`: role→capability matrix, role parsing, resolver (bootstrap/break-glass/token/**session**/unknown); **LDAP** authenticate (success, highest-privilege-wins, wrong password, no mapped group, unknown user) against a fake `ldapConn`.
 - `mfa`: RFC 6238 test vector, validate roundtrip + skew + wrong/short code, otpauth URI, secret randomness.
 - `auth` (Entra/chain): Entra app-role & group login, highest-privilege-wins, bad password, no mapped role (mock token endpoint); chain resolves via a later source and rejects when none match.
-- `api`: full CRUD flow, auth required, secret-non-leak, cascade delete, break-glass audited, validation/conflict, **RBAC** (user/auditor/approver each allowed only their capabilities), **login session** (issue → use with role enforcement → logout revokes), login-not-configured 503, **MFA** (enroll → confirm → login requires OTP → wrong OTP rejected).
+- `api`: full CRUD flow, auth required, secret-non-leak, cascade delete, break-glass audited, validation/conflict, **RBAC** (user/auditor/approver each allowed only their capabilities), **login session** (issue → use with role enforcement → logout revokes), login-not-configured 503, **MFA** (enroll → confirm → login requires OTP → wrong OTP rejected), **enforce-MFA** (enrollment-only session blocked from other routes → enroll → full session), **recovery codes** (login with a code, single-use).
 - `proxy`: **end-to-end JIT injection** against an in-process upstream sshd that
   accepts only the vaulted password (proves the client never had it), plus wrong-key
   rejection, unknown-target denial, credential selector, recording hash match, and
@@ -278,6 +285,7 @@ secrets. Format `json` (SIEM) or `text` (humans); collect from stdout.
 
 | Date | Change |
 |---|---|
+| 2026-07-18 | Phase 3b hardening: enforce-MFA policy (`PAM_MFA_REQUIRED`, enrollment-only sessions via `Session.Scope`/`Principal.EnrollOnly`) + single-use recovery codes (`/api/mfa/recovery-codes`) |
 | 2026-07-18 | Phase 3b Entra: `EntraAuthenticator` (Azure AD, OAuth2 ROPC, app-roles/groups → role); `ChainAuthenticator`; `PAM_ENTRA_*` env; LDAP + Entra composable |
 | 2026-07-18 | Phase 3b MFA: `mfa` package (TOTP RFC 6238); `store.MFAEnrollment` (vault-encrypted secret); `/api/mfa/*` self-service; `/api/login` enforces confirmed TOTP; portal Sign On OTP field |
 | 2026-07-18 | Phase 3b: AD/LDAP login (`ldap.go`, `Authenticator`); login sessions (`store.Session`, `/api/login` + `/api/logout`); resolver session support; portal Sign On with user+password; `PAM_LDAP_*` env |

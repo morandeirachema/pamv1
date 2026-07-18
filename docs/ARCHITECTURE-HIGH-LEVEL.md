@@ -69,7 +69,7 @@ flowchart TB
 | **Session Proxy** | Broker SSH; **JIT credential injection**; record sessions | ✅ Phase 2 |
 | **RBAC** | Four profiles (admin/user/auditor/approver), per-user tokens | ✅ Phase 3a |
 | **AD / Entra login** | LDAPS + Entra ID (Azure AD), groups/app-roles → roles, session tokens | ✅ Phase 3b |
-| **MFA** | TOTP (RFC 6238) enrollment + login enforcement | ✅ Phase 3b |
+| **MFA** | TOTP (RFC 6238), recovery codes, enforce-MFA policy | ✅ Phase 3b |
 | **Windows access** | WinRM/RDP with JIT credentials | ⬜ Phase 4 |
 | **Credential lifecycle** | Rotation, checkout/check-in, discovery | ⬜ Phase 7 |
 

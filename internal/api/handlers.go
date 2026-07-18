@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
@@ -10,6 +11,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/morandeirachema/pamv1/internal/auth"
@@ -232,34 +234,43 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, "invalid credentials")
 		return
 	}
-	// Second factor: if the user has a confirmed TOTP enrollment, require it.
-	if e, err := s.store.GetMFAEnrollment(r.Context(), principal.Name); err == nil && e.Confirmed {
+
+	enr, mfaErr := s.store.GetMFAEnrollment(r.Context(), principal.Name)
+	switch {
+	case mfaErr == nil && enr.Confirmed:
+		// User has MFA — require a valid code (or a single-use recovery code).
 		if in.OTP == "" {
 			writeJSON(w, http.StatusUnauthorized, map[string]any{
 				"error": "multi-factor code required", "mfa_required": true,
 			})
 			return
 		}
-		secret, derr := s.vault.Decrypt(r.Context(), e.SecretEnc, store.MFAAAD(principal.Name))
-		if derr != nil || !mfa.Validate(secret, in.OTP, time.Now()) {
+		if !s.checkSecondFactor(r.Context(), principal.Name, enr, in.OTP) {
 			s.log.Warn("mfa failed", "user", principal.Name, "remote", r.RemoteAddr)
 			writeError(w, http.StatusUnauthorized, "invalid multi-factor code")
 			return
 		}
-	}
-	token, err := generateToken()
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "token generation failed")
+	case s.mfaRequired:
+		// Policy requires MFA but the user has none yet: issue an
+		// enrollment-only session so they can set it up, nothing else.
+		token, _, err := s.issueSession(r.Context(), principal, auth.SessionScopeEnroll)
+		if err != nil {
+			storeError(w, err)
+			return
+		}
+		setActor(r.Context(), principal.Name)
+		s.audit(withPrincipal(r.Context(), principal), "login", "user:"+principal.Name+" scope:enroll")
+		writeJSON(w, http.StatusOK, map[string]any{
+			"mfa_enrollment_required": true,
+			"token":                   token,
+			"username":                principal.Name,
+			"role":                    principal.Role,
+		})
 		return
 	}
-	sum := sha256.Sum256([]byte(token))
-	sess := store.Session{
-		Username:  principal.Name,
-		Role:      string(principal.Role),
-		TokenHash: hex.EncodeToString(sum[:]),
-		ExpiresAt: time.Now().Add(sessionTTL).UTC(),
-	}
-	if err := s.store.CreateSession(r.Context(), &sess); err != nil {
+
+	token, sess, err := s.issueSession(r.Context(), principal, "")
+	if err != nil {
 		storeError(w, err)
 		return
 	}
@@ -274,12 +285,50 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// issueSession mints a session token (scope "" = full, "enroll" = MFA setup only).
+func (s *Server) issueSession(ctx context.Context, p *auth.Principal, scope string) (string, store.Session, error) {
+	token, err := generateToken()
+	if err != nil {
+		return "", store.Session{}, err
+	}
+	sess := store.Session{
+		Username:  p.Name,
+		Role:      string(p.Role),
+		Scope:     scope,
+		TokenHash: hashHex(token),
+		ExpiresAt: time.Now().Add(sessionTTL).UTC(),
+	}
+	if err := s.store.CreateSession(ctx, &sess); err != nil {
+		return "", store.Session{}, err
+	}
+	return token, sess, nil
+}
+
+// checkSecondFactor accepts a valid TOTP code or a single-use recovery code.
+func (s *Server) checkSecondFactor(ctx context.Context, username string, enr *store.MFAEnrollment, otp string) bool {
+	if secret, err := s.vault.Decrypt(ctx, enr.SecretEnc, store.MFAAAD(username)); err == nil {
+		if mfa.Validate(secret, otp, time.Now()) {
+			return true
+		}
+	}
+	code := strings.ToLower(strings.TrimSpace(otp))
+	if consumed, err := s.store.ConsumeMFARecoveryCode(ctx, username, hashHex(code)); err == nil && consumed {
+		s.audit(ctx, "mfa.recovery_used", "user:"+username)
+		return true
+	}
+	return false
+}
+
+func hashHex(s string) string {
+	sum := sha256.Sum256([]byte(s))
+	return hex.EncodeToString(sum[:])
+}
+
 // logout revokes the caller's own session token.
 func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
-	sum := sha256.Sum256([]byte(r.Header.Get("X-API-Key")))
 	// Best-effort: only session tokens exist in the table; other identities
 	// (bootstrap/token) simply have nothing to delete.
-	_ = s.store.DeleteSession(r.Context(), hex.EncodeToString(sum[:]))
+	_ = s.store.DeleteSession(r.Context(), hashHex(r.Header.Get("X-API-Key")))
 	s.audit(r.Context(), "logout", actorFrom(r.Context()))
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -364,7 +413,7 @@ func (s *Server) mfaStatus(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"enrolled": true, "confirmed": e.Confirmed})
 }
 
-// mfaDisable removes the caller's TOTP enrollment.
+// mfaDisable removes the caller's TOTP enrollment (and recovery codes).
 func (s *Server) mfaDisable(w http.ResponseWriter, r *http.Request) {
 	p := principalFrom(r.Context())
 	if err := s.store.DeleteMFAEnrollment(r.Context(), p.Name); err != nil && !errors.Is(err, store.ErrNotFound) {
@@ -373,6 +422,39 @@ func (s *Server) mfaDisable(w http.ResponseWriter, r *http.Request) {
 	}
 	s.audit(r.Context(), "mfa.disable", "user:"+p.Name)
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// mfaRecoveryCodes generates a fresh set of single-use recovery codes and
+// returns them once, replacing any previous set. Requires confirmed MFA.
+func (s *Server) mfaRecoveryCodes(w http.ResponseWriter, r *http.Request) {
+	p := principalFrom(r.Context())
+	if p.EnrollOnly {
+		writeError(w, http.StatusForbidden, "complete MFA enrollment first")
+		return
+	}
+	enr, err := s.store.GetMFAEnrollment(r.Context(), p.Name)
+	if err != nil || !enr.Confirmed {
+		writeError(w, http.StatusBadRequest, "confirm MFA before generating recovery codes")
+		return
+	}
+	codes, err := mfa.GenerateRecoveryCodes(10)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "code generation failed")
+		return
+	}
+	hashes := make([]string, len(codes))
+	for i, c := range codes {
+		hashes[i] = hashHex(c)
+	}
+	if err := s.store.ReplaceMFARecoveryCodes(r.Context(), p.Name, hashes); err != nil {
+		storeError(w, err)
+		return
+	}
+	s.audit(r.Context(), "mfa.recovery_generated", "user:"+p.Name)
+	writeJSON(w, http.StatusCreated, map[string]any{
+		"recovery_codes": codes,
+		"note":           "Store these now — each works once in place of your MFA code. This is the only time they are shown.",
+	})
 }
 
 // --- users (RBAC administration) ---
@@ -403,8 +485,7 @@ func (s *Server) createUser(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "token generation failed")
 		return
 	}
-	sum := sha256.Sum256([]byte(token))
-	u := store.User{Username: in.Username, Role: string(role), TokenHash: hex.EncodeToString(sum[:])}
+	u := store.User{Username: in.Username, Role: string(role), TokenHash: hashHex(token)}
 	if err := s.store.CreateUser(r.Context(), &u); err != nil {
 		storeError(w, err)
 		return

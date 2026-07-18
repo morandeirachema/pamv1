@@ -168,9 +168,12 @@ func run() error {
 		return err
 	}
 
-	handler, err := api.New(st, v, resolver, authn)
+	handler, err := api.New(st, v, resolver, authn, api.Options{MFARequired: cfg.MFARequired})
 	if err != nil {
 		return err
+	}
+	if cfg.MFARequired {
+		log.Info("MFA is required for password logins")
 	}
 
 	if cfg.SSHAddr != "off" {

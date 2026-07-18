@@ -62,3 +62,23 @@ func TestGenerateSecretDistinct(t *testing.T) {
 		t.Fatal("secrets must be random and non-empty")
 	}
 }
+
+func TestGenerateRecoveryCodes(t *testing.T) {
+	codes, err := GenerateRecoveryCodes(10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(codes) != 10 {
+		t.Fatalf("got %d codes, want 10", len(codes))
+	}
+	seen := map[string]bool{}
+	for _, c := range codes {
+		if len(c) != 11 || c[5] != '-' {
+			t.Fatalf("unexpected code format: %q", c)
+		}
+		if seen[c] {
+			t.Fatalf("duplicate recovery code: %q", c)
+		}
+		seen[c] = true
+	}
+}

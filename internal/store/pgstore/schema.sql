@@ -44,6 +44,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     id         BIGSERIAL PRIMARY KEY,
     username   TEXT NOT NULL,
     role       TEXT NOT NULL,
+    scope      TEXT NOT NULL DEFAULT '',
     token_hash TEXT NOT NULL UNIQUE,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     expires_at TIMESTAMPTZ NOT NULL
@@ -56,4 +57,10 @@ CREATE TABLE IF NOT EXISTS mfa_enrollments (
     secret_enc TEXT NOT NULL,
     confirmed  BOOLEAN NOT NULL DEFAULT false,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS mfa_recovery_codes (
+    username  TEXT NOT NULL,
+    code_hash TEXT NOT NULL,
+    PRIMARY KEY (username, code_hash)
 );

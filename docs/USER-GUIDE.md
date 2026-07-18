@@ -73,6 +73,14 @@ From then on, when you sign in with User + Password the portal also asks for you
 **MFA code** — enter the current 6-digit code. (Bearer access tokens aren't
 protected by MFA; MFA covers the username/password login.)
 
+**Recovery codes:** `POST /api/mfa/recovery-codes` gives you 10 single-use backup
+codes — save them somewhere safe. If you lose your phone, enter one of them in the
+MFA code field to sign in; each works only once.
+
+If your organization **requires MFA**, your first sign-in gives you a limited
+session that can *only* set up MFA — enroll and confirm, then sign in again
+normally with your code.
+
 ## 4. Using the portal
 
 The portal is an intentionally old-school [IBM 5250 / AS-400](https://en.wikipedia.org/wiki/IBM_5250)
@@ -159,6 +167,7 @@ emergency access and always deserve a look.
 
 | Date | Change |
 |---|---|
+| 2026-07-18 | Phase 3b: recovery codes + enforce-MFA (enrollment-only first sign-in) |
 | 2026-07-18 | Phase 3b: TOTP MFA (enroll/confirm, MFA code on Sign On) |
 | 2026-07-18 | Phase 3b: Active Directory login (username + password → session token) added to Sign On |
 | 2026-07-18 | Initial user guide (Phase 3a): roles, tokens, portal Sign On, connecting via the SSH proxy, audit review |

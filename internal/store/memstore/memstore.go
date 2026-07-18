@@ -19,6 +19,7 @@ type Memstore struct {
 	users    map[int64]store.User
 	sessions map[int64]store.Session
 	mfa      map[string]store.MFAEnrollment
+	recovery map[string]map[string]bool // username -> set of code hashes
 	audit    []store.AuditEvent
 }
 
@@ -29,6 +30,7 @@ func New() *Memstore {
 		users:    make(map[int64]store.User),
 		sessions: make(map[int64]store.Session),
 		mfa:      make(map[string]store.MFAEnrollment),
+		recovery: make(map[string]map[string]bool),
 	}
 }
 
@@ -264,7 +266,36 @@ func (m *Memstore) DeleteMFAEnrollment(_ context.Context, username string) error
 		return store.ErrNotFound
 	}
 	delete(m.mfa, username)
+	delete(m.recovery, username)
 	return nil
+}
+
+func (m *Memstore) ReplaceMFARecoveryCodes(_ context.Context, username string, codeHashes []string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	set := make(map[string]bool, len(codeHashes))
+	for _, h := range codeHashes {
+		set[h] = true
+	}
+	m.recovery[username] = set
+	return nil
+}
+
+func (m *Memstore) ConsumeMFARecoveryCode(_ context.Context, username, codeHash string) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	set := m.recovery[username]
+	if set == nil || !set[codeHash] {
+		return false, nil
+	}
+	delete(set, codeHash)
+	return true, nil
+}
+
+func (m *Memstore) CountMFARecoveryCodes(_ context.Context, username string) (int, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return len(m.recovery[username]), nil
 }
 
 func (m *Memstore) Close() {}

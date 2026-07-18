@@ -28,6 +28,9 @@ type Config struct {
 	// LogFormat is json|text (default json).
 	LogFormat string
 
+	// MFARequired makes password login require a confirmed TOTP second factor.
+	MFARequired bool
+
 	// KEKProvider selects the vault Key Encryption Key backend:
 	// "local" (default, dev/test — uses MasterKey) or "vault-transit".
 	KEKProvider string
@@ -72,6 +75,7 @@ func Load() (*Config, error) {
 		RecordingDir:      getenv("PAM_RECORDING_DIR", "recordings"),
 		LogLevel:          getenv("PAM_LOG_LEVEL", "info"),
 		LogFormat:         getenv("PAM_LOG_FORMAT", "json"),
+		MFARequired:       os.Getenv("PAM_MFA_REQUIRED") == "true",
 		KEKProvider:       getenv("PAM_KEK_PROVIDER", "local"),
 		TransitAddr:       os.Getenv("PAM_KEK_TRANSIT_ADDR"),
 		TransitToken:      os.Getenv("PAM_KEK_TRANSIT_TOKEN"),

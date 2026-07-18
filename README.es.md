@@ -77,7 +77,9 @@ Los componentes con línea discontinua (objetivos Windows) llegan en la [Fase 4]
   cada denegación se audita y el registro atribuye nombres de usuario reales.
 - **MFA por TOTP** — alta autoservicio ([RFC 6238](https://datatracker.ietf.org/doc/html/rfc6238),
   compatible con cualquier app de autenticación); el secreto se guarda cifrado en el vault y,
-  una vez dado de alta, el inicio de sesión exige el código de 6 dígitos.
+  una vez dado de alta, el inicio de sesión exige el código de 6 dígitos. Incluye **códigos de
+  recuperación** de un solo uso y una política opcional de **MFA obligatoria** (con primer
+  inicio de sesión solo para el alta).
 - **Proxy de sesión con inyección JIT** — los operadores conectan a través de una pasarela
   SSH; el proxy los autentica, obtiene la credencial del vault, **la descifra solo en el
   momento de la conexión**, la inyecta en la sesión SSH de destino y lo graba todo. Probado

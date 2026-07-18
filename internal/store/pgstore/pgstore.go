@@ -261,15 +261,15 @@ func (s *PGStore) DeleteUser(ctx context.Context, id int64) error {
 
 func (s *PGStore) CreateSession(ctx context.Context, sess *store.Session) error {
 	return s.pool.QueryRow(ctx,
-		`INSERT INTO sessions (username, role, token_hash, expires_at)
-		 VALUES ($1, $2, $3, $4) RETURNING id, created_at`,
-		sess.Username, sess.Role, sess.TokenHash, sess.ExpiresAt,
+		`INSERT INTO sessions (username, role, scope, token_hash, expires_at)
+		 VALUES ($1, $2, $3, $4, $5) RETURNING id, created_at`,
+		sess.Username, sess.Role, sess.Scope, sess.TokenHash, sess.ExpiresAt,
 	).Scan(&sess.ID, &sess.CreatedAt)
 }
 
 func (s *PGStore) GetSessionByTokenHash(ctx context.Context, tokenHashHex string) (*store.Session, error) {
 	rows, err := s.pool.Query(ctx,
-		`SELECT id, username, role, token_hash, created_at, expires_at
+		`SELECT id, username, role, scope, token_hash, created_at, expires_at
 		 FROM sessions WHERE token_hash = $1 AND expires_at > now()`, tokenHashHex)
 	if err != nil {
 		return nil, err
@@ -327,7 +327,45 @@ func (s *PGStore) DeleteMFAEnrollment(ctx context.Context, username string) erro
 	if err == nil && tag.RowsAffected() == 0 {
 		return store.ErrNotFound
 	}
+	if err == nil {
+		_, err = s.pool.Exec(ctx, `DELETE FROM mfa_recovery_codes WHERE username = $1`, username)
+	}
 	return err
+}
+
+func (s *PGStore) ReplaceMFARecoveryCodes(ctx context.Context, username string, codeHashes []string) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, `DELETE FROM mfa_recovery_codes WHERE username = $1`, username); err != nil {
+		return err
+	}
+	for _, h := range codeHashes {
+		if _, err := tx.Exec(ctx,
+			`INSERT INTO mfa_recovery_codes (username, code_hash) VALUES ($1, $2)
+			 ON CONFLICT DO NOTHING`, username, h); err != nil {
+			return err
+		}
+	}
+	return tx.Commit(ctx)
+}
+
+func (s *PGStore) ConsumeMFARecoveryCode(ctx context.Context, username, codeHash string) (bool, error) {
+	tag, err := s.pool.Exec(ctx,
+		`DELETE FROM mfa_recovery_codes WHERE username = $1 AND code_hash = $2`, username, codeHash)
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() > 0, nil
+}
+
+func (s *PGStore) CountMFARecoveryCodes(ctx context.Context, username string) (int, error) {
+	var n int
+	err := s.pool.QueryRow(ctx,
+		`SELECT count(*) FROM mfa_recovery_codes WHERE username = $1`, username).Scan(&n)
+	return n, err
 }
 
 func (s *PGStore) Close() {
@@ -354,6 +392,6 @@ func scanUser(row pgx.CollectableRow) (store.User, error) {
 
 func scanSession(row pgx.CollectableRow) (store.Session, error) {
 	var s store.Session
-	err := row.Scan(&s.ID, &s.Username, &s.Role, &s.TokenHash, &s.CreatedAt, &s.ExpiresAt)
+	err := row.Scan(&s.ID, &s.Username, &s.Role, &s.Scope, &s.TokenHash, &s.CreatedAt, &s.ExpiresAt)
 	return s, err
 }

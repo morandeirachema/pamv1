@@ -38,6 +38,12 @@ func newTestServerStore(t *testing.T) (*httptest.Server, store.Store) {
 // newTestServerAuthn builds a server with an optional password authenticator.
 func newTestServerAuthn(t *testing.T, authn auth.Authenticator) (*httptest.Server, store.Store) {
 	t.Helper()
+	return newTestServerOpts(t, authn, api.Options{})
+}
+
+// newTestServerOpts builds a server with a password authenticator and options.
+func newTestServerOpts(t *testing.T, authn auth.Authenticator, opts api.Options) (*httptest.Server, store.Store) {
+	t.Helper()
 	masterKey, err := vault.GenerateMasterKey()
 	if err != nil {
 		t.Fatal(err)
@@ -52,7 +58,7 @@ func newTestServerAuthn(t *testing.T, authn auth.Authenticator) (*httptest.Serve
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler, err := api.New(st, v, resolver, authn)
+	handler, err := api.New(st, v, resolver, authn, opts)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -373,6 +379,88 @@ func TestMFAEnrollmentAndLogin(t *testing.T) {
 	// 6. Wrong OTP is rejected.
 	if status, _ := do(t, srv, http.MethodPost, "/api/login", "", map[string]any{"username": "ad-alice", "password": "pw", "otp": "000000"}); status != http.StatusUnauthorized {
 		t.Fatalf("login with wrong OTP should fail: %d", status)
+	}
+}
+
+// enrollAndConfirmMFA logs in, enrolls MFA and confirms it, returning the
+// TOTP secret and a full (post-enrollment) session token.
+func enrollMFA(t *testing.T, srv *httptest.Server, sessTok string) string {
+	t.Helper()
+	status, data := do(t, srv, http.MethodPost, "/api/mfa/enroll", sessTok, nil)
+	if status != http.StatusCreated {
+		t.Fatalf("enroll: %d %s", status, data)
+	}
+	secret, _ := jsonMap(t, data)["secret"].(string)
+	code, _ := mfa.Code(secret, time.Now())
+	if status, data := do(t, srv, http.MethodPost, "/api/mfa/verify", sessTok, map[string]any{"otp": code}); status != http.StatusOK {
+		t.Fatalf("verify: %d %s", status, data)
+	}
+	return secret
+}
+
+func TestEnforceMFAPolicy(t *testing.T) {
+	srv, _ := newTestServerOpts(t,
+		fakeAuthenticator{username: "ad-alice", password: "pw", role: auth.RoleUser},
+		api.Options{MFARequired: true})
+
+	// 1. First login with no MFA → enrollment-only session (200, flagged).
+	status, data := do(t, srv, http.MethodPost, "/api/login", "", map[string]any{"username": "ad-alice", "password": "pw"})
+	if status != http.StatusOK || jsonMap(t, data)["mfa_enrollment_required"] != true {
+		t.Fatalf("expected enrollment-required session: %d %s", status, data)
+	}
+	enrollTok, _ := jsonMap(t, data)["token"].(string)
+
+	// 2. The enrollment-only session cannot do anything else.
+	if st, _ := do(t, srv, http.MethodGet, "/api/targets", enrollTok, nil); st != http.StatusForbidden {
+		t.Fatalf("enroll-only session must be blocked from /api/targets: %d", st)
+	}
+
+	// 3. Enroll + confirm using the enrollment session.
+	secret := enrollMFA(t, srv, enrollTok)
+
+	// 4. Re-login now demands the OTP, and succeeds with it → full session.
+	if st, _ := do(t, srv, http.MethodPost, "/api/login", "", map[string]any{"username": "ad-alice", "password": "pw"}); st != http.StatusUnauthorized {
+		t.Fatalf("login should now require OTP: %d", st)
+	}
+	code, _ := mfa.Code(secret, time.Now())
+	status, data = do(t, srv, http.MethodPost, "/api/login", "", map[string]any{"username": "ad-alice", "password": "pw", "otp": code})
+	if status != http.StatusCreated {
+		t.Fatalf("login with OTP should succeed: %d %s", status, data)
+	}
+	fullTok, _ := jsonMap(t, data)["token"].(string)
+	if st, _ := do(t, srv, http.MethodGet, "/api/targets", fullTok, nil); st != http.StatusOK {
+		t.Fatalf("full session should access /api/targets: %d", st)
+	}
+}
+
+func TestRecoveryCodes(t *testing.T) {
+	srv, _ := newTestServerAuthn(t, fakeAuthenticator{username: "ad-alice", password: "pw", role: auth.RoleUser})
+
+	// Get a session, enroll+confirm MFA.
+	_, data := do(t, srv, http.MethodPost, "/api/login", "", map[string]any{"username": "ad-alice", "password": "pw"})
+	sessTok, _ := jsonMap(t, data)["token"].(string)
+	enrollMFA(t, srv, sessTok)
+
+	// Generate recovery codes.
+	status, data := do(t, srv, http.MethodPost, "/api/mfa/recovery-codes", sessTok, nil)
+	if status != http.StatusCreated {
+		t.Fatalf("recovery-codes: %d %s", status, data)
+	}
+	codesRaw, _ := jsonMap(t, data)["recovery_codes"].([]any)
+	if len(codesRaw) != 10 {
+		t.Fatalf("want 10 recovery codes, got %d", len(codesRaw))
+	}
+	recovery := codesRaw[0].(string)
+
+	// Log in using a recovery code in place of the OTP.
+	status, _ = do(t, srv, http.MethodPost, "/api/login", "", map[string]any{"username": "ad-alice", "password": "pw", "otp": recovery})
+	if status != http.StatusCreated {
+		t.Fatalf("login with recovery code should succeed: %d", status)
+	}
+	// The same recovery code is single-use — a second attempt fails.
+	status, _ = do(t, srv, http.MethodPost, "/api/login", "", map[string]any{"username": "ad-alice", "password": "pw", "otp": recovery})
+	if status != http.StatusUnauthorized {
+		t.Fatalf("reused recovery code should fail: %d", status)
 	}
 }
 

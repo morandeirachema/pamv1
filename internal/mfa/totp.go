@@ -87,6 +87,21 @@ func Validate(secret, code string, t time.Time) bool {
 	return false
 }
 
+// GenerateRecoveryCodes returns n single-use backup codes formatted as
+// "xxxxx-xxxxx" (base32, ~50 bits each). Store only their hashes.
+func GenerateRecoveryCodes(n int) ([]string, error) {
+	codes := make([]string, 0, n)
+	for i := 0; i < n; i++ {
+		buf := make([]byte, 8)
+		if _, err := rand.Read(buf); err != nil {
+			return nil, err
+		}
+		s := strings.ToLower(b32.EncodeToString(buf)) // 13 chars
+		codes = append(codes, s[:5]+"-"+s[5:10])
+	}
+	return codes, nil
+}
+
 // ProvisioningURI builds an otpauth:// URI (for a QR code / manual entry) that
 // enrolls the secret in an authenticator app.
 func ProvisioningURI(secret, account, issuer string) string {

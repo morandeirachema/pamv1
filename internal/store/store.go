@@ -77,6 +77,7 @@ type Session struct {
 	ID        int64     `json:"id"`
 	Username  string    `json:"username"`
 	Role      string    `json:"role"`
+	Scope     string    `json:"scope"` // "" (full) | "enroll" (MFA enrollment only)
 	TokenHash string    `json:"-"`
 	CreatedAt time.Time `json:"created_at"`
 	ExpiresAt time.Time `json:"expires_at"`
@@ -121,6 +122,15 @@ type Store interface {
 	UpsertMFAEnrollment(ctx context.Context, e *MFAEnrollment) error
 	GetMFAEnrollment(ctx context.Context, username string) (*MFAEnrollment, error)
 	DeleteMFAEnrollment(ctx context.Context, username string) error
+
+	// ReplaceMFARecoveryCodes stores a fresh set of recovery-code hashes for a
+	// user, discarding any previous set.
+	ReplaceMFARecoveryCodes(ctx context.Context, username string, codeHashes []string) error
+	// ConsumeMFARecoveryCode removes a matching unused recovery code and reports
+	// whether one was consumed.
+	ConsumeMFARecoveryCode(ctx context.Context, username, codeHash string) (bool, error)
+	// CountMFARecoveryCodes returns how many recovery codes remain.
+	CountMFARecoveryCodes(ctx context.Context, username string) (int, error)
 
 	Close()
 }

@@ -47,31 +47,40 @@ func setActor(ctx context.Context, actor string) {
 	}
 }
 
+// Options tunes server policy.
+type Options struct {
+	// MFARequired makes password login require a confirmed second factor: users
+	// without one get an enrollment-only session until they set up MFA.
+	MFARequired bool
+}
+
 type Server struct {
-	store    store.Store
-	vault    *vault.Vault
-	resolver *auth.Resolver
-	authn    auth.Authenticator // password login (e.g. AD); nil if not configured
-	log      *slog.Logger
-	mux      *http.ServeMux
-	handler  http.Handler
+	store       store.Store
+	vault       *vault.Vault
+	resolver    *auth.Resolver
+	authn       auth.Authenticator // password login (e.g. AD); nil if not configured
+	mfaRequired bool
+	log         *slog.Logger
+	mux         *http.ServeMux
+	handler     http.Handler
 }
 
 // New builds the HTTP handler. The resolver authenticates the X-API-Key header
 // into a Principal (bootstrap admin key, break-glass key, per-user token, or a
 // login session). authn (optional) backs POST /api/login with a password
 // identity source such as Active Directory; pass nil to disable password login.
-func New(st store.Store, v *vault.Vault, resolver *auth.Resolver, authn auth.Authenticator) (*Server, error) {
+func New(st store.Store, v *vault.Vault, resolver *auth.Resolver, authn auth.Authenticator, opts Options) (*Server, error) {
 	if resolver == nil {
 		return nil, errors.New("api: resolver is required")
 	}
 	s := &Server{
-		store:    st,
-		vault:    v,
-		resolver: resolver,
-		authn:    authn,
-		log:      logging.Component("api"),
-		mux:      http.NewServeMux(),
+		store:       st,
+		vault:       v,
+		resolver:    resolver,
+		authn:       authn,
+		mfaRequired: opts.MFARequired,
+		log:         logging.Component("api"),
+		mux:         http.NewServeMux(),
 	}
 	s.routes()
 	s.handler = s.withAccessLog(s.mux)
@@ -137,6 +146,7 @@ func (s *Server) routes() {
 	s.mux.Handle("GET /api/mfa", s.authenticated(s.mfaStatus))
 	s.mux.Handle("POST /api/mfa/enroll", s.authenticated(s.mfaEnroll))
 	s.mux.Handle("POST /api/mfa/verify", s.authenticated(s.mfaVerify))
+	s.mux.Handle("POST /api/mfa/recovery-codes", s.authenticated(s.mfaRecoveryCodes))
 	s.mux.Handle("DELETE /api/mfa", s.authenticated(s.mfaDisable))
 
 	s.mux.Handle("POST /api/targets", s.authz(auth.CapManageTargets, s.createTarget))
@@ -173,6 +183,11 @@ func (s *Server) authz(cap auth.Capability, next http.HandlerFunc) http.Handler 
 		if p.BreakGlass {
 			s.log.Warn("BREAK-GLASS access", "method", r.Method, "path", r.URL.Path, "remote", r.RemoteAddr)
 			s.audit(ctx, "breakglass.access", r.Method+" "+r.URL.Path)
+		}
+		if p.EnrollOnly {
+			s.audit(ctx, "authz.denied", r.Method+" "+r.URL.Path+" reason:mfa-enrollment-incomplete")
+			writeError(w, http.StatusForbidden, "complete MFA enrollment to continue")
+			return
 		}
 		if !p.Role.Can(cap) {
 			s.log.Warn("authorization denied", "actor", p.Name, "role", string(p.Role),

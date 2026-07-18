@@ -287,8 +287,17 @@ curl -H "X-API-Key: $TOKEN" -X DELETE http://localhost:8080/api/mfa
 ```
 
 The TOTP secret is stored **vault-encrypted** and returned only once at enrollment.
-The portal Sign On has an *MFA code* field for enrolled users. A "require MFA for
-all" policy and recovery codes are planned. MFA covers NIS2 Art. 21(2)(j).
+The portal Sign On has an *MFA code* field for enrolled users. MFA covers NIS2
+Art. 21(2)(j).
+
+**Recovery codes:** `POST /api/mfa/recovery-codes` (as an MFA-enrolled user) issues
+10 single-use backup codes, shown once. Enter one in place of your MFA code at
+login if you lose your authenticator; each works exactly once.
+
+**Require MFA for everyone:** set `PAM_MFA_REQUIRED=true`. Then a password login by
+a user without confirmed MFA returns an **enrollment-only** session — it can *only*
+call the `/api/mfa/*` endpoints (everything else, including the SSH proxy, is
+refused) until the user enrolls and confirms, then logs in again with a code.
 
 ---
 
@@ -399,6 +408,7 @@ evidence). Replay with [asciinema](https://asciinema.org/): `asciinema play <fil
 
 | Date | Change |
 |---|---|
+| 2026-07-18 | Phase 3b: enforce-MFA policy (`PAM_MFA_REQUIRED`) + single-use recovery codes |
 | 2026-07-18 | Phase 3b: Microsoft Entra ID (Azure AD) login setup (app roles → roles, sovereign host) |
 | 2026-07-18 | Phase 3b: TOTP MFA (self-service enroll/verify, enforced on login) |
 | 2026-07-18 | Phase 3b: Active Directory login setup (LDAPS, group→role, session tokens); envelope-encryption KEK config |

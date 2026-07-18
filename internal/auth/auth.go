@@ -82,12 +82,17 @@ func (r Role) Can(c Capability) bool {
 	return roleCaps[r][c]
 }
 
+// SessionScopeEnroll marks a login session that may only be used to complete
+// MFA enrollment (issued when a policy requires MFA but the user has none).
+const SessionScopeEnroll = "enroll"
+
 // Principal is an authenticated identity for the duration of a request or
 // session.
 type Principal struct {
 	Name       string
 	Role       Role
 	BreakGlass bool // authenticated via the emergency key; use is audited loudly
+	EnrollOnly bool // session may only complete MFA enrollment, nothing else
 }
 
 // Directory is the slice of the store the resolver needs: per-user tokens and
@@ -140,10 +145,10 @@ func (r *Resolver) Resolve(ctx context.Context, key string) (*Principal, error) 
 			}
 			return nil, ErrUnauthorized
 		}
-		// Login session token (e.g. Active Directory).
+		// Login session token (e.g. Active Directory / Entra ID).
 		if s, err := r.dir.GetSessionByTokenHash(ctx, hash); err == nil {
 			if role, perr := ParseRole(s.Role); perr == nil {
-				return &Principal{Name: s.Username, Role: role}, nil
+				return &Principal{Name: s.Username, Role: role, EnrollOnly: s.Scope == SessionScopeEnroll}, nil
 			}
 			return nil, ErrUnauthorized
 		}
