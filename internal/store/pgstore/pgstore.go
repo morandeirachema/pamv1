@@ -292,6 +292,44 @@ func (s *PGStore) DeleteSession(ctx context.Context, tokenHashHex string) error 
 	return err
 }
 
+func (s *PGStore) UpsertMFAEnrollment(ctx context.Context, e *store.MFAEnrollment) error {
+	return s.pool.QueryRow(ctx,
+		`INSERT INTO mfa_enrollments (username, secret_enc, confirmed)
+		 VALUES ($1, $2, $3)
+		 ON CONFLICT (username) DO UPDATE SET secret_enc = EXCLUDED.secret_enc, confirmed = EXCLUDED.confirmed
+		 RETURNING created_at`,
+		e.Username, e.SecretEnc, e.Confirmed,
+	).Scan(&e.CreatedAt)
+}
+
+func (s *PGStore) GetMFAEnrollment(ctx context.Context, username string) (*store.MFAEnrollment, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT username, secret_enc, confirmed, created_at FROM mfa_enrollments WHERE username = $1`, username)
+	if err != nil {
+		return nil, err
+	}
+	e, err := pgx.CollectExactlyOneRow(rows, func(row pgx.CollectableRow) (store.MFAEnrollment, error) {
+		var m store.MFAEnrollment
+		err := row.Scan(&m.Username, &m.SecretEnc, &m.Confirmed, &m.CreatedAt)
+		return m, err
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, store.ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &e, nil
+}
+
+func (s *PGStore) DeleteMFAEnrollment(ctx context.Context, username string) error {
+	tag, err := s.pool.Exec(ctx, `DELETE FROM mfa_enrollments WHERE username = $1`, username)
+	if err == nil && tag.RowsAffected() == 0 {
+		return store.ErrNotFound
+	}
+	return err
+}
+
 func (s *PGStore) Close() {
 	s.pool.Close()
 }

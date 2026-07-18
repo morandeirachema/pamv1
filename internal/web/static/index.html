@@ -114,25 +114,28 @@
 <form id="f-signon" class="indent">
   <label>User . . . . . . . . . . . . . . . :  <input id="in-user" size="28" autocomplete="username" autofocus></label>
   <label>Password . . . . . . . . . . . . . :  <input id="in-pass" type="password" size="28" autocomplete="current-password"></label>
+  <label>MFA code (if enabled)  . . . . . . :  <input id="in-otp" size="8" inputmode="numeric" autocomplete="one-time-code"></label>
   <label>...or access token . . . . . . . . :  <input id="in-key" type="password" size="28" autocomplete="off"></label>
 </form>
 
-<div class="cyan indent">Directory (AD) users: enter User + Password. Token users: leave Password blank
-and enter the access token. Press Enter to sign on.</div>
+<div class="cyan indent">Directory (AD) users: enter User + Password (+ MFA code if enrolled). Token
+users: leave Password blank and enter the access token. Press Enter to sign on.</div>
 ${fkeys("")}
 <div class="red indent">UNAUTHORIZED USE OF THIS SYSTEM IS PROHIBITED AND AUDITED.</div>`;
         document.getElementById("f-signon").onsubmit = async (ev) => {
           ev.preventDefault();
           const user = document.getElementById("in-user").value.trim();
           const pass = document.getElementById("in-pass").value;
+          const otp = document.getElementById("in-otp").value.trim();
           const tok = document.getElementById("in-key").value.trim();
           try {
             if (pass) {
               const res = await fetch("/api/login", {
                 method: "POST", headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ username: user, password: pass }),
+                body: JSON.stringify({ username: user, password: pass, otp }),
               });
               const d = await res.json().catch(() => ({}));
+              if (d.mfa_required) throw new Error("MFA CODE REQUIRED — ENTER YOUR 6-DIGIT CODE");
               if (!res.ok) throw new Error((d.error || res.statusText).toUpperCase());
               apiKey = d.token;
             } else {

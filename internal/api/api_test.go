@@ -12,9 +12,11 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/morandeirachema/pamv1/internal/api"
 	"github.com/morandeirachema/pamv1/internal/auth"
+	"github.com/morandeirachema/pamv1/internal/mfa"
 	"github.com/morandeirachema/pamv1/internal/store"
 	"github.com/morandeirachema/pamv1/internal/store/memstore"
 	"github.com/morandeirachema/pamv1/internal/vault"
@@ -323,6 +325,54 @@ func TestLoginSession(t *testing.T) {
 	}
 	if status, _ := do(t, srv, http.MethodGet, "/api/targets", token, nil); status != http.StatusUnauthorized {
 		t.Fatalf("revoked session should be 401, got %d", status)
+	}
+}
+
+func TestMFAEnrollmentAndLogin(t *testing.T) {
+	srv, _ := newTestServerAuthn(t, fakeAuthenticator{username: "ad-alice", password: "pw", role: auth.RoleUser})
+
+	// 1. First login (no MFA yet) → session token.
+	_, data := do(t, srv, http.MethodPost, "/api/login", "", map[string]any{"username": "ad-alice", "password": "pw"})
+	sessTok, _ := jsonMap(t, data)["token"].(string)
+	if sessTok == "" {
+		t.Fatalf("no session token: %s", data)
+	}
+
+	// 2. Enroll MFA with that session; get the secret.
+	status, data := do(t, srv, http.MethodPost, "/api/mfa/enroll", sessTok, nil)
+	if status != http.StatusCreated {
+		t.Fatalf("enroll: %d %s", status, data)
+	}
+	secret, _ := jsonMap(t, data)["secret"].(string)
+	if secret == "" {
+		t.Fatalf("no secret returned: %s", data)
+	}
+
+	// 3. Confirm enrollment with a valid code.
+	code, err := mfa.Code(secret, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status, data := do(t, srv, http.MethodPost, "/api/mfa/verify", sessTok, map[string]any{"otp": code}); status != http.StatusOK {
+		t.Fatalf("verify: %d %s", status, data)
+	}
+
+	// 4. Now login WITHOUT an OTP must be refused with mfa_required.
+	status, data = do(t, srv, http.MethodPost, "/api/login", "", map[string]any{"username": "ad-alice", "password": "pw"})
+	if status != http.StatusUnauthorized || jsonMap(t, data)["mfa_required"] != true {
+		t.Fatalf("login without OTP should require MFA: %d %s", status, data)
+	}
+
+	// 5. Login WITH a valid OTP succeeds.
+	code, _ = mfa.Code(secret, time.Now())
+	status, data = do(t, srv, http.MethodPost, "/api/login", "", map[string]any{"username": "ad-alice", "password": "pw", "otp": code})
+	if status != http.StatusCreated {
+		t.Fatalf("login with OTP should succeed: %d %s", status, data)
+	}
+
+	// 6. Wrong OTP is rejected.
+	if status, _ := do(t, srv, http.MethodPost, "/api/login", "", map[string]any{"username": "ad-alice", "password": "pw", "otp": "000000"}); status != http.StatusUnauthorized {
+		t.Fatalf("login with wrong OTP should fail: %d", status)
 	}
 }
 

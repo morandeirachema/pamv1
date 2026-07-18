@@ -238,8 +238,32 @@ password by binding as them, and derives the role from group membership (highest
 privilege wins). `POST /api/login` then returns a **session token** (12h) that
 works in the portal and the SSH proxy exactly like a per-user token. A user in no
 mapped group is rejected. Keep the bootstrap `PAM_API_KEY` and break-glass key as
-the local emergency path if AD is unreachable. MFA (TOTP) is the next step in
-[Phase 3b](../ROADMAP.md#3b--active-directory-connector-).
+the local emergency path if AD is unreachable.
+
+### Multi-factor authentication (TOTP)
+
+Users can add a second factor ([TOTP](https://en.wikipedia.org/wiki/Time-based_one-time_password),
+RFC 6238) that works with Google Authenticator, Microsoft Authenticator, 1Password,
+etc. It is **self-service and per-user opt-in**, and applies to the password-login
+path. Once enrolled, `POST /api/login` requires the 6-digit code.
+
+```bash
+# 1. Enroll (as the signed-in user): returns the secret + otpauth URI, once
+curl -H "X-API-Key: $TOKEN" -X POST http://localhost:8080/api/mfa/enroll
+# → {"secret":"…","otpauth_uri":"otpauth://totp/pamv1:alice?…"}
+#    add the otpauth URI / secret to your authenticator app
+
+# 2. Confirm with a code from the app
+curl -H "X-API-Key: $TOKEN" -X POST http://localhost:8080/api/mfa/verify -d '{"otp":"123456"}'
+
+# status / disable
+curl -H "X-API-Key: $TOKEN" http://localhost:8080/api/mfa
+curl -H "X-API-Key: $TOKEN" -X DELETE http://localhost:8080/api/mfa
+```
+
+The TOTP secret is stored **vault-encrypted** and returned only once at enrollment.
+The portal Sign On has an *MFA code* field for enrolled users. A "require MFA for
+all" policy and recovery codes are planned. MFA covers NIS2 Art. 21(2)(j).
 
 ---
 
@@ -350,6 +374,7 @@ evidence). Replay with [asciinema](https://asciinema.org/): `asciinema play <fil
 
 | Date | Change |
 |---|---|
+| 2026-07-18 | Phase 3b: TOTP MFA (self-service enroll/verify, enforced on login) |
 | 2026-07-18 | Phase 3b: Active Directory login setup (LDAPS, group→role, session tokens); envelope-encryption KEK config |
 | 2026-07-18 | Initial admin guide (Phase 3a): deployment, config, target/credential/user management, break-glass, logging & audit, hardening, troubleshooting |
 

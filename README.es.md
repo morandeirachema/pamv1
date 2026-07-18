@@ -74,6 +74,9 @@ Los componentes con línea discontinua (objetivos Windows) llegan en la [Fase 4]
   `approver`) con una única matriz rol→capacidad aplicada tanto por la API REST como por el
   proxy SSH. Los administradores emiten tokens por usuario (almacenados solo como SHA-256);
   cada denegación se audita y el registro atribuye nombres de usuario reales.
+- **MFA por TOTP** — alta autoservicio ([RFC 6238](https://datatracker.ietf.org/doc/html/rfc6238),
+  compatible con cualquier app de autenticación); el secreto se guarda cifrado en el vault y,
+  una vez dado de alta, el inicio de sesión exige el código de 6 dígitos.
 - **Proxy de sesión con inyección JIT** — los operadores conectan a través de una pasarela
   SSH; el proxy los autentica, obtiene la credencial del vault, **la descifra solo en el
   momento de la conexión**, la inyecta en la sesión SSH de destino y lo graba todo. Probado

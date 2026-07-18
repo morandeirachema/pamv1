@@ -18,6 +18,7 @@ type Memstore struct {
 	creds    map[int64]store.Credential
 	users    map[int64]store.User
 	sessions map[int64]store.Session
+	mfa      map[string]store.MFAEnrollment
 	audit    []store.AuditEvent
 }
 
@@ -27,6 +28,7 @@ func New() *Memstore {
 		creds:    make(map[int64]store.Credential),
 		users:    make(map[int64]store.User),
 		sessions: make(map[int64]store.Session),
+		mfa:      make(map[string]store.MFAEnrollment),
 	}
 }
 
@@ -233,6 +235,36 @@ func (m *Memstore) DeleteSession(_ context.Context, tokenHashHex string) error {
 		}
 	}
 	return store.ErrNotFound
+}
+
+func (m *Memstore) UpsertMFAEnrollment(_ context.Context, e *store.MFAEnrollment) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if e.CreatedAt.IsZero() {
+		e.CreatedAt = time.Now().UTC()
+	}
+	m.mfa[e.Username] = *e
+	return nil
+}
+
+func (m *Memstore) GetMFAEnrollment(_ context.Context, username string) (*store.MFAEnrollment, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	e, ok := m.mfa[username]
+	if !ok {
+		return nil, store.ErrNotFound
+	}
+	return &e, nil
+}
+
+func (m *Memstore) DeleteMFAEnrollment(_ context.Context, username string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.mfa[username]; !ok {
+		return store.ErrNotFound
+	}
+	delete(m.mfa, username)
+	return nil
 }
 
 func (m *Memstore) Close() {}

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/morandeirachema/pamv1/internal/auth"
+	"github.com/morandeirachema/pamv1/internal/mfa"
 	"github.com/morandeirachema/pamv1/internal/store"
 )
 
@@ -209,6 +210,7 @@ const sessionTTL = 12 * time.Hour
 type loginIn struct {
 	Username string `json:"username"`
 	Password string `json:"password"`
+	OTP      string `json:"otp"`
 }
 
 // login verifies a username + password against the configured identity source
@@ -229,6 +231,21 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		s.log.Warn("login failed", "user", in.Username, "remote", r.RemoteAddr)
 		writeError(w, http.StatusUnauthorized, "invalid credentials")
 		return
+	}
+	// Second factor: if the user has a confirmed TOTP enrollment, require it.
+	if e, err := s.store.GetMFAEnrollment(r.Context(), principal.Name); err == nil && e.Confirmed {
+		if in.OTP == "" {
+			writeJSON(w, http.StatusUnauthorized, map[string]any{
+				"error": "multi-factor code required", "mfa_required": true,
+			})
+			return
+		}
+		secret, derr := s.vault.Decrypt(r.Context(), e.SecretEnc, store.MFAAAD(principal.Name))
+		if derr != nil || !mfa.Validate(secret, in.OTP, time.Now()) {
+			s.log.Warn("mfa failed", "user", principal.Name, "remote", r.RemoteAddr)
+			writeError(w, http.StatusUnauthorized, "invalid multi-factor code")
+			return
+		}
 	}
 	token, err := generateToken()
 	if err != nil {
@@ -264,6 +281,97 @@ func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
 	// (bootstrap/token) simply have nothing to delete.
 	_ = s.store.DeleteSession(r.Context(), hex.EncodeToString(sum[:]))
 	s.audit(r.Context(), "logout", actorFrom(r.Context()))
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// --- multi-factor authentication (TOTP) ---
+
+// mfaEnroll generates a new TOTP secret for the caller and returns it once
+// (plus an otpauth:// URI for the authenticator app). The enrollment is
+// unconfirmed until the user proves a code via mfaVerify.
+func (s *Server) mfaEnroll(w http.ResponseWriter, r *http.Request) {
+	p := principalFrom(r.Context())
+	secret, err := mfa.GenerateSecret()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "secret generation failed")
+		return
+	}
+	enc, err := s.vault.Encrypt(r.Context(), secret, store.MFAAAD(p.Name))
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "encryption failed")
+		return
+	}
+	if err := s.store.UpsertMFAEnrollment(r.Context(), &store.MFAEnrollment{
+		Username: p.Name, SecretEnc: enc, Confirmed: false,
+	}); err != nil {
+		storeError(w, err)
+		return
+	}
+	s.audit(r.Context(), "mfa.enroll", "user:"+p.Name)
+	writeJSON(w, http.StatusCreated, map[string]any{
+		"secret":       secret,
+		"otpauth_uri":  mfa.ProvisioningURI(secret, p.Name, "pamv1"),
+		"instructions": "Add this to your authenticator app, then confirm a code at POST /api/mfa/verify.",
+	})
+}
+
+// mfaVerify confirms an enrollment (or checks a code) for the caller.
+func (s *Server) mfaVerify(w http.ResponseWriter, r *http.Request) {
+	p := principalFrom(r.Context())
+	var in struct {
+		OTP string `json:"otp"`
+	}
+	if !readJSON(w, r, &in) {
+		return
+	}
+	e, err := s.store.GetMFAEnrollment(r.Context(), p.Name)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "no MFA enrollment; call /api/mfa/enroll first")
+		return
+	}
+	secret, err := s.vault.Decrypt(r.Context(), e.SecretEnc, store.MFAAAD(p.Name))
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "decryption failed")
+		return
+	}
+	if !mfa.Validate(secret, in.OTP, time.Now()) {
+		writeError(w, http.StatusUnauthorized, "invalid multi-factor code")
+		return
+	}
+	if !e.Confirmed {
+		e.Confirmed = true
+		if err := s.store.UpsertMFAEnrollment(r.Context(), e); err != nil {
+			storeError(w, err)
+			return
+		}
+		s.audit(r.Context(), "mfa.confirm", "user:"+p.Name)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"confirmed": true})
+}
+
+// mfaStatus reports whether the caller has enrolled/confirmed MFA.
+func (s *Server) mfaStatus(w http.ResponseWriter, r *http.Request) {
+	p := principalFrom(r.Context())
+	e, err := s.store.GetMFAEnrollment(r.Context(), p.Name)
+	if errors.Is(err, store.ErrNotFound) {
+		writeJSON(w, http.StatusOK, map[string]any{"enrolled": false, "confirmed": false})
+		return
+	}
+	if err != nil {
+		storeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"enrolled": true, "confirmed": e.Confirmed})
+}
+
+// mfaDisable removes the caller's TOTP enrollment.
+func (s *Server) mfaDisable(w http.ResponseWriter, r *http.Request) {
+	p := principalFrom(r.Context())
+	if err := s.store.DeleteMFAEnrollment(r.Context(), p.Name); err != nil && !errors.Is(err, store.ErrNotFound) {
+		storeError(w, err)
+		return
+	}
+	s.audit(r.Context(), "mfa.disable", "user:"+p.Name)
 	w.WriteHeader(http.StatusNoContent)
 }
 

@@ -50,3 +50,10 @@ CREATE TABLE IF NOT EXISTS sessions (
 );
 
 CREATE INDEX IF NOT EXISTS sessions_token_hash_idx ON sessions (token_hash);
+
+CREATE TABLE IF NOT EXISTS mfa_enrollments (
+    username   TEXT PRIMARY KEY,
+    secret_enc TEXT NOT NULL,
+    confirmed  BOOLEAN NOT NULL DEFAULT false,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);

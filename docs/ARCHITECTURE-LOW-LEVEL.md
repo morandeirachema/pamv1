@@ -19,6 +19,7 @@ internal/
   config/      # env (PAM_*) -> Config
   logging/     # slog setup (json/text, level) + per-service loggers
   vault/       # AES-256-GCM encrypt/decrypt, key gen
+  mfa/         # TOTP (RFC 6238) generate/validate + otpauth URI
   auth/        # roles, capabilities, Principal, Resolver (RBAC)
   store/       # Store interface + domain types + CredentialAAD
     memstore/  # in-memory impl (tests, demo)
@@ -98,9 +99,17 @@ endpoints arrive with the OT/approval phase).
 - User administration (`CapManageUsers`): `POST /api/users` mints a token and
   returns it **once**; only the SHA-256 is stored. `GET`/`DELETE /api/users`.
 - Login (`authn` optional): `POST /api/login` (public) verifies username+password
-  via the configured `Authenticator` and issues a session token (12h TTL, stored
-  as SHA-256) with the role from the directory; `POST /api/logout` revokes it.
-  Returns 503 when no authenticator is configured.
+  via the configured `Authenticator`, then — if the user has a **confirmed TOTP
+  enrollment** — requires a valid `otp` (401 `mfa_required` if missing), and
+  issues a session token (12h TTL, stored as SHA-256) with the role from the
+  directory; `POST /api/logout` revokes it. Returns 503 when no authenticator is
+  configured.
+- MFA (`internal/mfa`, self-service, authenticated): `POST /api/mfa/enroll`
+  generates a TOTP secret (returned once, plus an `otpauth://` URI), stored
+  **vault-encrypted** (AAD `mfa:<user>`), unconfirmed; `POST /api/mfa/verify`
+  confirms it with a code; `GET /api/mfa` reports status; `DELETE /api/mfa`
+  disables it. Enforcement is per-user opt-in and applies to the password-login
+  path (bearer tokens are non-interactive).
 - Handlers validate input (os_type ∈ {linux,windows}, protocol ∈ {ssh,winrm,rdp}),
   translate store errors to HTTP codes, and append audit events.
 - `reveal` (needs `CapRevealSecret`, admin only) decrypts on demand and is audited.
@@ -215,9 +224,10 @@ secrets. Format `json` (SIEM) or `text` (humans); collect from stdout.
 
 `target.create` · `target.delete` · `credential.create` · `credential.reveal` ·
 `credential.delete` · `user.create` · `user.delete` · `login` · `logout` ·
-`authz.denied` · `breakglass.access` · `session.start` · `session.record` ·
-`session.end` · `session.denied` · `session.error`. The actor is the Principal
-name (`bootstrap-admin`, `break-glass`, or a username).
+`mfa.enroll` · `mfa.confirm` · `mfa.disable` · `authz.denied` ·
+`breakglass.access` · `session.start` · `session.record` · `session.end` ·
+`session.denied` · `session.error`. The actor is the Principal name
+(`bootstrap-admin`, `break-glass`, or a username).
 
 ## 6. Security-relevant invariants (do not regress)
 
@@ -228,6 +238,8 @@ name (`bootstrap-admin`, `break-glass`, or a username).
    after use; the base64 `PAM_MASTER_KEY` (local KEK) is dev/test only —
    production uses a KMS-backed KEK.
 4. Every code path that reveals or uses a secret appends an audit event.
+4a. TOTP secrets are stored vault-encrypted (AAD `mfa:<user>`), returned only
+   once at enrollment, and compared in constant time (`crypto/subtle`).
 5. Break-glass config holds only the SHA-256 hash, never the plaintext key.
 6. Proxy plaintext secret is confined to `resolve`→`dialUpstream`; never logged.
 7. User access tokens are stored only as `TokenHash` (`json:"-"`); the plaintext
@@ -239,7 +251,8 @@ name (`bootstrap-admin`, `break-glass`, or a username).
 
 - `vault`: envelope roundtrip, AAD binding, tamper detection, version rejection, distinct tokens; local KEK wrap/unwrap + tamper; KEK factory; **Transit KMS** wrap/unwrap and full envelope over a mock Vault Transit server.
 - `auth`: role→capability matrix, role parsing, resolver (bootstrap/break-glass/token/**session**/unknown); **LDAP** authenticate (success, highest-privilege-wins, wrong password, no mapped group, unknown user) against a fake `ldapConn`.
-- `api`: full CRUD flow, auth required, secret-non-leak, cascade delete, break-glass audited, validation/conflict, **RBAC** (user/auditor/approver each allowed only their capabilities), **login session** (issue → use with role enforcement → logout revokes), login-not-configured 503.
+- `mfa`: RFC 6238 test vector, validate roundtrip + skew + wrong/short code, otpauth URI, secret randomness.
+- `api`: full CRUD flow, auth required, secret-non-leak, cascade delete, break-glass audited, validation/conflict, **RBAC** (user/auditor/approver each allowed only their capabilities), **login session** (issue → use with role enforcement → logout revokes), login-not-configured 503, **MFA** (enroll → confirm → login requires OTP → wrong OTP rejected).
 - `proxy`: **end-to-end JIT injection** against an in-process upstream sshd that
   accepts only the vaulted password (proves the client never had it), plus wrong-key
   rejection, unknown-target denial, credential selector, recording hash match, and
@@ -250,6 +263,7 @@ name (`bootstrap-admin`, `break-glass`, or a username).
 
 | Date | Change |
 |---|---|
+| 2026-07-18 | Phase 3b MFA: `mfa` package (TOTP RFC 6238); `store.MFAEnrollment` (vault-encrypted secret); `/api/mfa/*` self-service; `/api/login` enforces confirmed TOTP; portal Sign On OTP field |
 | 2026-07-18 | Phase 3b: AD/LDAP login (`ldap.go`, `Authenticator`); login sessions (`store.Session`, `/api/login` + `/api/logout`); resolver session support; portal Sign On with user+password; `PAM_LDAP_*` env |
 | 2026-07-18 | Vault envelope encryption + pluggable KEK (`kek.go`, `transit.go`); `v2:` token format; ctx-aware Encrypt/Decrypt; `local` (dev/test) + `vault-transit` (production) providers; `PAM_KEK_*` env |
 | 2026-07-18 | Added `logging` package (per-service slog, json/text, `PAM_LOG_LEVEL`/`PAM_LOG_FORMAT`); api access log, proxy session logs, pgstore connect + query tracer; user/admin guides |

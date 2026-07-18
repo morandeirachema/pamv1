@@ -133,6 +133,12 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/login", s.login) // public: this IS authentication
 	s.mux.Handle("POST /api/logout", s.authenticated(s.logout))
 
+	// Self-service MFA (any authenticated identity manages its own second factor).
+	s.mux.Handle("GET /api/mfa", s.authenticated(s.mfaStatus))
+	s.mux.Handle("POST /api/mfa/enroll", s.authenticated(s.mfaEnroll))
+	s.mux.Handle("POST /api/mfa/verify", s.authenticated(s.mfaVerify))
+	s.mux.Handle("DELETE /api/mfa", s.authenticated(s.mfaDisable))
+
 	s.mux.Handle("POST /api/targets", s.authz(auth.CapManageTargets, s.createTarget))
 	s.mux.Handle("GET /api/targets", s.authz(auth.CapReadInventory, s.listTargets))
 	s.mux.Handle("GET /api/targets/{id}", s.authz(auth.CapReadInventory, s.getTarget))

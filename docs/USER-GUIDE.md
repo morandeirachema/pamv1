@@ -60,6 +60,19 @@ There are two ways, depending on how your organization set things up:
 If your session expires, just sign in again. If you lose a token, an admin issues
 a new one.
 
+### Adding a second factor (MFA)
+
+You can protect your sign-in with a 6-digit code from an authenticator app
+(Google Authenticator, Microsoft Authenticator, 1Password…). Once signed in:
+
+1. **Enroll:** `POST /api/mfa/enroll` returns a `secret` and an `otpauth://` URI
+   — add either to your authenticator app (scan the URI as a QR or type the secret).
+2. **Confirm:** `POST /api/mfa/verify` with `{"otp":"123456"}` from the app.
+
+From then on, when you sign in with User + Password the portal also asks for your
+**MFA code** — enter the current 6-digit code. (Bearer access tokens aren't
+protected by MFA; MFA covers the username/password login.)
+
 ## 4. Using the portal
 
 The portal is an intentionally old-school [IBM 5250 / AS-400](https://en.wikipedia.org/wiki/IBM_5250)
@@ -146,6 +159,7 @@ emergency access and always deserve a look.
 
 | Date | Change |
 |---|---|
+| 2026-07-18 | Phase 3b: TOTP MFA (enroll/confirm, MFA code on Sign On) |
 | 2026-07-18 | Phase 3b: Active Directory login (username + password → session token) added to Sign On |
 | 2026-07-18 | Initial user guide (Phase 3a): roles, tokens, portal Sign On, connecting via the SSH proxy, audit review |
 

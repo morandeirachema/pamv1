@@ -22,6 +22,11 @@ func CredentialAAD(targetID int64) string {
 	return fmt.Sprintf("target:%d", targetID)
 }
 
+// MFAAAD binds a vaulted TOTP secret to its owning user.
+func MFAAAD(username string) string {
+	return "mfa:" + username
+}
+
 // Target is a machine reachable through the PAM (a future proxy session
 // connects to it injecting a vaulted credential just-in-time).
 type Target struct {
@@ -77,6 +82,16 @@ type Session struct {
 	ExpiresAt time.Time `json:"expires_at"`
 }
 
+// MFAEnrollment is a user's TOTP second factor. SecretEnc is the vault-encrypted
+// TOTP secret (never serialized); Confirmed is set once the user proves they can
+// generate a valid code.
+type MFAEnrollment struct {
+	Username  string    `json:"username"`
+	SecretEnc string    `json:"-"`
+	Confirmed bool      `json:"confirmed"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
 type Store interface {
 	CreateTarget(ctx context.Context, t *Target) error
 	ListTargets(ctx context.Context) ([]Target, error)
@@ -101,6 +116,11 @@ type Store interface {
 	// GetSessionByTokenHash returns a non-expired session, or ErrNotFound.
 	GetSessionByTokenHash(ctx context.Context, tokenHashHex string) (*Session, error)
 	DeleteSession(ctx context.Context, tokenHashHex string) error
+
+	// UpsertMFAEnrollment creates or replaces a user's TOTP enrollment.
+	UpsertMFAEnrollment(ctx context.Context, e *MFAEnrollment) error
+	GetMFAEnrollment(ctx context.Context, username string) (*MFAEnrollment, error)
+	DeleteMFAEnrollment(ctx context.Context, username string) error
 
 	Close()
 }
