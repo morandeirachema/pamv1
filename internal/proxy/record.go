@@ -16,6 +16,42 @@ import (
 
 func encodePEM(b *pem.Block) []byte { return pem.EncodeToMemory(b) }
 
+// recordChain links session recordings into a tamper-evident hash chain: each
+// recording's chain hash is SHA-256(previousChainHash || fileHash). To alter one
+// recording undetected you would have to rewrite every later chain hash too. The
+// head is persisted to a file so the chain survives restarts.
+type recordChain struct {
+	mu   sync.Mutex
+	path string
+	head []byte
+}
+
+func newRecordChain(dir string) *recordChain {
+	c := &recordChain{path: filepath.Join(dir, ".chain")}
+	if b, err := os.ReadFile(c.path); err == nil {
+		if h, err := hex.DecodeString(strings.TrimSpace(string(b))); err == nil {
+			c.head = h
+		}
+	}
+	return c
+}
+
+// append advances the chain with a recording's file hash (hex) and returns the
+// new chain hash (hex).
+func (c *recordChain) append(fileSHAHex string) string {
+	fh, err := hex.DecodeString(fileSHAHex)
+	if err != nil {
+		return ""
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	sum := sha256.Sum256(append(append([]byte{}, c.head...), fh...))
+	c.head = sum[:]
+	_ = os.MkdirAll(filepath.Dir(c.path), 0o700)
+	_ = os.WriteFile(c.path, []byte(hex.EncodeToString(c.head)), 0o600)
+	return hex.EncodeToString(c.head)
+}
+
 // Recording writes a session's terminal output in asciicast v2 format while
 // hashing the same bytes, so the audit trail can store a tamper-evident
 // SHA-256 of the recording. Safe for concurrent Write.

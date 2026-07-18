@@ -185,7 +185,9 @@ SSH gateway. See §3 for the wire-level flow.
   stdout (tee'd into the recording), stderr.
 - **Recording** (`record.go`): asciicast v2 (`{header}` line + `[t,"o",data]`
   events) written to `PAM_RECORDING_DIR`, hashed with SHA-256 as it is written;
-  on close the audit stores path, byte count and hash (tamper evidence).
+  on close the audit stores path, byte count, file hash and a **chain hash**
+  (`recordChain`: `SHA-256(prev-chain ‖ file-hash)`, head persisted to `.chain`)
+  so recordings are tamper-evident as a sequence, not just individually.
 - **Host key** (`hostkey.go`): `PAM_SSH_HOST_KEY` PEM path (persisted, generated
   if missing) or ephemeral ed25519.
 

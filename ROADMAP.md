@@ -22,7 +22,7 @@ Status: ✅ done · 🚧 in progress · ⬜ planned
 - [x] **Storage**: PostgreSQL (pgx) with embedded idempotent schema; in-memory store for tests/demo
 - [x] **Deploy as IaC**: Dockerfile (distroless, non-root), docker-compose with hardened Postgres (scram-sha-256), K8s manifests (restricted PSS), Terraform module
 
-## Phase 2 — Session proxy with JIT credential injection (Linux/SSH) 🚧
+## Phase 2 — Session proxy with JIT credential injection (Linux/SSH) ✅
 
 The flagship: users connect *through* pamv1, never holding the credential.
 
@@ -31,7 +31,7 @@ The flagship: users connect *through* pamv1, never holding the credential.
 - [x] Per-session audit events (start, record, end, denied, error)
 - [x] **Per-target authorization** (`target_grants`): a target with grants only admits matching users/roles (admins always; ungranted targets stay open); enforced in the proxy, WinRM and RDP; managed via `/api/targets/{id}/grants`
 - [x] **Live session listing and kill-switch** (`internal/session`): `GET /api/sessions` (auditor+) lists active proxy/RDP sessions; `DELETE /api/sessions/{id}` (admin) terminates one
-- [ ] Hash-chain the recordings (not just per-file hash)
+- [x] **Hash-chain the recordings**: each recording's chain hash = SHA-256(prev-chain-hash ‖ file-hash), head persisted; recorded in the `session.record` audit (`chain:`)
 - [x] Disable `reveal` by policy (`PAM_REVEAL_DISABLED`): reveal becomes break-glass-only, forcing the recorded proxy path
 
 ## Phase 3 — Identity & access control 🚧

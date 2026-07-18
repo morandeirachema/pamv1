@@ -51,6 +51,7 @@ type Proxy struct {
 	recordingDir string
 	dialTimeout  time.Duration
 	sessions     *session.Registry
+	chain        *recordChain
 
 	mu sync.Mutex
 	ln net.Listener
@@ -78,6 +79,7 @@ func New(st store.Store, v *vault.Vault, resolver *auth.Resolver, cfg Config) (*
 		recordingDir: cfg.RecordingDir,
 		dialTimeout:  cfg.DialTimeout,
 		sessions:     cfg.Sessions,
+		chain:        newRecordChain(cfg.RecordingDir),
 	}
 	p.sshCfg = &ssh.ServerConfig{PasswordCallback: p.authenticate}
 	p.sshCfg.AddHostKey(cfg.HostKey)
@@ -371,9 +373,10 @@ func (p *Proxy) handleSession(ctx context.Context, nc ssh.NewChannel, upstream *
 
 	if rec != nil {
 		path, sum, n := rec.Close()
+		chain := p.chain.append(sum)
 		p.audit(ctx, actor, "session.record",
-			fmt.Sprintf("target:%s cred_user:%s file:%s bytes:%d sha256:%s",
-				target.Name, cred.Username, path, n, sum))
+			fmt.Sprintf("target:%s cred_user:%s file:%s bytes:%d sha256:%s chain:%s",
+				target.Name, cred.Username, path, n, sum, chain))
 	}
 }
 
