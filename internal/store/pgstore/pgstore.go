@@ -180,6 +180,14 @@ func (s *PGStore) GetCredential(ctx context.Context, id int64) (*store.Credentia
 	return &c, nil
 }
 
+func (s *PGStore) UpdateCredentialSecretEnc(ctx context.Context, id int64, secretEnc string) error {
+	tag, err := s.pool.Exec(ctx, `UPDATE credentials SET secret_enc = $1 WHERE id = $2`, secretEnc, id)
+	if err == nil && tag.RowsAffected() == 0 {
+		return store.ErrNotFound
+	}
+	return err
+}
+
 func (s *PGStore) DeleteCredential(ctx context.Context, id int64) error {
 	tag, err := s.pool.Exec(ctx, `DELETE FROM credentials WHERE id = $1`, id)
 	if err == nil && tag.RowsAffected() == 0 {
@@ -320,6 +328,19 @@ func (s *PGStore) GetMFAEnrollment(ctx context.Context, username string) (*store
 		return nil, err
 	}
 	return &e, nil
+}
+
+func (s *PGStore) ListMFAEnrollments(ctx context.Context) ([]store.MFAEnrollment, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT username, secret_enc, confirmed, created_at FROM mfa_enrollments ORDER BY username`)
+	if err != nil {
+		return nil, err
+	}
+	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (store.MFAEnrollment, error) {
+		var m store.MFAEnrollment
+		err := row.Scan(&m.Username, &m.SecretEnc, &m.Confirmed, &m.CreatedAt)
+		return m, err
+	})
 }
 
 func (s *PGStore) DeleteMFAEnrollment(ctx context.Context, username string) error {

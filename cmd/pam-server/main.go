@@ -28,6 +28,7 @@ import (
 	"github.com/morandeirachema/pamv1/internal/auth"
 	"github.com/morandeirachema/pamv1/internal/config"
 	"github.com/morandeirachema/pamv1/internal/logging"
+	"github.com/morandeirachema/pamv1/internal/maint"
 	"github.com/morandeirachema/pamv1/internal/oidc"
 	"github.com/morandeirachema/pamv1/internal/proxy"
 	"github.com/morandeirachema/pamv1/internal/store"
@@ -40,6 +41,7 @@ import (
 func main() {
 	genkey := flag.Bool("genkey", false, "print a new vault master key and exit")
 	hashkey := flag.Bool("hashkey", false, "read a break-glass key from stdin, print its SHA-256 hex and exit")
+	rotateKEK := flag.Bool("rotate-kek", false, "re-encrypt all vaulted secrets from PAM_MASTER_KEY to PAM_NEW_MASTER_KEY and exit")
 	flag.Parse()
 
 	switch {
@@ -56,11 +58,50 @@ func main() {
 		}
 		sum := sha256.Sum256([]byte(strings.TrimSpace(string(data))))
 		fmt.Println(hex.EncodeToString(sum[:]))
+	case *rotateKEK:
+		if err := runRotateKEK(); err != nil {
+			fatal(err)
+		}
 	default:
 		if err := run(); err != nil {
 			fatal(err)
 		}
 	}
+}
+
+// runRotateKEK re-encrypts every vaulted secret from the current local master
+// key (PAM_MASTER_KEY) to a new one (PAM_NEW_MASTER_KEY). Run it offline, then
+// set PAM_MASTER_KEY to the new key and restart.
+func runRotateKEK() error {
+	oldV, err := vault.New(os.Getenv("PAM_MASTER_KEY"))
+	if err != nil {
+		return fmt.Errorf("current key (PAM_MASTER_KEY): %w", err)
+	}
+	newKey := os.Getenv("PAM_NEW_MASTER_KEY")
+	if newKey == "" {
+		return fmt.Errorf("PAM_NEW_MASTER_KEY is required (generate one with -genkey)")
+	}
+	newV, err := vault.New(newKey)
+	if err != nil {
+		return fmt.Errorf("new key (PAM_NEW_MASTER_KEY): %w", err)
+	}
+	dbURL := os.Getenv("PAM_DATABASE_URL")
+	if dbURL == "" || dbURL == "memory" {
+		return fmt.Errorf("PAM_DATABASE_URL must point at a PostgreSQL database")
+	}
+	ctx := context.Background()
+	st, err := pgstore.Open(ctx, dbURL)
+	if err != nil {
+		return fmt.Errorf("connect to postgres: %w", err)
+	}
+	defer st.Close()
+
+	n, err := maint.RotateVaultKEK(ctx, st, oldV, newV)
+	if err != nil {
+		return fmt.Errorf("rotation failed after %d secrets: %w", n, err)
+	}
+	fmt.Printf("rotated %d secrets; now set PAM_MASTER_KEY to the new key and restart\n", n)
+	return nil
 }
 
 func fatal(err error) {

@@ -103,6 +103,9 @@ type Store interface {
 	// ListCredentials returns credentials for one target, or all when targetID is 0.
 	ListCredentials(ctx context.Context, targetID int64) ([]Credential, error)
 	GetCredential(ctx context.Context, id int64) (*Credential, error)
+	// UpdateCredentialSecretEnc replaces a credential's encrypted secret (used
+	// by vault key rotation).
+	UpdateCredentialSecretEnc(ctx context.Context, id int64, secretEnc string) error
 	DeleteCredential(ctx context.Context, id int64) error
 
 	AppendAudit(ctx context.Context, e *AuditEvent) error
@@ -121,6 +124,7 @@ type Store interface {
 	// UpsertMFAEnrollment creates or replaces a user's TOTP enrollment.
 	UpsertMFAEnrollment(ctx context.Context, e *MFAEnrollment) error
 	GetMFAEnrollment(ctx context.Context, username string) (*MFAEnrollment, error)
+	ListMFAEnrollments(ctx context.Context) ([]MFAEnrollment, error)
 	DeleteMFAEnrollment(ctx context.Context, username string) error
 
 	// ReplaceMFARecoveryCodes stores a fresh set of recovery-code hashes for a

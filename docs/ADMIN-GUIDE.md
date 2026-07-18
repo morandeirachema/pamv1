@@ -381,6 +381,21 @@ For emergencies when the normal admin path is unavailable.
 
 Quorum unseal, auto-expiry and alerting are planned in [Phase 6](../ROADMAP.md#phase-6--break-glass-v2-).
 
+### Rotating the vault key
+
+To rotate the local master key (re-encrypt every secret under a new key), run the
+maintenance command **offline** (nothing else writing secrets):
+
+```bash
+export PAM_MASTER_KEY=<current-key>
+export PAM_NEW_MASTER_KEY=$(./pam-server -genkey)
+export PAM_DATABASE_URL=postgres://…
+./pam-server -rotate-kek   # → "rotated N secrets; set PAM_MASTER_KEY to the new key and restart"
+```
+
+Then set `PAM_MASTER_KEY` to the new key and restart. With a KMS-backed KEK
+(`vault-transit`), rotate the key inside the KMS instead.
+
 ---
 
 ## 9. Logs & audit

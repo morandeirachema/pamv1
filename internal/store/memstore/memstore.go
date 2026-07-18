@@ -124,6 +124,18 @@ func (m *Memstore) GetCredential(_ context.Context, id int64) (*store.Credential
 	return &c, nil
 }
 
+func (m *Memstore) UpdateCredentialSecretEnc(_ context.Context, id int64, secretEnc string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	c, ok := m.creds[id]
+	if !ok {
+		return store.ErrNotFound
+	}
+	c.SecretEnc = secretEnc
+	m.creds[id] = c
+	return nil
+}
+
 func (m *Memstore) DeleteCredential(_ context.Context, id int64) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -257,6 +269,17 @@ func (m *Memstore) GetMFAEnrollment(_ context.Context, username string) (*store.
 		return nil, store.ErrNotFound
 	}
 	return &e, nil
+}
+
+func (m *Memstore) ListMFAEnrollments(_ context.Context) ([]store.MFAEnrollment, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]store.MFAEnrollment, 0, len(m.mfa))
+	for _, e := range m.mfa {
+		out = append(out, e)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Username < out[j].Username })
+	return out, nil
 }
 
 func (m *Memstore) DeleteMFAEnrollment(_ context.Context, username string) error {

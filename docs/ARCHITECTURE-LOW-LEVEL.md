@@ -23,6 +23,7 @@ internal/
   winrm/       # WinRM command Runner (Windows targets) + real client (basic/NTLM)
   guacd/       # Apache Guacamole protocol client (RDP handshake + JIT injection)
   oidc/        # OIDC Authorization Code + PKCE, RS256 JWKS validation
+  maint/       # offline maintenance (vault KEK rotation)
   auth/        # roles, capabilities, Principal, Resolver (RBAC)
   store/       # Store interface + domain types + CredentialAAD
     memstore/  # in-memory impl (tests, demo)
@@ -331,6 +332,7 @@ secrets. Format `json` (SIEM) or `text` (humans); collect from stdout.
 
 | Date | Change |
 |---|---|
+| 2026-07-18 | Phase 5: vault KEK rotation (`internal/maint`, `pam-server -rotate-kek`); store `UpdateCredentialSecretEnc` + `ListMFAEnrollments` |
 | 2026-07-18 | Phase 5: transport hardening — native HTTPS (`PAM_TLS_*`), security-headers middleware, per-IP auth rate limiting (`middleware.go`) |
 | 2026-07-18 | Phase 4: NTLM WinRM auth (`PAM_WINRM_AUTH`); `guacd` package + `GET /api/targets/{id}/rdp` WebSocket tunnel (RDP via Guacamole with JIT injection); `PAM_GUACD_ADDR` |
 | 2026-07-18 | Phase 3b hardening: `oidc` package (Authorization Code + PKCE, RS256 JWKS validation, discovery); `/api/auth/oidc/{start,callback}`; portal SSO token pickup; shared `auth.HighestRole`; `PAM_OIDC_*` config |
