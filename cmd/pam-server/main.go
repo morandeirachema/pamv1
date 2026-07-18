@@ -15,6 +15,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -64,19 +65,60 @@ func fatal(err error) {
 	os.Exit(1)
 }
 
-// ldapGroupRoleMap builds the group-DN → role map from the PAM_LDAP_GROUP_* env
-// vars, lower-casing DNs to match the case-insensitive comparison in auth.
-func ldapGroupRoleMap(cfg *config.Config) map[string]auth.Role {
+// buildAuthenticator wires the enabled password identity sources (on-prem AD via
+// LDAP and/or Microsoft Entra ID) into a single Authenticator, or nil if none.
+func buildAuthenticator(cfg *config.Config, log *slog.Logger) (auth.Authenticator, error) {
+	var sources []auth.Authenticator
+
+	if cfg.LDAPURL != "" {
+		ldapAuth, err := auth.NewLDAPAuthenticator(auth.LDAPConfig{
+			URL:                cfg.LDAPURL,
+			BindDN:             cfg.LDAPBindDN,
+			BindPassword:       cfg.LDAPBindPassword,
+			BaseDN:             cfg.LDAPBaseDN,
+			UserFilter:         cfg.LDAPUserFilter,
+			InsecureSkipVerify: cfg.LDAPInsecureSkipVerify,
+			GroupRoleMap:       roleMap(cfg.LDAPGroupAdmin, cfg.LDAPGroupUser, cfg.LDAPGroupAuditor, cfg.LDAPGroupApprover),
+		})
+		if err != nil {
+			return nil, fmt.Errorf("ldap: %w", err)
+		}
+		sources = append(sources, ldapAuth)
+		log.Info("active directory login enabled", "url", cfg.LDAPURL, "insecure_skip_verify", cfg.LDAPInsecureSkipVerify)
+	}
+
+	if cfg.EntraTenantID != "" {
+		entraAuth, err := auth.NewEntraAuthenticator(auth.EntraConfig{
+			TenantID:      cfg.EntraTenantID,
+			ClientID:      cfg.EntraClientID,
+			ClientSecret:  cfg.EntraClientSecret,
+			Scope:         cfg.EntraScope,
+			AuthorityHost: cfg.EntraAuthorityHost,
+			RoleMap:       roleMap(cfg.EntraRoleAdmin, cfg.EntraRoleUser, cfg.EntraRoleAuditor, cfg.EntraRoleApprover),
+		})
+		if err != nil {
+			return nil, fmt.Errorf("entra: %w", err)
+		}
+		sources = append(sources, entraAuth)
+		log.Info("entra id login enabled", "tenant", cfg.EntraTenantID)
+	}
+
+	return auth.NewChain(sources...), nil
+}
+
+// roleMap builds a lower-cased key → role map for the four role slots, skipping
+// empty entries. Keys are group DNs (LDAP) or app-role/group ids (Entra).
+func roleMap(admin, user, auditor, approver string) map[string]auth.Role {
 	m := map[string]auth.Role{}
-	add := func(dn string, role auth.Role) {
-		if dn != "" {
-			m[strings.ToLower(dn)] = role
+	add := func(key string, role auth.Role) {
+		if key != "" {
+			m[strings.ToLower(key)] = role
 		}
 	}
-	add(cfg.LDAPGroupAdmin, auth.RoleAdmin)
-	add(cfg.LDAPGroupUser, auth.RoleUser)
-	add(cfg.LDAPGroupAuditor, auth.RoleAuditor)
-	add(cfg.LDAPGroupApprover, auth.RoleApprover)
+	add(admin, auth.RoleAdmin)
+	add(user, auth.RoleUser)
+	add(auditor, auth.RoleAuditor)
+	add(approver, auth.RoleApprover)
 	return m
 }
 
@@ -121,22 +163,9 @@ func run() error {
 		return err
 	}
 
-	var authn auth.Authenticator
-	if cfg.LDAPURL != "" {
-		ldapAuth, err := auth.NewLDAPAuthenticator(auth.LDAPConfig{
-			URL:                cfg.LDAPURL,
-			BindDN:             cfg.LDAPBindDN,
-			BindPassword:       cfg.LDAPBindPassword,
-			BaseDN:             cfg.LDAPBaseDN,
-			UserFilter:         cfg.LDAPUserFilter,
-			InsecureSkipVerify: cfg.LDAPInsecureSkipVerify,
-			GroupRoleMap:       ldapGroupRoleMap(cfg),
-		})
-		if err != nil {
-			return fmt.Errorf("ldap: %w", err)
-		}
-		authn = ldapAuth
-		log.Info("active directory login enabled", "url", cfg.LDAPURL, "insecure_skip_verify", cfg.LDAPInsecureSkipVerify)
+	authn, err := buildAuthenticator(cfg, log)
+	if err != nil {
+		return err
 	}
 
 	handler, err := api.New(st, v, resolver, authn)

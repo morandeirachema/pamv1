@@ -50,7 +50,8 @@ The flagship: users connect *through* pamv1, never holding the credential.
 - [x] AD groups → the four pamv1 roles (highest privilege wins), via `PAM_LDAP_GROUP_*`
 - [x] Portal Sign On with AD username + password; short-lived **session tokens** (`POST /api/login`, `POST /api/logout`) that work in the portal and the SSH proxy
 - [x] **MFA: TOTP** (RFC 6238) enrollment + verification (`internal/mfa`), secret stored vault-encrypted, enforced on `/api/login`; self-service `/api/mfa/*` (NIS2 Art. 21(2)(j))
-- [ ] **Microsoft Entra ID (Azure AD)** integration: OIDC/OAuth2 login, Entra groups / app roles → the four roles (pluggable behind the `Authenticator` interface, alongside LDAP)
+- [x] **Microsoft Entra ID (Azure AD)** login: OAuth2 (ROPC) against the tenant, Entra app roles / groups → the four roles; composable with LDAP via a chain authenticator; sovereign-cloud authority host
+- [ ] Entra OIDC auth-code flow + JWKS signature validation (production hardening over ROPC)
 - [ ] Optional Kerberos bind
 - [ ] Enforce-MFA-for-all policy + recovery codes (currently per-user opt-in)
 - [x] Local emergency admin kept for AD-down scenarios (bootstrap key + break-glass)

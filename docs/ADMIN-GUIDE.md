@@ -240,6 +240,31 @@ works in the portal and the SSH proxy exactly like a per-user token. A user in n
 mapped group is rejected. Keep the bootstrap `PAM_API_KEY` and break-glass key as
 the local emergency path if AD is unreachable.
 
+### Microsoft Entra ID (Azure AD) login (optional)
+
+For cloud identities, enable Entra ID login alongside or instead of on-prem AD.
+pamv1 uses the OAuth2 **resource-owner-password** grant against your tenant and
+reads the user's **app roles** (or group ids) from the token to derive the role.
+
+```bash
+PAM_ENTRA_TENANT_ID=<tenant-guid>
+PAM_ENTRA_CLIENT_ID=<app-registration-client-id>
+PAM_ENTRA_CLIENT_SECRET=<client-secret>
+# PAM_ENTRA_SCOPE defaults to "<client-id>/.default"
+# PAM_ENTRA_AUTHORITY_HOST=login.microsoftonline.com   # sovereign clouds differ
+PAM_ENTRA_ROLE_ADMIN=pam.admin      # app role value (or a group object id)
+PAM_ENTRA_ROLE_USER=pam.user
+PAM_ENTRA_ROLE_AUDITOR=pam.auditor
+PAM_ENTRA_ROLE_APPROVER=pam.approver
+```
+
+Setup in Azure: create an **app registration**, define **app roles** (e.g.
+`pam.admin`) and assign users/groups to them, add a **client secret**, and enable
+the ROPC (password) grant for the app. If both LDAP and Entra are configured,
+pamv1 tries each (chain). **Caveats:** ROPC does not trigger Entra Conditional
+Access or IdP-side MFA — layer pamv1's own TOTP MFA on top; the OIDC auth-code
+flow is the production-recommended upgrade (roadmap). Always use HTTPS.
+
 ### Multi-factor authentication (TOTP)
 
 Users can add a second factor ([TOTP](https://en.wikipedia.org/wiki/Time-based_one-time_password),
@@ -374,6 +399,7 @@ evidence). Replay with [asciinema](https://asciinema.org/): `asciinema play <fil
 
 | Date | Change |
 |---|---|
+| 2026-07-18 | Phase 3b: Microsoft Entra ID (Azure AD) login setup (app roles → roles, sovereign host) |
 | 2026-07-18 | Phase 3b: TOTP MFA (self-service enroll/verify, enforced on login) |
 | 2026-07-18 | Phase 3b: Active Directory login setup (LDAPS, group→role, session tokens); envelope-encryption KEK config |
 | 2026-07-18 | Initial admin guide (Phase 3a): deployment, config, target/credential/user management, break-glass, logging & audit, hardening, troubleshooting |

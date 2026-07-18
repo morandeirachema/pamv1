@@ -47,6 +47,17 @@ type Config struct {
 	LDAPGroupUser          string
 	LDAPGroupAuditor       string
 	LDAPGroupApprover      string
+
+	// Entra* configure Microsoft Entra ID (Azure AD) login. Empty tenant disables it.
+	EntraTenantID      string
+	EntraClientID      string
+	EntraClientSecret  string
+	EntraScope         string
+	EntraAuthorityHost string
+	EntraRoleAdmin     string
+	EntraRoleUser      string
+	EntraRoleAuditor   string
+	EntraRoleApprover  string
 }
 
 func Load() (*Config, error) {
@@ -76,6 +87,16 @@ func Load() (*Config, error) {
 		LDAPGroupUser:          os.Getenv("PAM_LDAP_GROUP_USER"),
 		LDAPGroupAuditor:       os.Getenv("PAM_LDAP_GROUP_AUDITOR"),
 		LDAPGroupApprover:      os.Getenv("PAM_LDAP_GROUP_APPROVER"),
+
+		EntraTenantID:      os.Getenv("PAM_ENTRA_TENANT_ID"),
+		EntraClientID:      os.Getenv("PAM_ENTRA_CLIENT_ID"),
+		EntraClientSecret:  os.Getenv("PAM_ENTRA_CLIENT_SECRET"),
+		EntraScope:         os.Getenv("PAM_ENTRA_SCOPE"),
+		EntraAuthorityHost: os.Getenv("PAM_ENTRA_AUTHORITY_HOST"),
+		EntraRoleAdmin:     os.Getenv("PAM_ENTRA_ROLE_ADMIN"),
+		EntraRoleUser:      os.Getenv("PAM_ENTRA_ROLE_USER"),
+		EntraRoleAuditor:   os.Getenv("PAM_ENTRA_ROLE_AUDITOR"),
+		EntraRoleApprover:  os.Getenv("PAM_ENTRA_ROLE_APPROVER"),
 	}
 	// MasterKey is required only for the local KEK provider; a KMS-backed
 	// provider (e.g. vault-transit) holds the key material instead. The KEK

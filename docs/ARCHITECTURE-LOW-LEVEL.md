@@ -76,12 +76,23 @@ then a **login session token** (`store.GetSessionByTokenHash`, non-expired).
 Shared by `api` and `proxy` so both enforce the same identities and roles.
 `auth` imports `store` (no cycle).
 
-**Active Directory login** (`ldap.go`, Phase 3b): the `Authenticator` interface
-verifies username+password. `LDAPAuthenticator` binds a service account, searches
-the user under `BaseDN`, reads `memberOf`, re-binds as the user to verify the
-password, and maps groups → role (`roleForGroups`, highest privilege wins). The
-LDAP connection is behind an `ldapConn` interface so tests inject a fake; the
-real dial uses LDAPS. `POST /api/login` issues a session token (see `api`).
+**Password identity sources** (`Authenticator` interface, Phase 3b): verify
+username+password and return a Principal whose role comes from the directory.
+Pluggable and composable via `NewChain` (try each, first success wins):
+
+- `LDAPAuthenticator` (`ldap.go`) — on-prem AD: binds a service account, searches
+  the user under `BaseDN`, reads `memberOf`, re-binds as the user to verify the
+  password, maps groups → role (`roleForGroups`, highest privilege wins). The LDAP
+  connection is behind an `ldapConn` interface so tests inject a fake; real dial uses LDAPS.
+- `EntraAuthenticator` (`entra.go`) — Microsoft Entra ID (Azure AD): OAuth2 ROPC
+  grant to the tenant token endpoint (over TLS, back-channel), reads `roles`
+  (app roles) / `groups` claims from the access token and maps to a role.
+  `AuthorityHost` supports sovereign clouds; the endpoint is overridable in tests.
+  Notes: ROPC skips IdP-side Conditional Access/MFA (use pamv1's TOTP); JWKS
+  signature validation is a hardening TODO (token is from a trusted back-channel).
+
+`POST /api/login` runs the configured authenticator, enforces TOTP if enrolled,
+and issues a session token (see `api`).
 
 Capability grants: admin = all; user = `CapReadInventory`+`CapConnect`; auditor =
 `CapReadInventory`+`CapReadAudit`; approver = auditor + `CapApprove` (approval
@@ -207,6 +218,9 @@ the client channel closes.
 | `PAM_LDAP_BASE_DN` / `_USER_FILTER` | — / `(sAMAccountName=%s)` | search base + filter |
 | `PAM_LDAP_GROUP_ADMIN` / `_USER` / `_AUDITOR` / `_APPROVER` | — | group DN → role |
 | `PAM_LDAP_INSECURE_SKIP_VERIFY` | `false` | disable TLS verify (dev only) |
+| `PAM_ENTRA_TENANT_ID` | — (disabled) | Entra ID login; set to enable |
+| `PAM_ENTRA_CLIENT_ID` / `_CLIENT_SECRET` / `_SCOPE` / `_AUTHORITY_HOST` | — | Entra app registration |
+| `PAM_ENTRA_ROLE_ADMIN` / `_USER` / `_AUDITOR` / `_APPROVER` | — | Entra app-role/group → role |
 
 ## 4a. Logging (operational, to stdout)
 
@@ -252,6 +266,7 @@ secrets. Format `json` (SIEM) or `text` (humans); collect from stdout.
 - `vault`: envelope roundtrip, AAD binding, tamper detection, version rejection, distinct tokens; local KEK wrap/unwrap + tamper; KEK factory; **Transit KMS** wrap/unwrap and full envelope over a mock Vault Transit server.
 - `auth`: role→capability matrix, role parsing, resolver (bootstrap/break-glass/token/**session**/unknown); **LDAP** authenticate (success, highest-privilege-wins, wrong password, no mapped group, unknown user) against a fake `ldapConn`.
 - `mfa`: RFC 6238 test vector, validate roundtrip + skew + wrong/short code, otpauth URI, secret randomness.
+- `auth` (Entra/chain): Entra app-role & group login, highest-privilege-wins, bad password, no mapped role (mock token endpoint); chain resolves via a later source and rejects when none match.
 - `api`: full CRUD flow, auth required, secret-non-leak, cascade delete, break-glass audited, validation/conflict, **RBAC** (user/auditor/approver each allowed only their capabilities), **login session** (issue → use with role enforcement → logout revokes), login-not-configured 503, **MFA** (enroll → confirm → login requires OTP → wrong OTP rejected).
 - `proxy`: **end-to-end JIT injection** against an in-process upstream sshd that
   accepts only the vaulted password (proves the client never had it), plus wrong-key
@@ -263,6 +278,7 @@ secrets. Format `json` (SIEM) or `text` (humans); collect from stdout.
 
 | Date | Change |
 |---|---|
+| 2026-07-18 | Phase 3b Entra: `EntraAuthenticator` (Azure AD, OAuth2 ROPC, app-roles/groups → role); `ChainAuthenticator`; `PAM_ENTRA_*` env; LDAP + Entra composable |
 | 2026-07-18 | Phase 3b MFA: `mfa` package (TOTP RFC 6238); `store.MFAEnrollment` (vault-encrypted secret); `/api/mfa/*` self-service; `/api/login` enforces confirmed TOTP; portal Sign On OTP field |
 | 2026-07-18 | Phase 3b: AD/LDAP login (`ldap.go`, `Authenticator`); login sessions (`store.Session`, `/api/login` + `/api/logout`); resolver session support; portal Sign On with user+password; `PAM_LDAP_*` env |
 | 2026-07-18 | Vault envelope encryption + pluggable KEK (`kek.go`, `transit.go`); `v2:` token format; ctx-aware Encrypt/Decrypt; `local` (dev/test) + `vault-transit` (production) providers; `PAM_KEK_*` env |
