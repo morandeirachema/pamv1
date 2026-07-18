@@ -20,7 +20,8 @@ internal/
   logging/     # slog setup (json/text, level) + per-service loggers
   vault/       # AES-256-GCM encrypt/decrypt, key gen
   mfa/         # TOTP (RFC 6238) generate/validate + otpauth URI
-  winrm/       # WinRM command Runner (Windows targets) + real client
+  winrm/       # WinRM command Runner (Windows targets) + real client (basic/NTLM)
+  guacd/       # Apache Guacamole protocol client (RDP handshake + JIT injection)
   oidc/        # OIDC Authorization Code + PKCE, RS256 JWKS validation
   auth/        # roles, capabilities, Principal, Resolver (RBAC)
   store/       # Store interface + domain types + CredentialAAD
@@ -147,7 +148,15 @@ endpoints arrive with the OT/approval phase).
   decrypts its credential **just-in-time**, runs the command via `winrm.Runner`,
   writes a transcript to `RecordingDir` with its SHA-256 in the audit, and
   returns stdout/stderr/exit — the secret is never returned. `winrm.Runner` is an
-  interface (tests inject a fake); `winrm.Client` wraps masterzen/winrm over HTTPS.
+  interface (tests inject a fake); `winrm.Client` wraps masterzen/winrm over HTTPS
+  with basic or NTLMv2 auth (`PAM_WINRM_AUTH`).
+- **RDP** (`GET /api/targets/{id}/rdp`, WebSocket, needs `CapConnect`): brokers RDP
+  through Apache Guacamole. Authorizes via a `token` query param (browsers can't
+  set WS headers), resolves the `protocol=rdp` target, decrypts the credential
+  **just-in-time**, and `guacd.Connect` performs the Guacamole handshake injecting
+  the credential (`internal/guacd`) — it reaches guacd, never the browser. Then it
+  bridges the WebSocket ↔ guacd stream. Enabled by `PAM_GUACD_ADDR`; audited
+  `rdp.connect`/`rdp.end`. The browser viewer (guacamole-common-js) is the last mile.
 
 ### 2.5 `proxy`  *(Phase 2, RBAC in 3a)*
 
@@ -248,6 +257,8 @@ the client channel closes.
 | `PAM_MFA_REQUIRED` | `false` | require a confirmed TOTP factor for password login |
 | `PAM_WINRM_HTTPS` | `true` | use HTTPS (5986) for WinRM |
 | `PAM_WINRM_INSECURE_SKIP_VERIFY` | `false` | skip WinRM TLS verify (dev only) |
+| `PAM_WINRM_AUTH` | `basic` | `basic` or `ntlm` |
+| `PAM_GUACD_ADDR` | — (RDP off) | Guacamole guacd address, e.g. `127.0.0.1:4822` |
 | `PAM_OIDC_ISSUER` | — (disabled) | OIDC login; set to enable the auth-code flow |
 | `PAM_OIDC_CLIENT_ID` / `_CLIENT_SECRET` / `_REDIRECT_URL` / `_SCOPES` | — | OIDC client |
 | `PAM_OIDC_AUTH_URL` / `_TOKEN_URL` / `_JWKS_URL` | — (discovered) | override endpoints |
@@ -271,9 +282,9 @@ secrets. Format `json` (SIEM) or `text` (humans); collect from stdout.
 `target.create` · `target.delete` · `credential.create` · `credential.reveal` ·
 `credential.delete` · `user.create` · `user.delete` · `login` · `logout` ·
 `mfa.enroll` · `mfa.confirm` · `mfa.disable` · `mfa.recovery_generated` ·
-`mfa.recovery_used` · `winrm.run` · `winrm.error` · `authz.denied` ·
-`breakglass.access` · `session.start` · `session.record` · `session.end` ·
-`session.denied` · `session.error`. The actor is the Principal name
+`mfa.recovery_used` · `winrm.run` · `winrm.error` · `rdp.connect` · `rdp.end` ·
+`rdp.error` · `authz.denied` · `breakglass.access` · `session.start` ·
+`session.record` · `session.end` · `session.denied` · `session.error`. The actor is the Principal name
 (`bootstrap-admin`, `break-glass`, or a username).
 
 ## 6. Security-relevant invariants (do not regress)
@@ -301,6 +312,9 @@ secrets. Format `json` (SIEM) or `text` (humans); collect from stdout.
 - `auth`: role→capability matrix, role parsing, resolver (bootstrap/break-glass/token/**session**/unknown); **LDAP** authenticate (success, highest-privilege-wins, wrong password, no mapped group, unknown user) against a fake `ldapConn`.
 - `mfa`: RFC 6238 test vector, validate roundtrip + skew + wrong/short code, otpauth URI, secret randomness, recovery-code generation.
 - `api` (WinRM): JIT injection (fake runner receives the vaulted secret), non-Windows target rejected, `CapConnect` required, transcript recorded + audited.
+- `winrm`: basic and NTLM client construction (NTLM must not mutate library defaults).
+- `guacd`: instruction encode (byte vs code-point length), and handshake against a mock guacd asserting the **JIT credential injection** into `connect` (+ unknown args empty).
+- `api` (RDP): tunnel disabled without guacd (404), no/invalid token 401, non-connect role 403, non-rdp target 422 (pre-WebSocket checks).
 - `oidc`: Exchange with a real RSA-signed token (valid), and rejects bad signature / wrong issuer / wrong audience / nonce mismatch / expired; PKCE + auth URL.
 - `api` (OIDC): full flow (start redirect → callback with a signed token → session → admin role enforced), bad-state error redirect, not-configured 404.
 - `auth` (Entra/chain): Entra app-role & group login, highest-privilege-wins, bad password, no mapped role (mock token endpoint); chain resolves via a later source and rejects when none match.
@@ -315,6 +329,7 @@ secrets. Format `json` (SIEM) or `text` (humans); collect from stdout.
 
 | Date | Change |
 |---|---|
+| 2026-07-18 | Phase 4: NTLM WinRM auth (`PAM_WINRM_AUTH`); `guacd` package + `GET /api/targets/{id}/rdp` WebSocket tunnel (RDP via Guacamole with JIT injection); `PAM_GUACD_ADDR` |
 | 2026-07-18 | Phase 3b hardening: `oidc` package (Authorization Code + PKCE, RS256 JWKS validation, discovery); `/api/auth/oidc/{start,callback}`; portal SSO token pickup; shared `auth.HighestRole`; `PAM_OIDC_*` config |
 | 2026-07-18 | Phase 4: `winrm` package + `POST /api/targets/{id}/winrm` (JIT credential injection on Windows, transcript recording, `winrm.run` audit); `PAM_WINRM_*` config |
 | 2026-07-18 | Phase 3b hardening: enforce-MFA policy (`PAM_MFA_REQUIRED`, enrollment-only sessions via `Session.Scope`/`Principal.EnrollOnly`) + single-use recovery codes (`/api/mfa/recovery-codes`) |

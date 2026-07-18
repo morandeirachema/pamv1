@@ -34,6 +34,10 @@ type Config struct {
 	// WinRMHTTPS uses HTTPS (5986) for WinRM; WinRMInsecure skips TLS verify (dev).
 	WinRMHTTPS    bool
 	WinRMInsecure bool
+	// WinRMNTLM selects NTLMv2 auth (required by most AD-joined hosts).
+	WinRMNTLM bool
+	// GuacdAddr enables RDP brokering via an Apache Guacamole guacd daemon.
+	GuacdAddr string
 
 	// KEKProvider selects the vault Key Encryption Key backend:
 	// "local" (default, dev/test — uses MasterKey) or "vault-transit".
@@ -97,6 +101,8 @@ func Load() (*Config, error) {
 		MFARequired:       os.Getenv("PAM_MFA_REQUIRED") == "true",
 		WinRMHTTPS:        os.Getenv("PAM_WINRM_HTTPS") != "false", // default HTTPS
 		WinRMInsecure:     os.Getenv("PAM_WINRM_INSECURE_SKIP_VERIFY") == "true",
+		WinRMNTLM:         os.Getenv("PAM_WINRM_AUTH") == "ntlm",
+		GuacdAddr:         os.Getenv("PAM_GUACD_ADDR"),
 		KEKProvider:       getenv("PAM_KEK_PROVIDER", "local"),
 		TransitAddr:       os.Getenv("PAM_KEK_TRANSIT_ADDR"),
 		TransitToken:      os.Getenv("PAM_KEK_TRANSIT_TOKEN"),

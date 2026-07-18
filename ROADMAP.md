@@ -61,8 +61,11 @@ The flagship: users connect *through* pamv1, never holding the credential.
 
 - [x] **WinRM command execution with JIT credentials** (`internal/winrm`): `POST /api/targets/{id}/winrm` decrypts the target's credential only at run time, executes over WinRM, records the transcript (SHA-256 in the audit), returns stdout/stderr/exit — the caller never sees the secret
 - [x] AD-joined target support: uses domain service accounts stored in the vault (the credential username may be `DOMAIN\\user` or UPN)
-- [ ] NTLM/Kerberos WinRM auth (currently basic over HTTPS)
-- [ ] RDP access via a recorded gateway (Apache Guacamole `guacd` / RD Gateway) — needs a graphical broker
+- [x] **NTLM WinRM auth** (`PAM_WINRM_AUTH=ntlm`) — NTLMv2 transport, which AD-joined hosts usually require
+- [x] **RDP brokering via Apache Guacamole `guacd`** (`internal/guacd` + `GET /api/targets/{id}/rdp` WebSocket tunnel): the credential is injected just-in-time into the guacd handshake — it reaches guacd, never the browser (`PAM_GUACD_ADDR`)
+- [ ] Browser RDP viewer: bundle guacamole-common-js and add a portal display (server-side tunnel is done and tested)
+- [ ] guacd server-side session recording for RDP (audit currently logs connect/end)
+- [ ] Kerberos WinRM auth
 - [ ] Interactive WinRM/PowerShell shell through the SSH proxy (beyond one-shot commands)
 
 ## Phase 5 — Hardening: database, vault, transport ⬜

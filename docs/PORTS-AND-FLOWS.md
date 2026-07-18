@@ -42,7 +42,8 @@ Kubernetes Service (`deploy/k8s/service.yaml`) maps `80 → 8080` and `2222 → 
 | E1 | pam-server | PostgreSQL (data zone) | 5432 | TCP/TLS | Inventory, vaulted secrets, audit, users | ✅ |
 | E2 | pam-server (proxy) | Linux target (target zone) | 22 | SSH | JIT-injected privileged session | ✅ |
 | E3 | pam-server | Windows target | 5985 / **5986** | WinRM / WinRM-TLS | JIT command execution (`/api/targets/{id}/winrm`) | ✅ |
-| E4 | pam-server (proxy) | Windows target | 3389 | RDP | Recorded RDP via gateway | 🔷 P4 |
+| E4a | pam-server | guacd (control plane) | 4822 | Guacamole | RDP broker handshake (JIT credential) | ✅ |
+| E4b | guacd | Windows target | 3389 | RDP | Rendered RDP session | ✅ |
 | E5 | pam-server | Active Directory (identity zone) | **636** (389 dev only) | **LDAPS** / LDAP | Authn + group→role mapping | ✅ |
 | E6 | pam-server | Active Directory (identity zone) | 88 | Kerberos | Optional Kerberos auth | 🔷 P3b |
 | E7 | pam-server | AD / target | 636 / 5986 | LDAPS / WinRM | Credential rotation (password change) | 🔷 P7 |
@@ -83,7 +84,8 @@ flowchart LR
     S -->|"E1 5432"| DB
     S -->|"E2 22"| L
     S -->|"E3 5986 winrm"| W
-    S -.->|"E4 3389 rdp"| W
+    S -->|"E4a 4822 guacd"| G["guacd"]
+    G -->|"E4b 3389 rdp"| W
     S -->|"E5 636 ldaps"| ID
 ```
 

@@ -202,8 +202,26 @@ curl -H "X-API-Key: $TOKEN" -X POST http://localhost:8080/api/targets/1/winrm \
 
 Every run is recorded (a `.winrm.log` transcript with its SHA-256 in the audit as
 `winrm.run`). WinRM uses HTTPS by default (`PAM_WINRM_HTTPS`); only set
-`PAM_WINRM_INSECURE_SKIP_VERIFY=true` in isolated dev. RDP brokering (a recorded
-graphical gateway) and an interactive PowerShell shell are on the roadmap.
+`PAM_WINRM_INSECURE_SKIP_VERIFY=true` in isolated dev. Most AD-joined hosts
+disable basic auth — set `PAM_WINRM_AUTH=ntlm` for NTLMv2.
+
+### RDP (via Apache Guacamole)
+
+pamv1 brokers RDP through [Apache Guacamole](https://guacamole.apache.org/)'s
+`guacd` daemon so the operator sees the desktop but never the password. Run guacd
+(e.g. the `guacamole/guacd` container) reachable from pam-server and set:
+
+```bash
+PAM_GUACD_ADDR=127.0.0.1:4822
+```
+
+Create the target with `protocol=rdp`, port `3389`, and a credential. The
+WebSocket endpoint `GET /api/targets/{id}/rdp?token=<session-token>` decrypts the
+credential just-in-time, injects it into the guacd handshake, and tunnels the
+Guacamole protocol to the browser (`rdp.connect` / `rdp.end` in the audit). The
+in-browser display uses the [guacamole-common-js](https://guacamole.apache.org/doc/gug/writing-you-own-guacamole-app.html)
+client — bundling that viewer into the portal is the remaining step; the tunnel
+itself is usable by any Guacamole-compatible client today.
 
 ## 7. Managing users & roles
 
@@ -449,6 +467,7 @@ evidence). Replay with [asciinema](https://asciinema.org/): `asciinema play <fil
 
 | Date | Change |
 |---|---|
+| 2026-07-18 | Phase 4: NTLM WinRM auth; RDP brokering via Guacamole guacd |
 | 2026-07-18 | Phase 3b: OIDC single sign-on (Authorization Code + PKCE, JWKS validation) |
 | 2026-07-18 | Phase 4: Windows targets — WinRM command execution with JIT credentials |
 | 2026-07-18 | Phase 3b: enforce-MFA policy (`PAM_MFA_REQUIRED`) + single-use recovery codes |

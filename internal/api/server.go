@@ -64,6 +64,9 @@ type Options struct {
 	OIDCRoleMap map[string]auth.Role
 	// PortalURL is where the OIDC callback redirects (default "/").
 	PortalURL string
+	// GuacdAddr enables RDP brokering via an Apache Guacamole guacd daemon
+	// (e.g. "127.0.0.1:4822"); empty disables RDP.
+	GuacdAddr string
 }
 
 type Server struct {
@@ -78,6 +81,7 @@ type Server struct {
 	oidcRoleMap  map[string]auth.Role
 	oidcPending  *oidcPending
 	portalURL    string
+	guacdAddr    string
 	log          *slog.Logger
 	mux          *http.ServeMux
 	handler      http.Handler
@@ -111,6 +115,7 @@ func New(st store.Store, v *vault.Vault, resolver *auth.Resolver, authn auth.Aut
 		oidcRoleMap:  opts.OIDCRoleMap,
 		oidcPending:  newOIDCPending(),
 		portalURL:    portalURL,
+		guacdAddr:    opts.GuacdAddr,
 		log:          logging.Component("api"),
 		mux:          http.NewServeMux(),
 	}
@@ -189,6 +194,7 @@ func (s *Server) routes() {
 	s.mux.Handle("DELETE /api/targets/{id}", s.authz(auth.CapManageTargets, s.deleteTarget))
 
 	s.mux.Handle("POST /api/targets/{id}/winrm", s.authz(auth.CapConnect, s.runWinRM))
+	s.mux.HandleFunc("GET /api/targets/{id}/rdp", s.rdpTunnel) // WebSocket; auths via query token
 
 	s.mux.Handle("POST /api/credentials", s.authz(auth.CapManageCredentials, s.createCredential))
 	s.mux.Handle("GET /api/credentials", s.authz(auth.CapReadInventory, s.listCredentials))

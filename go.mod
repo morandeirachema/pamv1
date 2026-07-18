@@ -3,6 +3,7 @@ module github.com/morandeirachema/pamv1
 go 1.26
 
 require (
+	github.com/coder/websocket v1.8.15
 	github.com/go-ldap/ldap/v3 v3.4.14
 	github.com/jackc/pgx/v5 v5.10.0
 	github.com/masterzen/winrm v0.0.0-20260407182533-5570be7f80cf
