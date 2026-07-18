@@ -20,7 +20,7 @@ Built step by step, **fully functional at every step**. The **JIT credential-inj
 
 - **[User Guide](docs/USER-GUIDE.md)** — for operators/auditors/approvers: signing in, connecting through the proxy, per-role abilities.
 - **[Administrator Guide](docs/ADMIN-GUIDE.md)** — deploy, configure, manage targets/credentials/users/roles, break-glass, logging & audit.
-- **[Architecture](docs/ARCHITECTURE-HIGH-LEVEL.md)** ([low-level](docs/ARCHITECTURE-LOW-LEVEL.md)) and the **[ports & network-flow matrix](docs/PORTS-AND-FLOWS.md)** for firewalling and segmentation.
+- **[Architecture](docs/ARCHITECTURE-HIGH-LEVEL.md)** ([low-level](docs/ARCHITECTURE-LOW-LEVEL.md)), the **[ports & network-flow matrix](docs/PORTS-AND-FLOWS.md)**, and the **[backup & restore runbook](docs/BACKUP-AND-RESTORE.md)**.
 
 ## Architecture
 

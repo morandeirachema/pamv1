@@ -15,6 +15,10 @@ services:
       - log_connections=on
       - -c
       - log_disconnections=on
+      - -c
+      - log_statement=ddl
+      # Production: terminate TLS (ssl=on with certs) and use sslmode=verify-full
+      # in PAM_DATABASE_URL; add pgAudit via an image that bundles the extension.
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
