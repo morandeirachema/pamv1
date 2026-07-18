@@ -87,6 +87,25 @@ func TestConnectInjectsCredentials(t *testing.T) {
 	}
 }
 
+func TestConnectRecordingParams(t *testing.T) {
+	connectCh := make(chan []string, 1)
+	addr := mockGuacd(t, []string{"recording-path", "recording-name", "create-recording-path"}, connectCh)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	c, err := Connect(ctx, addr, Params{
+		Protocol: "rdp", RecordingPath: "/recordings", RecordingName: "sess-1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	got := <-connectCh
+	// version, recording-path, recording-name, create-recording-path
+	if got[1] != "/recordings" || got[2] != "sess-1" || got[3] != "true" {
+		t.Fatalf("recording params not injected: %v", got)
+	}
+}
+
 func TestConnectUnknownArgsAreEmpty(t *testing.T) {
 	connectCh := make(chan []string, 1)
 	addr := mockGuacd(t, []string{"hostname", "security", "ignore-cert"}, connectCh)

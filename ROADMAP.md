@@ -64,7 +64,7 @@ The flagship: users connect *through* pamv1, never holding the credential.
 - [x] **NTLM WinRM auth** (`PAM_WINRM_AUTH=ntlm`) — NTLMv2 transport, which AD-joined hosts usually require
 - [x] **RDP brokering via Apache Guacamole `guacd`** (`internal/guacd` + `GET /api/targets/{id}/rdp` WebSocket tunnel): the credential is injected just-in-time into the guacd handshake — it reaches guacd, never the browser (`PAM_GUACD_ADDR`)
 - [ ] Browser RDP viewer: bundle guacamole-common-js and add a portal display (server-side tunnel is done and tested)
-- [ ] guacd server-side session recording for RDP (audit currently logs connect/end)
+- [x] guacd server-side session recording for RDP (`PAM_GUACD_RECORDING_PATH`; recording name in the `rdp.connect` audit)
 - [ ] Kerberos WinRM auth
 - [ ] Interactive WinRM/PowerShell shell through the SSH proxy (beyond one-shot commands)
 

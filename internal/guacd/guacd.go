@@ -90,6 +90,9 @@ type Params struct {
 	Width    int
 	Height   int
 	DPI      int
+	// RecordingPath/RecordingName make guacd record the session server-side.
+	RecordingPath string
+	RecordingName string
 	// Extra holds any additional guacd parameters (e.g. "security", "ignore-cert").
 	Extra map[string]string
 }
@@ -202,6 +205,15 @@ func (p Params) value(name string) string {
 		return p.Password
 	case "domain":
 		return p.Domain
+	case "recording-path":
+		return p.RecordingPath
+	case "recording-name":
+		return p.RecordingName
+	case "create-recording-path":
+		if p.RecordingPath != "" {
+			return "true"
+		}
+		return ""
 	}
 	if v, ok := p.Extra[name]; ok {
 		return v

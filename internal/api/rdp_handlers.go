@@ -2,8 +2,10 @@ package api
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/coder/websocket"
 
@@ -67,12 +69,18 @@ func (s *Server) rdpTunnel(w http.ResponseWriter, r *http.Request) {
 	if port == 0 {
 		port = 3389
 	}
+	var recName string
+	if s.guacdRecordingPath != "" {
+		recName = fmt.Sprintf("%d_%s_%s", time.Now().UnixNano(), sanitizeName(target.Name), sanitizeName(principal.Name))
+	}
 	gconn, err := guacd.Connect(ctx, s.guacdAddr, guacd.Params{
 		Protocol: "rdp", Hostname: target.Host, Port: strconv.Itoa(port),
 		Username: cred.Username, Password: secret,
-		Width:  atoiOr(r.URL.Query().Get("width"), 1024),
-		Height: atoiOr(r.URL.Query().Get("height"), 768),
-		Extra:  map[string]string{"security": "any", "ignore-cert": "true"},
+		Width:         atoiOr(r.URL.Query().Get("width"), 1024),
+		Height:        atoiOr(r.URL.Query().Get("height"), 768),
+		RecordingPath: s.guacdRecordingPath,
+		RecordingName: recName,
+		Extra:         map[string]string{"security": "any", "ignore-cert": "true"},
 	})
 	if err != nil {
 		s.log.Error("rdp connect failed", "target", target.Name, "err", err)
@@ -88,7 +96,7 @@ func (s *Server) rdpTunnel(w http.ResponseWriter, r *http.Request) {
 	}
 	defer ws.Close(websocket.StatusNormalClosure, "")
 
-	s.audit(ctx, "rdp.connect", "target:"+target.Name+" cred_user:"+cred.Username)
+	s.audit(ctx, "rdp.connect", "target:"+target.Name+" cred_user:"+cred.Username+" recording:"+recName)
 	defer s.audit(ctx, "rdp.end", "target:"+target.Name)
 	s.log.Info("rdp session", "actor", principal.Name, "target", target.Name)
 

@@ -67,24 +67,28 @@ type Options struct {
 	// GuacdAddr enables RDP brokering via an Apache Guacamole guacd daemon
 	// (e.g. "127.0.0.1:4822"); empty disables RDP.
 	GuacdAddr string
+	// GuacdRecordingPath, if set, makes guacd record RDP sessions server-side
+	// (a path on the guacd host).
+	GuacdRecordingPath string
 }
 
 type Server struct {
-	store        store.Store
-	vault        *vault.Vault
-	resolver     *auth.Resolver
-	authn        auth.Authenticator // password login (e.g. AD); nil if not configured
-	winrm        winrm.Runner
-	mfaRequired  bool
-	recordingDir string
-	oidc         *oidc.Provider
-	oidcRoleMap  map[string]auth.Role
-	oidcPending  *oidcPending
-	portalURL    string
-	guacdAddr    string
-	log          *slog.Logger
-	mux          *http.ServeMux
-	handler      http.Handler
+	store              store.Store
+	vault              *vault.Vault
+	resolver           *auth.Resolver
+	authn              auth.Authenticator // password login (e.g. AD); nil if not configured
+	winrm              winrm.Runner
+	mfaRequired        bool
+	recordingDir       string
+	oidc               *oidc.Provider
+	oidcRoleMap        map[string]auth.Role
+	oidcPending        *oidcPending
+	portalURL          string
+	guacdAddr          string
+	guacdRecordingPath string
+	log                *slog.Logger
+	mux                *http.ServeMux
+	handler            http.Handler
 }
 
 // New builds the HTTP handler. The resolver authenticates the X-API-Key header
@@ -104,20 +108,21 @@ func New(st store.Store, v *vault.Vault, resolver *auth.Resolver, authn auth.Aut
 		portalURL = "/"
 	}
 	s := &Server{
-		store:        st,
-		vault:        v,
-		resolver:     resolver,
-		authn:        authn,
-		winrm:        runner,
-		mfaRequired:  opts.MFARequired,
-		recordingDir: opts.RecordingDir,
-		oidc:         opts.OIDC,
-		oidcRoleMap:  opts.OIDCRoleMap,
-		oidcPending:  newOIDCPending(),
-		portalURL:    portalURL,
-		guacdAddr:    opts.GuacdAddr,
-		log:          logging.Component("api"),
-		mux:          http.NewServeMux(),
+		store:              st,
+		vault:              v,
+		resolver:           resolver,
+		authn:              authn,
+		winrm:              runner,
+		mfaRequired:        opts.MFARequired,
+		recordingDir:       opts.RecordingDir,
+		oidc:               opts.OIDC,
+		oidcRoleMap:        opts.OIDCRoleMap,
+		oidcPending:        newOIDCPending(),
+		portalURL:          portalURL,
+		guacdAddr:          opts.GuacdAddr,
+		guacdRecordingPath: opts.GuacdRecordingPath,
+		log:                logging.Component("api"),
+		mux:                http.NewServeMux(),
 	}
 	s.routes()
 	s.handler = s.withAccessLog(s.mux)

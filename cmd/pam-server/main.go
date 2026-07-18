@@ -206,13 +206,14 @@ func run() error {
 	}
 
 	handler, err := api.New(st, v, resolver, authn, api.Options{
-		MFARequired:  cfg.MFARequired,
-		RecordingDir: cfg.RecordingDir,
-		WinRM:        winrm.Client{HTTPS: cfg.WinRMHTTPS, Insecure: cfg.WinRMInsecure, NTLM: cfg.WinRMNTLM, Timeout: 30 * time.Second},
-		OIDC:         oidcProvider,
-		OIDCRoleMap:  roleMap(cfg.OIDCRoleAdmin, cfg.OIDCRoleUser, cfg.OIDCRoleAuditor, cfg.OIDCRoleApprover),
-		PortalURL:    cfg.PortalURL,
-		GuacdAddr:    cfg.GuacdAddr,
+		MFARequired:        cfg.MFARequired,
+		RecordingDir:       cfg.RecordingDir,
+		WinRM:              winrm.Client{HTTPS: cfg.WinRMHTTPS, Insecure: cfg.WinRMInsecure, NTLM: cfg.WinRMNTLM, Timeout: 30 * time.Second},
+		OIDC:               oidcProvider,
+		OIDCRoleMap:        roleMap(cfg.OIDCRoleAdmin, cfg.OIDCRoleUser, cfg.OIDCRoleAuditor, cfg.OIDCRoleApprover),
+		PortalURL:          cfg.PortalURL,
+		GuacdAddr:          cfg.GuacdAddr,
+		GuacdRecordingPath: cfg.GuacdRecordingPath,
 	})
 	if err != nil {
 		return err

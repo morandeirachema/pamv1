@@ -38,6 +38,8 @@ type Config struct {
 	WinRMNTLM bool
 	// GuacdAddr enables RDP brokering via an Apache Guacamole guacd daemon.
 	GuacdAddr string
+	// GuacdRecordingPath makes guacd record RDP sessions server-side.
+	GuacdRecordingPath string
 
 	// KEKProvider selects the vault Key Encryption Key backend:
 	// "local" (default, dev/test — uses MasterKey) or "vault-transit".
@@ -88,25 +90,26 @@ type Config struct {
 
 func Load() (*Config, error) {
 	cfg := &Config{
-		ListenAddr:        getenv("PAM_LISTEN_ADDR", ":8080"),
-		DatabaseURL:       os.Getenv("PAM_DATABASE_URL"),
-		MasterKey:         os.Getenv("PAM_MASTER_KEY"),
-		APIKey:            os.Getenv("PAM_API_KEY"),
-		BreakGlassKeyHash: os.Getenv("PAM_BREAK_GLASS_KEY_HASH"),
-		SSHAddr:           getenv("PAM_SSH_ADDR", ":2222"),
-		SSHHostKeyPath:    os.Getenv("PAM_SSH_HOST_KEY"),
-		RecordingDir:      getenv("PAM_RECORDING_DIR", "recordings"),
-		LogLevel:          getenv("PAM_LOG_LEVEL", "info"),
-		LogFormat:         getenv("PAM_LOG_FORMAT", "json"),
-		MFARequired:       os.Getenv("PAM_MFA_REQUIRED") == "true",
-		WinRMHTTPS:        os.Getenv("PAM_WINRM_HTTPS") != "false", // default HTTPS
-		WinRMInsecure:     os.Getenv("PAM_WINRM_INSECURE_SKIP_VERIFY") == "true",
-		WinRMNTLM:         os.Getenv("PAM_WINRM_AUTH") == "ntlm",
-		GuacdAddr:         os.Getenv("PAM_GUACD_ADDR"),
-		KEKProvider:       getenv("PAM_KEK_PROVIDER", "local"),
-		TransitAddr:       os.Getenv("PAM_KEK_TRANSIT_ADDR"),
-		TransitToken:      os.Getenv("PAM_KEK_TRANSIT_TOKEN"),
-		TransitKey:        os.Getenv("PAM_KEK_TRANSIT_KEY"),
+		ListenAddr:         getenv("PAM_LISTEN_ADDR", ":8080"),
+		DatabaseURL:        os.Getenv("PAM_DATABASE_URL"),
+		MasterKey:          os.Getenv("PAM_MASTER_KEY"),
+		APIKey:             os.Getenv("PAM_API_KEY"),
+		BreakGlassKeyHash:  os.Getenv("PAM_BREAK_GLASS_KEY_HASH"),
+		SSHAddr:            getenv("PAM_SSH_ADDR", ":2222"),
+		SSHHostKeyPath:     os.Getenv("PAM_SSH_HOST_KEY"),
+		RecordingDir:       getenv("PAM_RECORDING_DIR", "recordings"),
+		LogLevel:           getenv("PAM_LOG_LEVEL", "info"),
+		LogFormat:          getenv("PAM_LOG_FORMAT", "json"),
+		MFARequired:        os.Getenv("PAM_MFA_REQUIRED") == "true",
+		WinRMHTTPS:         os.Getenv("PAM_WINRM_HTTPS") != "false", // default HTTPS
+		WinRMInsecure:      os.Getenv("PAM_WINRM_INSECURE_SKIP_VERIFY") == "true",
+		WinRMNTLM:          os.Getenv("PAM_WINRM_AUTH") == "ntlm",
+		GuacdAddr:          os.Getenv("PAM_GUACD_ADDR"),
+		GuacdRecordingPath: os.Getenv("PAM_GUACD_RECORDING_PATH"),
+		KEKProvider:        getenv("PAM_KEK_PROVIDER", "local"),
+		TransitAddr:        os.Getenv("PAM_KEK_TRANSIT_ADDR"),
+		TransitToken:       os.Getenv("PAM_KEK_TRANSIT_TOKEN"),
+		TransitKey:         os.Getenv("PAM_KEK_TRANSIT_KEY"),
 
 		LDAPURL:                os.Getenv("PAM_LDAP_URL"),
 		LDAPBindDN:             os.Getenv("PAM_LDAP_BIND_DN"),
