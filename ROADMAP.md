@@ -75,7 +75,7 @@ The flagship: users connect *through* pamv1, never holding the credential.
 - [ ] Vault key rotation (re-encrypt job; rotate the KEK / re-wrap data keys)
 - [ ] Postgres TLS (verify-full), scram-sha-256 enforced, least-privilege DB role, [pgAudit](https://www.pgaudit.org/)
 - [ ] Versioned migrations (tern/goose) replacing startup schema
-- [ ] HTTPS with managed certs; strict headers; rate limiting on auth endpoints
+- [x] **Native HTTPS** (`PAM_TLS_CERT`/`PAM_TLS_KEY`, TLS 1.2+), **security headers** (nosniff, frame-deny, referrer, HSTS), **rate limiting** on auth endpoints (`PAM_AUTH_RATE_LIMIT`)
 - [ ] Backup/restore runbook with encrypted backups
 
 ## Phase 6 — Break-glass v2 ⬜

@@ -4,6 +4,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"strconv"
 )
 
 type Config struct {
@@ -27,6 +28,12 @@ type Config struct {
 	LogLevel string
 	// LogFormat is json|text (default json).
 	LogFormat string
+
+	// TLSCert/TLSKey enable native HTTPS on the listen address when both are set.
+	TLSCert string
+	TLSKey  string
+	// AuthRatePerMin limits auth attempts per client IP per minute (0 disables).
+	AuthRatePerMin int
 
 	// MFARequired makes password login require a confirmed TOTP second factor.
 	MFARequired bool
@@ -100,6 +107,9 @@ func Load() (*Config, error) {
 		RecordingDir:       getenv("PAM_RECORDING_DIR", "recordings"),
 		LogLevel:           getenv("PAM_LOG_LEVEL", "info"),
 		LogFormat:          getenv("PAM_LOG_FORMAT", "json"),
+		TLSCert:            os.Getenv("PAM_TLS_CERT"),
+		TLSKey:             os.Getenv("PAM_TLS_KEY"),
+		AuthRatePerMin:     getenvInt("PAM_AUTH_RATE_LIMIT", 20),
 		MFARequired:        os.Getenv("PAM_MFA_REQUIRED") == "true",
 		WinRMHTTPS:         os.Getenv("PAM_WINRM_HTTPS") != "false", // default HTTPS
 		WinRMInsecure:      os.Getenv("PAM_WINRM_INSECURE_SKIP_VERIFY") == "true",
@@ -164,6 +174,15 @@ func Load() (*Config, error) {
 func getenv(key, def string) string {
 	if v := os.Getenv(key); v != "" {
 		return v
+	}
+	return def
+}
+
+func getenvInt(key string, def int) int {
+	if v := os.Getenv(key); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			return n
+		}
 	}
 	return def
 }

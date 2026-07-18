@@ -70,6 +70,9 @@ type Options struct {
 	// GuacdRecordingPath, if set, makes guacd record RDP sessions server-side
 	// (a path on the guacd host).
 	GuacdRecordingPath string
+	// AuthRatePerMin limits authentication attempts per client IP per minute
+	// (0 disables rate limiting).
+	AuthRatePerMin int
 }
 
 type Server struct {
@@ -86,6 +89,7 @@ type Server struct {
 	portalURL          string
 	guacdAddr          string
 	guacdRecordingPath string
+	authLimiter        *rateLimiter
 	log                *slog.Logger
 	mux                *http.ServeMux
 	handler            http.Handler
@@ -121,11 +125,12 @@ func New(st store.Store, v *vault.Vault, resolver *auth.Resolver, authn auth.Aut
 		portalURL:          portalURL,
 		guacdAddr:          opts.GuacdAddr,
 		guacdRecordingPath: opts.GuacdRecordingPath,
+		authLimiter:        newRateLimiter(opts.AuthRatePerMin),
 		log:                logging.Component("api"),
 		mux:                http.NewServeMux(),
 	}
 	s.routes()
-	s.handler = s.withAccessLog(s.mux)
+	s.handler = s.withAccessLog(s.withSecurityHeaders(s.mux))
 	return s, nil
 }
 
@@ -181,15 +186,16 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /healthz", s.health)
 	s.mux.HandleFunc("GET /{$}", web.Index)
 
-	s.mux.HandleFunc("POST /api/login", s.login) // public: this IS authentication
+	// Authentication endpoints are rate-limited per client IP.
+	s.mux.Handle("POST /api/login", s.rateLimit(http.HandlerFunc(s.login))) // public: this IS authentication
 	s.mux.Handle("POST /api/logout", s.authenticated(s.logout))
 	s.mux.HandleFunc("GET /api/auth/oidc/start", s.oidcStart)
-	s.mux.HandleFunc("GET /api/auth/oidc/callback", s.oidcCallback)
+	s.mux.Handle("GET /api/auth/oidc/callback", s.rateLimit(http.HandlerFunc(s.oidcCallback)))
 
 	// Self-service MFA (any authenticated identity manages its own second factor).
 	s.mux.Handle("GET /api/mfa", s.authenticated(s.mfaStatus))
 	s.mux.Handle("POST /api/mfa/enroll", s.authenticated(s.mfaEnroll))
-	s.mux.Handle("POST /api/mfa/verify", s.authenticated(s.mfaVerify))
+	s.mux.Handle("POST /api/mfa/verify", s.rateLimit(s.authenticated(s.mfaVerify)))
 	s.mux.Handle("POST /api/mfa/recovery-codes", s.authenticated(s.mfaRecoveryCodes))
 	s.mux.Handle("DELETE /api/mfa", s.authenticated(s.mfaDisable))
 

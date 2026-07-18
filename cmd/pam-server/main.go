@@ -11,6 +11,7 @@ package main
 import (
 	"context"
 	"crypto/sha256"
+	"crypto/tls"
 	"encoding/hex"
 	"flag"
 	"fmt"
@@ -214,6 +215,7 @@ func run() error {
 		PortalURL:          cfg.PortalURL,
 		GuacdAddr:          cfg.GuacdAddr,
 		GuacdRecordingPath: cfg.GuacdRecordingPath,
+		AuthRatePerMin:     cfg.AuthRatePerMin,
 	})
 	if err != nil {
 		return err
@@ -250,9 +252,19 @@ func run() error {
 		IdleTimeout:       120 * time.Second,
 	}
 
+	tlsEnabled := cfg.TLSCert != "" && cfg.TLSKey != ""
+	if tlsEnabled {
+		srv.TLSConfig = &tls.Config{MinVersion: tls.VersionTLS12}
+	}
 	errc := make(chan error, 1)
-	go func() { errc <- srv.ListenAndServe() }()
-	log.Info("pam-server listening", "addr", cfg.ListenAddr,
+	go func() {
+		if tlsEnabled {
+			errc <- srv.ListenAndServeTLS(cfg.TLSCert, cfg.TLSKey)
+		} else {
+			errc <- srv.ListenAndServe()
+		}
+	}()
+	log.Info("pam-server listening", "addr", cfg.ListenAddr, "tls", tlsEnabled,
 		"breakglass", cfg.BreakGlassKeyHash != "", "log_level", cfg.LogLevel)
 
 	select {

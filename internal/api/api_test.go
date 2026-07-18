@@ -466,6 +466,50 @@ func TestRecoveryCodes(t *testing.T) {
 	}
 }
 
+func TestSecurityHeaders(t *testing.T) {
+	srv := newTestServer(t)
+	_, _ = do(t, srv, http.MethodGet, "/healthz", "", nil)
+	// Fetch headers via a raw request.
+	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/healthz", nil)
+	resp, err := srv.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	for k, v := range map[string]string{
+		"X-Content-Type-Options": "nosniff",
+		"X-Frame-Options":        "DENY",
+		"Referrer-Policy":        "no-referrer",
+	} {
+		if got := resp.Header.Get(k); got != v {
+			t.Errorf("header %s = %q, want %q", k, got, v)
+		}
+	}
+	if resp.Header.Get("Strict-Transport-Security") == "" {
+		t.Error("missing HSTS header")
+	}
+}
+
+func TestAuthRateLimit(t *testing.T) {
+	srv, _ := newTestServerOpts(t,
+		fakeAuthenticator{username: "u", password: "p", role: auth.RoleUser},
+		api.Options{AuthRatePerMin: 3})
+
+	// 3 attempts allowed (wrong creds → 401), the 4th is rate-limited (429).
+	for i := 0; i < 3; i++ {
+		if status, _ := do(t, srv, http.MethodPost, "/api/login", "", map[string]any{
+			"username": "u", "password": "wrong",
+		}); status != http.StatusUnauthorized {
+			t.Fatalf("attempt %d: status %d, want 401", i+1, status)
+		}
+	}
+	if status, _ := do(t, srv, http.MethodPost, "/api/login", "", map[string]any{
+		"username": "u", "password": "wrong",
+	}); status != http.StatusTooManyRequests {
+		t.Fatalf("4th attempt: status %d, want 429", status)
+	}
+}
+
 func TestLoginNotConfigured(t *testing.T) {
 	srv := newTestServer(t) // no authenticator
 	if status, _ := do(t, srv, http.MethodPost, "/api/login", "", map[string]any{
