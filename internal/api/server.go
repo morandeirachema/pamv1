@@ -11,6 +11,7 @@ import (
 	"github.com/morandeirachema/pamv1/internal/auth"
 	"github.com/morandeirachema/pamv1/internal/logging"
 	"github.com/morandeirachema/pamv1/internal/oidc"
+	"github.com/morandeirachema/pamv1/internal/session"
 	"github.com/morandeirachema/pamv1/internal/store"
 	"github.com/morandeirachema/pamv1/internal/vault"
 	"github.com/morandeirachema/pamv1/internal/web"
@@ -75,6 +76,8 @@ type Options struct {
 	AuthRatePerMin int
 	// RevealDisabled makes credential reveal break-glass-only (proxy is the norm).
 	RevealDisabled bool
+	// Sessions is the live-session registry (shared with the proxy).
+	Sessions *session.Registry
 }
 
 type Server struct {
@@ -93,6 +96,7 @@ type Server struct {
 	guacdRecordingPath string
 	authLimiter        *rateLimiter
 	revealDisabled     bool
+	sessions           *session.Registry
 	log                *slog.Logger
 	mux                *http.ServeMux
 	handler            http.Handler
@@ -130,6 +134,7 @@ func New(st store.Store, v *vault.Vault, resolver *auth.Resolver, authn auth.Aut
 		guacdRecordingPath: opts.GuacdRecordingPath,
 		authLimiter:        newRateLimiter(opts.AuthRatePerMin),
 		revealDisabled:     opts.RevealDisabled,
+		sessions:           opts.Sessions,
 		log:                logging.Component("api"),
 		mux:                http.NewServeMux(),
 	}
@@ -221,6 +226,9 @@ func (s *Server) routes() {
 	s.mux.Handle("DELETE /api/credentials/{id}", s.authz(auth.CapManageCredentials, s.deleteCredential))
 
 	s.mux.Handle("GET /api/audit", s.authz(auth.CapReadAudit, s.listAudit))
+
+	s.mux.Handle("GET /api/sessions", s.authz(auth.CapReadAudit, s.listSessions))
+	s.mux.Handle("DELETE /api/sessions/{id}", s.authz(auth.CapManageTargets, s.killSession))
 
 	s.mux.Handle("POST /api/users", s.authz(auth.CapManageUsers, s.createUser))
 	s.mux.Handle("GET /api/users", s.authz(auth.CapManageUsers, s.listUsers))

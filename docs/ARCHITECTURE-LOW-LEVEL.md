@@ -24,6 +24,7 @@ internal/
   guacd/       # Apache Guacamole protocol client (RDP handshake + JIT injection)
   oidc/        # OIDC Authorization Code + PKCE, RS256 JWKS validation
   maint/       # offline maintenance (vault KEK rotation)
+  session/     # live-session registry (list + kill), shared proxy↔api
   auth/        # roles, capabilities, Principal, Resolver (RBAC)
   store/       # Store interface + domain types + CredentialAAD
     memstore/  # in-memory impl (tests, demo)
@@ -284,7 +285,7 @@ secrets. Format `json` (SIEM) or `text` (humans); collect from stdout.
 
 `target.create` · `target.delete` · `credential.create` · `credential.reveal` ·
 `credential.delete` · `credential.reveal_denied` · `grant.create` · `grant.delete` ·
-`winrm.denied` · `user.create` · `user.delete` · `login` · `logout` ·
+`winrm.denied` · `session.kill` · `user.create` · `user.delete` · `login` · `logout` ·
 `mfa.enroll` · `mfa.confirm` · `mfa.disable` · `mfa.recovery_generated` ·
 `mfa.recovery_used` · `winrm.run` · `winrm.error` · `rdp.connect` · `rdp.end` ·
 `rdp.error` · `authz.denied` · `breakglass.access` · `session.start` ·
@@ -336,6 +337,7 @@ secrets. Format `json` (SIEM) or `text` (humans); collect from stdout.
 
 | Date | Change |
 |---|---|
+| 2026-07-19 | Phase 2: live session registry (`internal/session`) — `GET /api/sessions` + `DELETE /api/sessions/{id}` (kill-switch); proxy + RDP register live sessions |
 | 2026-07-18 | Phase 2: per-target authorization (`store.TargetGrant`, `auth.CanConnectTarget`, `/api/targets/{id}/grants`, enforced in proxy/WinRM/RDP); reveal lockdown (`PAM_REVEAL_DISABLED`) |
 | 2026-07-18 | Phase 5: vault KEK rotation (`internal/maint`, `pam-server -rotate-kek`); store `UpdateCredentialSecretEnc` + `ListMFAEnrollments` |
 | 2026-07-18 | Phase 5: transport hardening — native HTTPS (`PAM_TLS_*`), security-headers middleware, per-IP auth rate limiting (`middleware.go`) |

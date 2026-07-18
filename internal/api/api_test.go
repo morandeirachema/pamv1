@@ -18,6 +18,7 @@ import (
 	"github.com/morandeirachema/pamv1/internal/api"
 	"github.com/morandeirachema/pamv1/internal/auth"
 	"github.com/morandeirachema/pamv1/internal/mfa"
+	"github.com/morandeirachema/pamv1/internal/session"
 	"github.com/morandeirachema/pamv1/internal/store"
 	"github.com/morandeirachema/pamv1/internal/store/memstore"
 	"github.com/morandeirachema/pamv1/internal/vault"
@@ -510,6 +511,39 @@ func TestTargetGrantsEnforcement(t *testing.T) {
 	if status, _ := do(t, srv, http.MethodPost, "/api/targets/"+itoa(tid)+"/grants", testAPIKey,
 		map[string]any{"subject_type": "role", "subject": "wizard"}); status != http.StatusUnprocessableEntity {
 		t.Fatalf("invalid role grant should be 422: %d", status)
+	}
+}
+
+func TestLiveSessionsAndKill(t *testing.T) {
+	reg := session.NewRegistry()
+	srv, _ := newTestServerOpts(t, nil, api.Options{Sessions: reg})
+
+	killed := false
+	id := reg.Register(session.Info{Actor: "alice", Target: "web-01", Protocol: "ssh"}, func() { killed = true })
+
+	// Auditor may list live sessions.
+	auditorTok := seedUser(t, srv, "theo", "auditor")
+	status, data := do(t, srv, http.MethodGet, "/api/sessions", auditorTok, nil)
+	if status != http.StatusOK || !strings.Contains(string(data), "web-01") {
+		t.Fatalf("list sessions: %d %s", status, data)
+	}
+
+	// A plain user cannot kill.
+	userTok := seedUser(t, srv, "alice", "user")
+	if status, _ := do(t, srv, http.MethodDelete, "/api/sessions/"+id, userTok, nil); status != http.StatusForbidden {
+		t.Fatalf("user kill should be 403: %d", status)
+	}
+
+	// Admin kills the session.
+	if status, _ := do(t, srv, http.MethodDelete, "/api/sessions/"+id, testAPIKey, nil); status != http.StatusNoContent {
+		t.Fatalf("admin kill: %d", status)
+	}
+	if !killed {
+		t.Fatal("kill func not invoked")
+	}
+	// Killing an unknown id is a 404.
+	if status, _ := do(t, srv, http.MethodDelete, "/api/sessions/nope", testAPIKey, nil); status != http.StatusNotFound {
+		t.Fatalf("kill unknown: %d, want 404", status)
 	}
 }
 

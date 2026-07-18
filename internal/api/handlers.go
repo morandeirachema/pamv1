@@ -729,6 +729,26 @@ func generateToken() (string, error) {
 	return "pamt_" + hex.EncodeToString(b), nil
 }
 
+// --- live sessions (listing + kill-switch) ---
+
+func (s *Server) listSessions(w http.ResponseWriter, r *http.Request) {
+	if s.sessions == nil {
+		writeJSON(w, http.StatusOK, []any{})
+		return
+	}
+	writeJSON(w, http.StatusOK, s.sessions.List())
+}
+
+func (s *Server) killSession(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if s.sessions == nil || !s.sessions.Kill(id) {
+		writeError(w, http.StatusNotFound, "session not found")
+		return
+	}
+	s.audit(r.Context(), "session.kill", "session:"+id)
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // --- audit ---
 
 func (s *Server) listAudit(w http.ResponseWriter, r *http.Request) {

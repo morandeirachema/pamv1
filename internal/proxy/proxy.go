@@ -28,6 +28,7 @@ import (
 
 	"github.com/morandeirachema/pamv1/internal/auth"
 	"github.com/morandeirachema/pamv1/internal/logging"
+	"github.com/morandeirachema/pamv1/internal/session"
 	"github.com/morandeirachema/pamv1/internal/store"
 	"github.com/morandeirachema/pamv1/internal/vault"
 )
@@ -37,6 +38,7 @@ type Config struct {
 	HostKey      ssh.Signer // proxy SSH host key
 	RecordingDir string     // where session recordings are written
 	DialTimeout  time.Duration
+	Sessions     *session.Registry // live-session registry (optional)
 }
 
 type Proxy struct {
@@ -48,6 +50,7 @@ type Proxy struct {
 	hostKey      ssh.Signer
 	recordingDir string
 	dialTimeout  time.Duration
+	sessions     *session.Registry
 
 	mu sync.Mutex
 	ln net.Listener
@@ -74,6 +77,7 @@ func New(st store.Store, v *vault.Vault, resolver *auth.Resolver, cfg Config) (*
 		hostKey:      cfg.HostKey,
 		recordingDir: cfg.RecordingDir,
 		dialTimeout:  cfg.DialTimeout,
+		sessions:     cfg.Sessions,
 	}
 	p.sshCfg = &ssh.ServerConfig{PasswordCallback: p.authenticate}
 	p.sshCfg.AddHostKey(cfg.HostKey)
@@ -227,6 +231,12 @@ func (p *Proxy) handleConn(ctx context.Context, nConn net.Conn) {
 		"host", fmt.Sprintf("%s:%d", target.Host, target.Port), "cred_user", cred.Username)
 	p.audit(ctx, actor, "session.start",
 		fmt.Sprintf("target:%s host:%s:%d cred_user:%s", target.Name, target.Host, target.Port, cred.Username))
+	if p.sessions != nil {
+		sid := p.sessions.Register(session.Info{
+			Actor: actor, Target: target.Name, Protocol: "ssh", Remote: remote, Started: time.Now(),
+		}, func() { sconn.Close() })
+		defer p.sessions.Remove(sid)
+	}
 	defer func() {
 		p.log.Info("session ended", "actor", actor, "target", target.Name)
 		p.audit(ctx, actor, "session.end", "target:"+target.Name)

@@ -31,6 +31,7 @@ import (
 	"github.com/morandeirachema/pamv1/internal/maint"
 	"github.com/morandeirachema/pamv1/internal/oidc"
 	"github.com/morandeirachema/pamv1/internal/proxy"
+	"github.com/morandeirachema/pamv1/internal/session"
 	"github.com/morandeirachema/pamv1/internal/store"
 	"github.com/morandeirachema/pamv1/internal/store/memstore"
 	"github.com/morandeirachema/pamv1/internal/store/pgstore"
@@ -247,7 +248,10 @@ func run() error {
 		return err
 	}
 
+	sessions := session.NewRegistry()
+
 	handler, err := api.New(st, v, resolver, authn, api.Options{
+		Sessions:           sessions,
 		MFARequired:        cfg.MFARequired,
 		RecordingDir:       cfg.RecordingDir,
 		WinRM:              winrm.Client{HTTPS: cfg.WinRMHTTPS, Insecure: cfg.WinRMInsecure, NTLM: cfg.WinRMNTLM, Timeout: 30 * time.Second},
@@ -274,6 +278,7 @@ func run() error {
 		px, err := proxy.New(st, v, resolver, proxy.Config{
 			HostKey:      hostKey,
 			RecordingDir: cfg.RecordingDir,
+			Sessions:     sessions,
 		})
 		if err != nil {
 			return err

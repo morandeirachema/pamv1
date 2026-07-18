@@ -30,7 +30,7 @@ The flagship: users connect *through* pamv1, never holding the credential.
 - [x] Session recording (asciicast v2) stored with a SHA-256 written to the audit trail (tamper evidence)
 - [x] Per-session audit events (start, record, end, denied, error)
 - [x] **Per-target authorization** (`target_grants`): a target with grants only admits matching users/roles (admins always; ungranted targets stay open); enforced in the proxy, WinRM and RDP; managed via `/api/targets/{id}/grants`
-- [ ] Live session listing and kill-switch in portal/API
+- [x] **Live session listing and kill-switch** (`internal/session`): `GET /api/sessions` (auditor+) lists active proxy/RDP sessions; `DELETE /api/sessions/{id}` (admin) terminates one
 - [ ] Hash-chain the recordings (not just per-file hash)
 - [x] Disable `reveal` by policy (`PAM_REVEAL_DISABLED`): reveal becomes break-glass-only, forcing the recorded proxy path
 

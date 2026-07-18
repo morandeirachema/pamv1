@@ -11,6 +11,7 @@ import (
 
 	"github.com/morandeirachema/pamv1/internal/auth"
 	"github.com/morandeirachema/pamv1/internal/guacd"
+	"github.com/morandeirachema/pamv1/internal/session"
 	"github.com/morandeirachema/pamv1/internal/store"
 )
 
@@ -108,6 +109,13 @@ func (s *Server) rdpTunnel(w http.ResponseWriter, r *http.Request) {
 	s.audit(ctx, "rdp.connect", "target:"+target.Name+" cred_user:"+cred.Username+" recording:"+recName)
 	defer s.audit(ctx, "rdp.end", "target:"+target.Name)
 	s.log.Info("rdp session", "actor", principal.Name, "target", target.Name)
+
+	if s.sessions != nil {
+		sid := s.sessions.Register(session.Info{
+			Actor: principal.Name, Target: target.Name, Protocol: "rdp", Remote: r.RemoteAddr, Started: time.Now(),
+		}, func() { gconn.Close() })
+		defer s.sessions.Remove(sid)
+	}
 
 	bridgeGuacd(ctx, ws, gconn)
 }
