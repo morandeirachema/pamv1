@@ -104,6 +104,82 @@ func (s *Server) deleteTarget(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// --- target access grants (per-target authorization) ---
+
+type grantIn struct {
+	SubjectType string `json:"subject_type"`
+	Subject     string `json:"subject"`
+}
+
+func (s *Server) createTargetGrant(w http.ResponseWriter, r *http.Request) {
+	id, ok := idParam(w, r)
+	if !ok {
+		return
+	}
+	var in grantIn
+	if !readJSON(w, r, &in) {
+		return
+	}
+	switch {
+	case in.SubjectType != "user" && in.SubjectType != "role":
+		writeError(w, http.StatusUnprocessableEntity, `subject_type must be "user" or "role"`)
+		return
+	case in.Subject == "":
+		writeError(w, http.StatusUnprocessableEntity, "subject is required")
+		return
+	}
+	if in.SubjectType == "role" {
+		if _, err := auth.ParseRole(in.Subject); err != nil {
+			writeError(w, http.StatusUnprocessableEntity, "subject must be a valid role")
+			return
+		}
+	}
+	g := store.TargetGrant{TargetID: id, SubjectType: in.SubjectType, Subject: in.Subject}
+	if err := s.store.CreateTargetGrant(r.Context(), &g); err != nil {
+		storeError(w, err)
+		return
+	}
+	s.audit(r.Context(), "grant.create", fmt.Sprintf("target:%d %s:%s", id, in.SubjectType, in.Subject))
+	writeJSON(w, http.StatusCreated, g)
+}
+
+func (s *Server) listTargetGrants(w http.ResponseWriter, r *http.Request) {
+	id, ok := idParam(w, r)
+	if !ok {
+		return
+	}
+	grants, err := s.store.ListTargetGrants(r.Context(), id)
+	if err != nil {
+		storeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, grants)
+}
+
+func (s *Server) deleteTargetGrant(w http.ResponseWriter, r *http.Request) {
+	gid, err := strconv.ParseInt(r.PathValue("gid"), 10, 64)
+	if err != nil || gid < 1 {
+		writeError(w, http.StatusUnprocessableEntity, "invalid grant id")
+		return
+	}
+	if err := s.store.DeleteTargetGrant(r.Context(), gid); err != nil {
+		storeError(w, err)
+		return
+	}
+	s.audit(r.Context(), "grant.delete", strconv.FormatInt(gid, 10))
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// authorizedForTarget reports whether the caller may connect to a target under
+// its access grants.
+func (s *Server) authorizedForTarget(ctx context.Context, targetID int64) (bool, error) {
+	grants, err := s.store.ListTargetGrants(ctx, targetID)
+	if err != nil {
+		return false, err
+	}
+	return auth.CanConnectTarget(principalFrom(ctx), grants), nil
+}
+
 // --- credentials ---
 
 type credentialIn struct {
@@ -170,6 +246,13 @@ func (s *Server) listCredentials(w http.ResponseWriter, r *http.Request) {
 // Once the JIT-injection proxy lands, reveal becomes the exception (recorded
 // proxy sessions inject the secret without ever showing it).
 func (s *Server) revealCredential(w http.ResponseWriter, r *http.Request) {
+	// When reveal is disabled by policy, only break-glass may still reveal —
+	// everyone else must go through the recorded, JIT-injecting proxy.
+	if s.revealDisabled && !principalFrom(r.Context()).BreakGlass {
+		s.audit(r.Context(), "credential.reveal_denied", "reason:reveal-disabled-by-policy")
+		writeError(w, http.StatusForbidden, "credential reveal is disabled by policy; connect through the proxy")
+		return
+	}
 	id, ok := idParam(w, r)
 	if !ok {
 		return
@@ -236,6 +319,14 @@ func (s *Server) runWinRM(w http.ResponseWriter, r *http.Request) {
 	}
 	if target.Protocol != "winrm" {
 		writeError(w, http.StatusUnprocessableEntity, "target protocol is not winrm")
+		return
+	}
+	if ok, err := s.authorizedForTarget(r.Context(), target.ID); err != nil {
+		storeError(w, err)
+		return
+	} else if !ok {
+		s.audit(r.Context(), "winrm.denied", "target:"+target.Name+" reason:target-policy")
+		writeError(w, http.StatusForbidden, "not authorized for this target")
 		return
 	}
 	creds, err := s.store.ListCredentials(r.Context(), target.ID)

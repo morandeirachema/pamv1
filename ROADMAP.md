@@ -29,10 +29,10 @@ The flagship: users connect *through* pamv1, never holding the credential.
 - [x] SSH gateway (`golang.org/x/crypto/ssh`): user opens `ssh user@target@pam-proxy`, proxy authenticates the user, pulls the credential from the vault and injects it **just-in-time** into the upstream connection
 - [x] Session recording (asciicast v2) stored with a SHA-256 written to the audit trail (tamper evidence)
 - [x] Per-session audit events (start, record, end, denied, error)
-- [ ] Policy engine / per-target authorization (currently any valid API key can reach any target)
+- [x] **Per-target authorization** (`target_grants`): a target with grants only admits matching users/roles (admins always; ungranted targets stay open); enforced in the proxy, WinRM and RDP; managed via `/api/targets/{id}/grants`
 - [ ] Live session listing and kill-switch in portal/API
 - [ ] Hash-chain the recordings (not just per-file hash)
-- [ ] Disable `reveal` by policy once proxy path is the norm (reveal becomes break-glass-only)
+- [x] Disable `reveal` by policy (`PAM_REVEAL_DISABLED`): reveal becomes break-glass-only, forcing the recorded proxy path
 
 ## Phase 3 — Identity & access control 🚧
 

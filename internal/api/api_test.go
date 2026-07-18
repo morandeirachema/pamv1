@@ -466,6 +466,74 @@ func TestRecoveryCodes(t *testing.T) {
 	}
 }
 
+func TestTargetGrantsEnforcement(t *testing.T) {
+	fake := &fakeWinRM{result: winrm.Result{Stdout: "ok\n"}}
+	srv, _ := newTestServerOpts(t, nil, api.Options{WinRM: fake})
+
+	_, data := do(t, srv, http.MethodPost, "/api/targets", testAPIKey, map[string]any{
+		"name": "win", "host": "h", "port": 5986, "os_type": "windows", "protocol": "winrm",
+	})
+	tid := int64(jsonMap(t, data)["id"].(float64))
+	do(t, srv, http.MethodPost, "/api/credentials", testAPIKey, map[string]any{
+		"target_id": tid, "username": "Administrator", "secret": "s",
+	})
+	aliceTok := seedUser(t, srv, "alice", "user")
+	winrmPath := "/api/targets/" + itoa(tid) + "/winrm"
+	runBody := map[string]any{"command": "whoami"}
+
+	// No grants → open: alice can run.
+	if status, _ := do(t, srv, http.MethodPost, winrmPath, aliceTok, runBody); status != http.StatusOK {
+		t.Fatalf("no grants should be open: %d", status)
+	}
+
+	// Grant to someone else → alice is denied.
+	status, data := do(t, srv, http.MethodPost, "/api/targets/"+itoa(tid)+"/grants", testAPIKey,
+		map[string]any{"subject_type": "user", "subject": "bob"})
+	if status != http.StatusCreated {
+		t.Fatalf("create grant: %d %s", status, data)
+	}
+	if status, _ := do(t, srv, http.MethodPost, winrmPath, aliceTok, runBody); status != http.StatusForbidden {
+		t.Fatalf("ungranted user should be 403: %d", status)
+	}
+
+	// Grant alice's role → allowed again.
+	do(t, srv, http.MethodPost, "/api/targets/"+itoa(tid)+"/grants", testAPIKey,
+		map[string]any{"subject_type": "role", "subject": "user"})
+	if status, _ := do(t, srv, http.MethodPost, winrmPath, aliceTok, runBody); status != http.StatusOK {
+		t.Fatalf("granted role should run: %d", status)
+	}
+
+	// List shows two grants; validation rejects a bad role.
+	if status, data := do(t, srv, http.MethodGet, "/api/targets/"+itoa(tid)+"/grants", testAPIKey, nil); status != http.StatusOK || strings.Count(string(data), "subject") < 2 {
+		t.Fatalf("list grants: %d %s", status, data)
+	}
+	if status, _ := do(t, srv, http.MethodPost, "/api/targets/"+itoa(tid)+"/grants", testAPIKey,
+		map[string]any{"subject_type": "role", "subject": "wizard"}); status != http.StatusUnprocessableEntity {
+		t.Fatalf("invalid role grant should be 422: %d", status)
+	}
+}
+
+func TestRevealDisabledByPolicy(t *testing.T) {
+	srv, _ := newTestServerOpts(t, nil, api.Options{RevealDisabled: true})
+	_, data := do(t, srv, http.MethodPost, "/api/targets", testAPIKey, map[string]any{
+		"name": "t", "host": "h", "os_type": "linux", "protocol": "ssh",
+	})
+	tid := int64(jsonMap(t, data)["id"].(float64))
+	_, data = do(t, srv, http.MethodPost, "/api/credentials", testAPIKey, map[string]any{
+		"target_id": tid, "username": "root", "secret": secretPassword,
+	})
+	cid := int64(jsonMap(t, data)["id"].(float64))
+
+	// Admin reveal is refused under the policy...
+	if status, _ := do(t, srv, http.MethodPost, "/api/credentials/"+itoa(cid)+"/reveal", testAPIKey, nil); status != http.StatusForbidden {
+		t.Fatalf("admin reveal under policy: %d, want 403", status)
+	}
+	// ...but break-glass may still reveal in an emergency.
+	if status, _ := do(t, srv, http.MethodPost, "/api/credentials/"+itoa(cid)+"/reveal", breakGlassKey, nil); status != http.StatusOK {
+		t.Fatalf("break-glass reveal under policy: %d, want 200", status)
+	}
+}
+
 func TestSecurityHeaders(t *testing.T) {
 	srv := newTestServer(t)
 	_, _ = do(t, srv, http.MethodGet, "/healthz", "", nil)

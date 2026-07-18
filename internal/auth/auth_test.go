@@ -45,6 +45,33 @@ func TestRoleCapabilities(t *testing.T) {
 	}
 }
 
+func TestCanConnectTarget(t *testing.T) {
+	admin := &Principal{Name: "boss", Role: RoleAdmin}
+	user := &Principal{Name: "alice", Role: RoleUser}
+	other := &Principal{Name: "bob", Role: RoleUser}
+
+	// No grants → open to any connect-capable principal.
+	if !CanConnectTarget(user, nil) {
+		t.Fatal("no grants should be open")
+	}
+	grants := []store.TargetGrant{
+		{SubjectType: "user", Subject: "alice"},
+		{SubjectType: "role", Subject: "approver"},
+	}
+	if !CanConnectTarget(admin, grants) {
+		t.Fatal("admin should always connect")
+	}
+	if !CanConnectTarget(user, grants) {
+		t.Fatal("granted user should connect")
+	}
+	if CanConnectTarget(other, grants) {
+		t.Fatal("ungranted user must be denied")
+	}
+	if !CanConnectTarget(&Principal{Name: "x", Role: RoleApprover}, grants) {
+		t.Fatal("granted role should connect")
+	}
+}
+
 func TestParseRole(t *testing.T) {
 	for _, ok := range []string{"admin", "user", "auditor", "approver"} {
 		if _, err := ParseRole(ok); err != nil {

@@ -20,6 +20,7 @@ type Memstore struct {
 	sessions map[int64]store.Session
 	mfa      map[string]store.MFAEnrollment
 	recovery map[string]map[string]bool // username -> set of code hashes
+	grants   map[int64]store.TargetGrant
 	audit    []store.AuditEvent
 }
 
@@ -31,6 +32,7 @@ func New() *Memstore {
 		sessions: make(map[int64]store.Session),
 		mfa:      make(map[string]store.MFAEnrollment),
 		recovery: make(map[string]map[string]bool),
+		grants:   make(map[int64]store.TargetGrant),
 	}
 }
 
@@ -86,6 +88,50 @@ func (m *Memstore) DeleteTarget(_ context.Context, id int64) error {
 			delete(m.creds, cid)
 		}
 	}
+	for gid, g := range m.grants {
+		if g.TargetID == id {
+			delete(m.grants, gid)
+		}
+	}
+	return nil
+}
+
+func (m *Memstore) CreateTargetGrant(_ context.Context, g *store.TargetGrant) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.targets[g.TargetID]; !ok {
+		return store.ErrNotFound
+	}
+	for _, ex := range m.grants {
+		if ex.TargetID == g.TargetID && ex.SubjectType == g.SubjectType && ex.Subject == g.Subject {
+			return store.ErrConflict
+		}
+	}
+	g.ID = m.id()
+	m.grants[g.ID] = *g
+	return nil
+}
+
+func (m *Memstore) ListTargetGrants(_ context.Context, targetID int64) ([]store.TargetGrant, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]store.TargetGrant, 0)
+	for _, g := range m.grants {
+		if g.TargetID == targetID {
+			out = append(out, g)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out, nil
+}
+
+func (m *Memstore) DeleteTargetGrant(_ context.Context, id int64) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.grants[id]; !ok {
+		return store.ErrNotFound
+	}
+	delete(m.grants, id)
 	return nil
 }
 

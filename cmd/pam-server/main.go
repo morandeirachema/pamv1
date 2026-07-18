@@ -257,6 +257,7 @@ func run() error {
 		GuacdAddr:          cfg.GuacdAddr,
 		GuacdRecordingPath: cfg.GuacdRecordingPath,
 		AuthRatePerMin:     cfg.AuthRatePerMin,
+		RevealDisabled:     cfg.RevealDisabled,
 	})
 	if err != nil {
 		return err

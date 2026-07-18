@@ -168,7 +168,23 @@ curl -H "X-API-Key: $PAM_API_KEY" http://localhost:8080/api/targets/1
 curl -H "X-API-Key: $PAM_API_KEY" -X DELETE http://localhost:8080/api/targets/1   # cascades to its credentials
 ```
 
-`os_type` ∈ `linux|windows`; `protocol` ∈ `ssh|winrm|rdp` (only `ssh` is brokered today).
+`os_type` ∈ `linux|windows`; `protocol` ∈ `ssh|winrm|rdp`.
+
+**Per-target access grants** restrict who may connect. A target with no grants is
+open to any connect-capable user; add grants to lock it down (admins always have
+access):
+
+```bash
+# Only members of the "user" role, plus alice specifically, may connect to target 1
+curl -H "X-API-Key: $PAM_API_KEY" -X POST http://localhost:8080/api/targets/1/grants -d '{"subject_type":"role","subject":"user"}'
+curl -H "X-API-Key: $PAM_API_KEY" -X POST http://localhost:8080/api/targets/1/grants -d '{"subject_type":"user","subject":"alice"}'
+curl -H "X-API-Key: $PAM_API_KEY" http://localhost:8080/api/targets/1/grants          # list
+curl -H "X-API-Key: $PAM_API_KEY" -X DELETE http://localhost:8080/api/targets/1/grants/2
+```
+
+Grants are enforced by the SSH proxy, WinRM and RDP alike. To force every access
+through the recorded proxy, set `PAM_REVEAL_DISABLED=true` so credential reveal
+becomes break-glass-only.
 
 ## 6. Managing credentials
 

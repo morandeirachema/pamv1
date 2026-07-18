@@ -52,6 +52,16 @@ type Credential struct {
 	RotatedAt  *time.Time `json:"rotated_at,omitempty"`
 }
 
+// TargetGrant authorizes a subject (a specific user, or a whole role) to connect
+// to a target. A target with no grants is open to any connect-capable principal;
+// once it has grants, only matching subjects (plus admins) may connect.
+type TargetGrant struct {
+	ID          int64  `json:"id"`
+	TargetID    int64  `json:"target_id"`
+	SubjectType string `json:"subject_type"` // user | role
+	Subject     string `json:"subject"`
+}
+
 type AuditEvent struct {
 	ID     int64     `json:"id"`
 	TS     time.Time `json:"ts"`
@@ -107,6 +117,10 @@ type Store interface {
 	// by vault key rotation).
 	UpdateCredentialSecretEnc(ctx context.Context, id int64, secretEnc string) error
 	DeleteCredential(ctx context.Context, id int64) error
+
+	CreateTargetGrant(ctx context.Context, g *TargetGrant) error
+	ListTargetGrants(ctx context.Context, targetID int64) ([]TargetGrant, error)
+	DeleteTargetGrant(ctx context.Context, id int64) error
 
 	AppendAudit(ctx context.Context, e *AuditEvent) error
 	ListAudit(ctx context.Context, limit int) ([]AuditEvent, error)

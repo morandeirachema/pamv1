@@ -362,6 +362,43 @@ func TestAuditorCannotConnect(t *testing.T) {
 	}
 }
 
+// TestTargetGrantDeniesUngranted verifies per-target authorization: a user who
+// is not granted access to a target may authenticate but not connect to it.
+func TestTargetGrantDeniesUngranted(t *testing.T) {
+	host, port := startUpstream(t, upstreamUser, upstreamSecret, targetOutput)
+	st := memstore.New()
+	v := mustVault(t)
+	target := seedTarget(t, st, v, host, port)
+
+	const aliceToken = "pamt-alice-token"
+	sum := sha256.Sum256([]byte(aliceToken))
+	if err := st.CreateUser(context.Background(), &store.User{
+		Username: "alice", Role: "user", TokenHash: hex.EncodeToString(sum[:]),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// Grant the target to "bob" only — alice is excluded.
+	if err := st.CreateTargetGrant(context.Background(), &store.TargetGrant{
+		TargetID: target.ID, SubjectType: "user", Subject: "bob",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	addr := startProxy(t, st, v, t.TempDir())
+
+	client, err := dialProxy(t, addr, "web-01", aliceToken)
+	if err != nil {
+		t.Fatalf("alice auth should pass: %v", err)
+	}
+	defer client.Close()
+	if sess, err := client.NewSession(); err == nil {
+		sess.Close()
+		t.Fatal("ungranted user must not open a session to the target")
+	}
+	if seen, _ := waitForAudit(t, st, "session.denied"); !seen["session.denied"] {
+		t.Fatal("target-policy denial must be audited")
+	}
+}
+
 func fieldAfter(s, key string) string {
 	i := strings.Index(s, key)
 	if i < 0 {

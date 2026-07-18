@@ -83,6 +83,31 @@ func (r Role) Can(c Capability) bool {
 	return roleCaps[r][c]
 }
 
+// CanConnectTarget reports whether the principal may connect to a target given
+// its grants. A target with no grants is open to any connect-capable principal;
+// admins may always connect; otherwise a grant must match the user or its role.
+func CanConnectTarget(p *Principal, grants []store.TargetGrant) bool {
+	if p.Role == RoleAdmin {
+		return true
+	}
+	if len(grants) == 0 {
+		return true
+	}
+	for _, g := range grants {
+		switch g.SubjectType {
+		case "role":
+			if g.Subject == string(p.Role) {
+				return true
+			}
+		case "user":
+			if g.Subject == p.Name {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // HighestRole maps directory claims (group DNs, group ids or app-role values) to
 // a role via m (keys compared lower-cased) and returns the highest-privilege
 // match. Shared by the LDAP, Entra and OIDC identity sources.

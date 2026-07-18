@@ -188,6 +188,41 @@ func (s *PGStore) UpdateCredentialSecretEnc(ctx context.Context, id int64, secre
 	return err
 }
 
+func (s *PGStore) CreateTargetGrant(ctx context.Context, g *store.TargetGrant) error {
+	err := s.pool.QueryRow(ctx,
+		`INSERT INTO target_grants (target_id, subject_type, subject) VALUES ($1, $2, $3) RETURNING id`,
+		g.TargetID, g.SubjectType, g.Subject,
+	).Scan(&g.ID)
+	switch pgCode(err) {
+	case pgUniqueViolation:
+		return store.ErrConflict
+	case pgForeignKeyViolation:
+		return store.ErrNotFound
+	}
+	return err
+}
+
+func (s *PGStore) ListTargetGrants(ctx context.Context, targetID int64) ([]store.TargetGrant, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT id, target_id, subject_type, subject FROM target_grants WHERE target_id = $1 ORDER BY id`, targetID)
+	if err != nil {
+		return nil, err
+	}
+	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (store.TargetGrant, error) {
+		var g store.TargetGrant
+		err := row.Scan(&g.ID, &g.TargetID, &g.SubjectType, &g.Subject)
+		return g, err
+	})
+}
+
+func (s *PGStore) DeleteTargetGrant(ctx context.Context, id int64) error {
+	tag, err := s.pool.Exec(ctx, `DELETE FROM target_grants WHERE id = $1`, id)
+	if err == nil && tag.RowsAffected() == 0 {
+		return store.ErrNotFound
+	}
+	return err
+}
+
 func (s *PGStore) DeleteCredential(ctx context.Context, id int64) error {
 	tag, err := s.pool.Exec(ctx, `DELETE FROM credentials WHERE id = $1`, id)
 	if err == nil && tag.RowsAffected() == 0 {

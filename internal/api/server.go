@@ -73,6 +73,8 @@ type Options struct {
 	// AuthRatePerMin limits authentication attempts per client IP per minute
 	// (0 disables rate limiting).
 	AuthRatePerMin int
+	// RevealDisabled makes credential reveal break-glass-only (proxy is the norm).
+	RevealDisabled bool
 }
 
 type Server struct {
@@ -90,6 +92,7 @@ type Server struct {
 	guacdAddr          string
 	guacdRecordingPath string
 	authLimiter        *rateLimiter
+	revealDisabled     bool
 	log                *slog.Logger
 	mux                *http.ServeMux
 	handler            http.Handler
@@ -126,6 +129,7 @@ func New(st store.Store, v *vault.Vault, resolver *auth.Resolver, authn auth.Aut
 		guacdAddr:          opts.GuacdAddr,
 		guacdRecordingPath: opts.GuacdRecordingPath,
 		authLimiter:        newRateLimiter(opts.AuthRatePerMin),
+		revealDisabled:     opts.RevealDisabled,
 		log:                logging.Component("api"),
 		mux:                http.NewServeMux(),
 	}
@@ -203,6 +207,10 @@ func (s *Server) routes() {
 	s.mux.Handle("GET /api/targets", s.authz(auth.CapReadInventory, s.listTargets))
 	s.mux.Handle("GET /api/targets/{id}", s.authz(auth.CapReadInventory, s.getTarget))
 	s.mux.Handle("DELETE /api/targets/{id}", s.authz(auth.CapManageTargets, s.deleteTarget))
+
+	s.mux.Handle("POST /api/targets/{id}/grants", s.authz(auth.CapManageTargets, s.createTargetGrant))
+	s.mux.Handle("GET /api/targets/{id}/grants", s.authz(auth.CapManageTargets, s.listTargetGrants))
+	s.mux.Handle("DELETE /api/targets/{id}/grants/{gid}", s.authz(auth.CapManageTargets, s.deleteTargetGrant))
 
 	s.mux.Handle("POST /api/targets/{id}/winrm", s.authz(auth.CapConnect, s.runWinRM))
 	s.mux.HandleFunc("GET /api/targets/{id}/rdp", s.rdpTunnel) // WebSocket; auths via query token

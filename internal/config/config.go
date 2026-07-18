@@ -34,6 +34,8 @@ type Config struct {
 	TLSKey  string
 	// AuthRatePerMin limits auth attempts per client IP per minute (0 disables).
 	AuthRatePerMin int
+	// RevealDisabled makes credential reveal break-glass-only.
+	RevealDisabled bool
 
 	// MFARequired makes password login require a confirmed TOTP second factor.
 	MFARequired bool
@@ -110,6 +112,7 @@ func Load() (*Config, error) {
 		TLSCert:            os.Getenv("PAM_TLS_CERT"),
 		TLSKey:             os.Getenv("PAM_TLS_KEY"),
 		AuthRatePerMin:     getenvInt("PAM_AUTH_RATE_LIMIT", 20),
+		RevealDisabled:     os.Getenv("PAM_REVEAL_DISABLED") == "true",
 		MFARequired:        os.Getenv("PAM_MFA_REQUIRED") == "true",
 		WinRMHTTPS:         os.Getenv("PAM_WINRM_HTTPS") != "false", // default HTTPS
 		WinRMInsecure:      os.Getenv("PAM_WINRM_INSECURE_SKIP_VERIFY") == "true",

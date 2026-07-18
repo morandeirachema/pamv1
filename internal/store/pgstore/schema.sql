@@ -20,6 +20,16 @@ CREATE TABLE IF NOT EXISTS credentials (
 
 CREATE INDEX IF NOT EXISTS credentials_target_idx ON credentials (target_id);
 
+CREATE TABLE IF NOT EXISTS target_grants (
+    id           BIGSERIAL PRIMARY KEY,
+    target_id    BIGINT NOT NULL REFERENCES targets(id) ON DELETE CASCADE,
+    subject_type TEXT NOT NULL,
+    subject      TEXT NOT NULL,
+    UNIQUE (target_id, subject_type, subject)
+);
+
+CREATE INDEX IF NOT EXISTS target_grants_target_idx ON target_grants (target_id);
+
 CREATE TABLE IF NOT EXISTS audit_events (
     id     BIGSERIAL PRIMARY KEY,
     ts     TIMESTAMPTZ NOT NULL DEFAULT now(),

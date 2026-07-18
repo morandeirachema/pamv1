@@ -198,6 +198,20 @@ func (p *Proxy) handleConn(ctx context.Context, nConn net.Conn) {
 		return
 	}
 
+	// Per-target authorization: honor the target's access grants.
+	grants, err := p.store.ListTargetGrants(ctx, target.ID)
+	if err != nil {
+		p.log.Error("target grants lookup failed", "target", target.Name, "err", err)
+		rejectAll(chans, ssh.Prohibited, "pamv1: authorization check failed")
+		return
+	}
+	if !auth.CanConnectTarget(&auth.Principal{Name: actor, Role: role}, grants) {
+		p.log.Warn("session denied: target policy", "actor", actor, "target", target.Name, "remote", remote)
+		p.audit(ctx, actor, "session.denied", "target:"+target.Name+" reason:target-policy")
+		rejectAll(chans, ssh.Prohibited, "pamv1: not authorized for this target")
+		return
+	}
+
 	upstream, err := p.dialUpstream(target, cred, secret)
 	if err != nil {
 		p.log.Error("upstream connection failed", "actor", actor, "target", target.Name,

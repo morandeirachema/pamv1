@@ -283,7 +283,8 @@ secrets. Format `json` (SIEM) or `text` (humans); collect from stdout.
 ## 5. Audit action vocabulary
 
 `target.create` · `target.delete` · `credential.create` · `credential.reveal` ·
-`credential.delete` · `user.create` · `user.delete` · `login` · `logout` ·
+`credential.delete` · `credential.reveal_denied` · `grant.create` · `grant.delete` ·
+`winrm.denied` · `user.create` · `user.delete` · `login` · `logout` ·
 `mfa.enroll` · `mfa.confirm` · `mfa.disable` · `mfa.recovery_generated` ·
 `mfa.recovery_used` · `winrm.run` · `winrm.error` · `rdp.connect` · `rdp.end` ·
 `rdp.error` · `authz.denied` · `breakglass.access` · `session.start` ·
@@ -295,6 +296,9 @@ secrets. Format `json` (SIEM) or `text` (humans); collect from stdout.
 1. `Credential.SecretEnc` must never be serialized to any client (`json:"-"`).
 2. All key/secret comparisons use `crypto/subtle.ConstantTimeCompare`.
 3. Vault AAD on decrypt must equal AAD on encrypt (`store.CredentialAAD`).
+2a. Per-target authorization: connect paths (proxy/WinRM/RDP) must pass
+   `auth.CanConnectTarget` — a target with grants admits only matching
+   users/roles (admins always; ungranted targets are open).
 3a. Envelope encryption: per-secret data keys are wrapped by the KEK and zeroed
    after use; the base64 `PAM_MASTER_KEY` (local KEK) is dev/test only —
    production uses a KMS-backed KEK.
@@ -332,6 +336,7 @@ secrets. Format `json` (SIEM) or `text` (humans); collect from stdout.
 
 | Date | Change |
 |---|---|
+| 2026-07-18 | Phase 2: per-target authorization (`store.TargetGrant`, `auth.CanConnectTarget`, `/api/targets/{id}/grants`, enforced in proxy/WinRM/RDP); reveal lockdown (`PAM_REVEAL_DISABLED`) |
 | 2026-07-18 | Phase 5: vault KEK rotation (`internal/maint`, `pam-server -rotate-kek`); store `UpdateCredentialSecretEnc` + `ListMFAEnrollments` |
 | 2026-07-18 | Phase 5: transport hardening — native HTTPS (`PAM_TLS_*`), security-headers middleware, per-IP auth rate limiting (`middleware.go`) |
 | 2026-07-18 | Phase 4: NTLM WinRM auth (`PAM_WINRM_AUTH`); `guacd` package + `GET /api/targets/{id}/rdp` WebSocket tunnel (RDP via Guacamole with JIT injection); `PAM_GUACD_ADDR` |
