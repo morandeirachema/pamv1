@@ -27,6 +27,7 @@ import (
 	"github.com/morandeirachema/pamv1/internal/auth"
 	"github.com/morandeirachema/pamv1/internal/config"
 	"github.com/morandeirachema/pamv1/internal/logging"
+	"github.com/morandeirachema/pamv1/internal/oidc"
 	"github.com/morandeirachema/pamv1/internal/proxy"
 	"github.com/morandeirachema/pamv1/internal/store"
 	"github.com/morandeirachema/pamv1/internal/store/memstore"
@@ -107,6 +108,36 @@ func buildAuthenticator(cfg *config.Config, log *slog.Logger) (auth.Authenticato
 	return auth.NewChain(sources...), nil
 }
 
+// buildOIDC constructs the OIDC provider when PAM_OIDC_ISSUER is set, filling in
+// the authorize/token/JWKS endpoints from discovery when not given explicitly.
+func buildOIDC(ctx context.Context, cfg *config.Config, log *slog.Logger) (*oidc.Provider, error) {
+	if cfg.OIDCIssuer == "" {
+		return nil, nil
+	}
+	authURL, tokenURL, jwksURL := cfg.OIDCAuthURL, cfg.OIDCTokenURL, cfg.OIDCJWKSURL
+	if authURL == "" || tokenURL == "" || jwksURL == "" {
+		a, t, j, err := oidc.Discover(ctx, nil, cfg.OIDCIssuer)
+		if err != nil {
+			return nil, fmt.Errorf("oidc discovery: %w", err)
+		}
+		authURL, tokenURL, jwksURL = a, t, j
+	}
+	var scopes []string
+	if cfg.OIDCScopes != "" {
+		scopes = strings.Fields(cfg.OIDCScopes)
+	}
+	p, err := oidc.NewProvider(oidc.Config{
+		Issuer: cfg.OIDCIssuer, ClientID: cfg.OIDCClientID, ClientSecret: cfg.OIDCClientSecret,
+		RedirectURL: cfg.OIDCRedirectURL, AuthURL: authURL, TokenURL: tokenURL, JWKSURL: jwksURL,
+		Scopes: scopes,
+	})
+	if err != nil {
+		return nil, err
+	}
+	log.Info("oidc login enabled", "issuer", cfg.OIDCIssuer)
+	return p, nil
+}
+
 // roleMap builds a lower-cased key → role map for the four role slots, skipping
 // empty entries. Keys are group DNs (LDAP) or app-role/group ids (Entra).
 func roleMap(admin, user, auditor, approver string) map[string]auth.Role {
@@ -169,10 +200,18 @@ func run() error {
 		return err
 	}
 
+	oidcProvider, err := buildOIDC(ctx, cfg, log)
+	if err != nil {
+		return err
+	}
+
 	handler, err := api.New(st, v, resolver, authn, api.Options{
 		MFARequired:  cfg.MFARequired,
 		RecordingDir: cfg.RecordingDir,
 		WinRM:        winrm.Client{HTTPS: cfg.WinRMHTTPS, Insecure: cfg.WinRMInsecure, Timeout: 30 * time.Second},
+		OIDC:         oidcProvider,
+		OIDCRoleMap:  roleMap(cfg.OIDCRoleAdmin, cfg.OIDCRoleUser, cfg.OIDCRoleAuditor, cfg.OIDCRoleApprover),
+		PortalURL:    cfg.PortalURL,
 	})
 	if err != nil {
 		return err

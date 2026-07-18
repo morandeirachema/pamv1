@@ -21,6 +21,7 @@ internal/
   vault/       # AES-256-GCM encrypt/decrypt, key gen
   mfa/         # TOTP (RFC 6238) generate/validate + otpauth URI
   winrm/       # WinRM command Runner (Windows targets) + real client
+  oidc/        # OIDC Authorization Code + PKCE, RS256 JWKS validation
   auth/        # roles, capabilities, Principal, Resolver (RBAC)
   store/       # Store interface + domain types + CredentialAAD
     memstore/  # in-memory impl (tests, demo)
@@ -93,7 +94,18 @@ Pluggable and composable via `NewChain` (try each, first success wins):
   signature validation is a hardening TODO (token is from a trusted back-channel).
 
 `POST /api/login` runs the configured authenticator, enforces TOTP if enrolled,
-and issues a session token (see `api`).
+and issues a session token (see `api`). `HighestRole` is the shared claim→role
+mapper used by LDAP, Entra and OIDC.
+
+**OIDC login** (`internal/oidc`, Phase 3b hardening): the production-grade
+browser flow. `GET /api/auth/oidc/start` generates PKCE + state + nonce (kept in
+an in-memory `oidcPending` store) and redirects to the IdP. `GET
+/api/auth/oidc/callback` validates state, exchanges the code, and **verifies the
+ID token's RS256 signature against the IdP JWKS** plus issuer/audience/nonce/exp,
+maps roles/groups → role, issues a session, and redirects to the portal with the
+token in the URL fragment. Unlike ROPC, the IdP performs the login (so its
+Conditional Access / MFA apply); pamv1 does not layer its own TOTP on OIDC. HA
+needs shared `oidcPending` storage (roadmap).
 
 Capability grants: admin = all; user = `CapReadInventory`+`CapConnect`; auditor =
 `CapReadInventory`+`CapReadAudit`; approver = auditor + `CapApprove` (approval
@@ -236,6 +248,11 @@ the client channel closes.
 | `PAM_MFA_REQUIRED` | `false` | require a confirmed TOTP factor for password login |
 | `PAM_WINRM_HTTPS` | `true` | use HTTPS (5986) for WinRM |
 | `PAM_WINRM_INSECURE_SKIP_VERIFY` | `false` | skip WinRM TLS verify (dev only) |
+| `PAM_OIDC_ISSUER` | — (disabled) | OIDC login; set to enable the auth-code flow |
+| `PAM_OIDC_CLIENT_ID` / `_CLIENT_SECRET` / `_REDIRECT_URL` / `_SCOPES` | — | OIDC client |
+| `PAM_OIDC_AUTH_URL` / `_TOKEN_URL` / `_JWKS_URL` | — (discovered) | override endpoints |
+| `PAM_OIDC_ROLE_ADMIN` / `_USER` / `_AUDITOR` / `_APPROVER` | — | OIDC app-role/group → role |
+| `PAM_PORTAL_URL` | `/` | OIDC callback redirect base |
 
 ## 4a. Logging (operational, to stdout)
 
@@ -284,6 +301,8 @@ secrets. Format `json` (SIEM) or `text` (humans); collect from stdout.
 - `auth`: role→capability matrix, role parsing, resolver (bootstrap/break-glass/token/**session**/unknown); **LDAP** authenticate (success, highest-privilege-wins, wrong password, no mapped group, unknown user) against a fake `ldapConn`.
 - `mfa`: RFC 6238 test vector, validate roundtrip + skew + wrong/short code, otpauth URI, secret randomness, recovery-code generation.
 - `api` (WinRM): JIT injection (fake runner receives the vaulted secret), non-Windows target rejected, `CapConnect` required, transcript recorded + audited.
+- `oidc`: Exchange with a real RSA-signed token (valid), and rejects bad signature / wrong issuer / wrong audience / nonce mismatch / expired; PKCE + auth URL.
+- `api` (OIDC): full flow (start redirect → callback with a signed token → session → admin role enforced), bad-state error redirect, not-configured 404.
 - `auth` (Entra/chain): Entra app-role & group login, highest-privilege-wins, bad password, no mapped role (mock token endpoint); chain resolves via a later source and rejects when none match.
 - `api`: full CRUD flow, auth required, secret-non-leak, cascade delete, break-glass audited, validation/conflict, **RBAC** (user/auditor/approver each allowed only their capabilities), **login session** (issue → use with role enforcement → logout revokes), login-not-configured 503, **MFA** (enroll → confirm → login requires OTP → wrong OTP rejected), **enforce-MFA** (enrollment-only session blocked from other routes → enroll → full session), **recovery codes** (login with a code, single-use).
 - `proxy`: **end-to-end JIT injection** against an in-process upstream sshd that
@@ -296,6 +315,7 @@ secrets. Format `json` (SIEM) or `text` (humans); collect from stdout.
 
 | Date | Change |
 |---|---|
+| 2026-07-18 | Phase 3b hardening: `oidc` package (Authorization Code + PKCE, RS256 JWKS validation, discovery); `/api/auth/oidc/{start,callback}`; portal SSO token pickup; shared `auth.HighestRole`; `PAM_OIDC_*` config |
 | 2026-07-18 | Phase 4: `winrm` package + `POST /api/targets/{id}/winrm` (JIT credential injection on Windows, transcript recording, `winrm.run` audit); `PAM_WINRM_*` config |
 | 2026-07-18 | Phase 3b hardening: enforce-MFA policy (`PAM_MFA_REQUIRED`, enrollment-only sessions via `Session.Scope`/`Principal.EnrollOnly`) + single-use recovery codes (`/api/mfa/recovery-codes`) |
 | 2026-07-18 | Phase 3b Entra: `EntraAuthenticator` (Azure AD, OAuth2 ROPC, app-roles/groups → role); `ChainAuthenticator`; `PAM_ENTRA_*` env; LDAP + Entra composable |

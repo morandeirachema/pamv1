@@ -45,7 +45,13 @@ An administrator assigns you one of four roles:
 
 ## 3. How you sign in
 
-There are two ways, depending on how your organization set things up:
+There are a few ways, depending on how your organization set things up:
+
+- **Single sign-on (SSO)** — click **Single sign-on** on the Sign On screen (or
+  open `/api/auth/oidc/start`). You authenticate with your identity provider
+  (Entra ID, Okta, etc., including its MFA), then land back in the portal already
+  signed in. This is the smoothest option when your org enabled it.
+
 
 - **Active Directory (AD) login** — you sign in with your **AD username and
   password**. On the portal Sign On screen, fill *User* and *Password*. pamv1
@@ -167,6 +173,7 @@ emergency access and always deserve a look.
 
 | Date | Change |
 |---|---|
+| 2026-07-18 | Phase 3b: OIDC single sign-on option on Sign On |
 | 2026-07-18 | Phase 3b: recovery codes + enforce-MFA (enrollment-only first sign-in) |
 | 2026-07-18 | Phase 3b: TOTP MFA (enroll/confirm, MFA code on Sign On) |
 | 2026-07-18 | Phase 3b: Active Directory login (username + password → session token) added to Sign On |

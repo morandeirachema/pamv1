@@ -65,6 +65,21 @@ type Config struct {
 	EntraRoleUser      string
 	EntraRoleAuditor   string
 	EntraRoleApprover  string
+
+	// OIDC* configure the browser Authorization Code login flow. Empty issuer disables it.
+	OIDCIssuer       string
+	OIDCClientID     string
+	OIDCClientSecret string
+	OIDCRedirectURL  string
+	OIDCScopes       string // space-separated; default "openid profile"
+	OIDCAuthURL      string // optional; discovered from issuer if empty
+	OIDCTokenURL     string
+	OIDCJWKSURL      string
+	OIDCRoleAdmin    string
+	OIDCRoleUser     string
+	OIDCRoleAuditor  string
+	OIDCRoleApprover string
+	PortalURL        string
 }
 
 func Load() (*Config, error) {
@@ -107,6 +122,20 @@ func Load() (*Config, error) {
 		EntraRoleUser:      os.Getenv("PAM_ENTRA_ROLE_USER"),
 		EntraRoleAuditor:   os.Getenv("PAM_ENTRA_ROLE_AUDITOR"),
 		EntraRoleApprover:  os.Getenv("PAM_ENTRA_ROLE_APPROVER"),
+
+		OIDCIssuer:       os.Getenv("PAM_OIDC_ISSUER"),
+		OIDCClientID:     os.Getenv("PAM_OIDC_CLIENT_ID"),
+		OIDCClientSecret: os.Getenv("PAM_OIDC_CLIENT_SECRET"),
+		OIDCRedirectURL:  os.Getenv("PAM_OIDC_REDIRECT_URL"),
+		OIDCScopes:       os.Getenv("PAM_OIDC_SCOPES"),
+		OIDCAuthURL:      os.Getenv("PAM_OIDC_AUTH_URL"),
+		OIDCTokenURL:     os.Getenv("PAM_OIDC_TOKEN_URL"),
+		OIDCJWKSURL:      os.Getenv("PAM_OIDC_JWKS_URL"),
+		OIDCRoleAdmin:    os.Getenv("PAM_OIDC_ROLE_ADMIN"),
+		OIDCRoleUser:     os.Getenv("PAM_OIDC_ROLE_USER"),
+		OIDCRoleAuditor:  os.Getenv("PAM_OIDC_ROLE_AUDITOR"),
+		OIDCRoleApprover: os.Getenv("PAM_OIDC_ROLE_APPROVER"),
+		PortalURL:        os.Getenv("PAM_PORTAL_URL"),
 	}
 	// MasterKey is required only for the local KEK provider; a KMS-backed
 	// provider (e.g. vault-transit) holds the key material instead. The KEK

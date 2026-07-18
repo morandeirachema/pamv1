@@ -123,18 +123,7 @@ func (a *EntraAuthenticator) Authenticate(ctx context.Context, username, passwor
 }
 
 func (a *EntraAuthenticator) roleFor(roles, groups []string) (Role, bool) {
-	have := make(map[Role]bool)
-	for _, claim := range append(append([]string{}, roles...), groups...) {
-		if r, ok := a.cfg.RoleMap[strings.ToLower(claim)]; ok {
-			have[r] = true
-		}
-	}
-	for _, r := range []Role{RoleAdmin, RoleApprover, RoleAuditor, RoleUser} {
-		if have[r] {
-			return r, true
-		}
-	}
-	return "", false
+	return HighestRole(append(append([]string{}, roles...), groups...), a.cfg.RoleMap)
 }
 
 // parseJWTClaims decodes the (unverified) payload of a JWT. Safe here because

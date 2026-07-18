@@ -283,6 +283,29 @@ pamv1 tries each (chain). **Caveats:** ROPC does not trigger Entra Conditional
 Access or IdP-side MFA — layer pamv1's own TOTP MFA on top; the OIDC auth-code
 flow is the production-recommended upgrade (roadmap). Always use HTTPS.
 
+### OIDC single sign-on (recommended for Entra)
+
+The **Authorization Code + PKCE** flow is the production-grade alternative to
+ROPC: the user authenticates *at the IdP* (so its MFA and Conditional Access
+apply) and pamv1 validates the returned ID token's **RS256 signature** against
+the IdP's JWKS. Enable it:
+
+```bash
+PAM_OIDC_ISSUER=https://login.microsoftonline.com/<tenant>/v2.0
+PAM_OIDC_CLIENT_ID=<app-client-id>
+PAM_OIDC_CLIENT_SECRET=<client-secret>
+PAM_OIDC_REDIRECT_URL=https://pam.example.com/api/auth/oidc/callback
+PAM_OIDC_ROLE_ADMIN=pam.admin   # app role value / group id -> role
+PAM_OIDC_ROLE_USER=pam.user
+```
+
+Register `PAM_OIDC_REDIRECT_URL` as a redirect URI in the app registration. The
+authorize/token/JWKS endpoints are auto-discovered from the issuer. Users click
+**Single sign-on** on the portal (or hit `/api/auth/oidc/start`); after the IdP,
+the callback issues a pamv1 session and returns to the portal. Note: pamv1's own
+TOTP is not layered on OIDC (the IdP owns MFA there). A shared state store for
+multi-replica HA is on the roadmap.
+
 ### Multi-factor authentication (TOTP)
 
 Users can add a second factor ([TOTP](https://en.wikipedia.org/wiki/Time-based_one-time_password),
@@ -426,6 +449,7 @@ evidence). Replay with [asciinema](https://asciinema.org/): `asciinema play <fil
 
 | Date | Change |
 |---|---|
+| 2026-07-18 | Phase 3b: OIDC single sign-on (Authorization Code + PKCE, JWKS validation) |
 | 2026-07-18 | Phase 4: Windows targets — WinRM command execution with JIT credentials |
 | 2026-07-18 | Phase 3b: enforce-MFA policy (`PAM_MFA_REQUIRED`) + single-use recovery codes |
 | 2026-07-18 | Phase 3b: Microsoft Entra ID (Azure AD) login setup (app roles → roles, sovereign host) |

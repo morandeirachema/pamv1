@@ -10,6 +10,7 @@ import (
 
 	"github.com/morandeirachema/pamv1/internal/auth"
 	"github.com/morandeirachema/pamv1/internal/logging"
+	"github.com/morandeirachema/pamv1/internal/oidc"
 	"github.com/morandeirachema/pamv1/internal/store"
 	"github.com/morandeirachema/pamv1/internal/vault"
 	"github.com/morandeirachema/pamv1/internal/web"
@@ -57,6 +58,12 @@ type Options struct {
 	WinRM winrm.Runner
 	// RecordingDir is where session/command transcripts are written.
 	RecordingDir string
+	// OIDC (optional) enables the browser Authorization Code login flow.
+	OIDC *oidc.Provider
+	// OIDCRoleMap maps OIDC app-role/group claims to roles.
+	OIDCRoleMap map[string]auth.Role
+	// PortalURL is where the OIDC callback redirects (default "/").
+	PortalURL string
 }
 
 type Server struct {
@@ -67,6 +74,10 @@ type Server struct {
 	winrm        winrm.Runner
 	mfaRequired  bool
 	recordingDir string
+	oidc         *oidc.Provider
+	oidcRoleMap  map[string]auth.Role
+	oidcPending  *oidcPending
+	portalURL    string
 	log          *slog.Logger
 	mux          *http.ServeMux
 	handler      http.Handler
@@ -84,6 +95,10 @@ func New(st store.Store, v *vault.Vault, resolver *auth.Resolver, authn auth.Aut
 	if runner == nil {
 		runner = winrm.Client{HTTPS: true}
 	}
+	portalURL := opts.PortalURL
+	if portalURL == "" {
+		portalURL = "/"
+	}
 	s := &Server{
 		store:        st,
 		vault:        v,
@@ -92,6 +107,10 @@ func New(st store.Store, v *vault.Vault, resolver *auth.Resolver, authn auth.Aut
 		winrm:        runner,
 		mfaRequired:  opts.MFARequired,
 		recordingDir: opts.RecordingDir,
+		oidc:         opts.OIDC,
+		oidcRoleMap:  opts.OIDCRoleMap,
+		oidcPending:  newOIDCPending(),
+		portalURL:    portalURL,
 		log:          logging.Component("api"),
 		mux:          http.NewServeMux(),
 	}
@@ -154,6 +173,8 @@ func (s *Server) routes() {
 
 	s.mux.HandleFunc("POST /api/login", s.login) // public: this IS authentication
 	s.mux.Handle("POST /api/logout", s.authenticated(s.logout))
+	s.mux.HandleFunc("GET /api/auth/oidc/start", s.oidcStart)
+	s.mux.HandleFunc("GET /api/auth/oidc/callback", s.oidcCallback)
 
 	// Self-service MFA (any authenticated identity manages its own second factor).
 	s.mux.Handle("GET /api/mfa", s.authenticated(s.mfaStatus))

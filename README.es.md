@@ -65,12 +65,12 @@ Los componentes con línea discontinua (objetivos Windows) llegan en la [Fase 4]
 
 ## Qué funciona hoy (Fases 1–3b)
 
-- **Inicio de sesión con Active Directory y Entra ID** — autentícate con usuario + contraseña
-  de AD por **LDAPS**, o con **Microsoft Entra ID (Azure AD)**; los grupos / app roles del
-  directorio se mapean a los cuatro roles (gana el de mayor privilegio) y `POST /api/login`
-  emite un token de sesión de corta duración que sirve en el portal y en el proxy. Ambas
-  fuentes pueden habilitarse a la vez; los tokens locales y el break-glass quedan como vía de
-  emergencia.
+- **Inicio de sesión con AD, Entra ID y SSO OIDC** — autentícate con usuario + contraseña de
+  AD por **LDAPS**, con **Microsoft Entra ID**, o mediante **SSO OIDC (Authorization Code +
+  PKCE)** (el IdP hace el login y su MFA; pamv1 valida la firma RS256 del ID token contra el
+  JWKS del IdP). Los grupos / app roles se mapean a los cuatro roles y el login emite un token
+  de sesión que sirve en el portal y el proxy. Las fuentes se combinan; los tokens locales y el
+  break-glass quedan como vía de emergencia.
 - **Control de acceso basado en roles** — cuatro perfiles (`admin`, `user`, `auditor`,
   `approver`) con una única matriz rol→capacidad aplicada tanto por la API REST como por el
   proxy SSH. Los administradores emiten tokens por usuario (almacenados solo como SHA-256);

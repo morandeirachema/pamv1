@@ -52,8 +52,9 @@ The flagship: users connect *through* pamv1, never holding the credential.
 - [x] **MFA: TOTP** (RFC 6238) enrollment + verification (`internal/mfa`), secret stored vault-encrypted, enforced on `/api/login`; self-service `/api/mfa/*` (NIS2 Art. 21(2)(j))
 - [x] **Microsoft Entra ID (Azure AD)** login: OAuth2 (ROPC) against the tenant, Entra app roles / groups → the four roles; composable with LDAP via a chain authenticator; sovereign-cloud authority host
 - [x] **Enforce-MFA policy** (`PAM_MFA_REQUIRED`) with enrollment-only sessions, and **single-use recovery codes**
-- [ ] Entra OIDC auth-code flow + JWKS signature validation (production hardening over ROPC)
+- [x] **OIDC Authorization Code flow + PKCE + JWKS signature validation** (`internal/oidc`): browser SSO (`/api/auth/oidc/{start,callback}`), IdP-side MFA/Conditional Access, ID-token verified (RS256, iss/aud/nonce/exp), discovery
 - [ ] Optional Kerberos bind
+- [ ] OIDC pending-state shared store for multi-replica HA
 - [x] Local emergency admin kept for AD-down scenarios (bootstrap key + break-glass)
 
 ## Phase 4 — Windows targets 🚧

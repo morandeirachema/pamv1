@@ -53,9 +53,19 @@
 (() => {
   const term = document.getElementById("term");
   let apiKey = sessionStorage.getItem("pam_api_key") || "";
+
+  // Pick up a token/error handed back by the OIDC callback in the URL fragment.
+  let ssoMsg = "", ssoErr = false;
+  if (location.hash.length > 1) {
+    const h = new URLSearchParams(location.hash.slice(1));
+    if (h.get("pam_token")) { apiKey = h.get("pam_token"); sessionStorage.setItem("pam_api_key", apiKey); ssoMsg = "SINGLE SIGN-ON COMPLETE."; }
+    else if (h.get("pam_error")) { ssoMsg = "SSO FAILED: " + h.get("pam_error").toUpperCase(); ssoErr = true; }
+    history.replaceState(null, "", location.pathname + location.search);
+  }
+
   let screen = apiKey ? "main" : "signon";
   let back = "main";
-  let msg = "", msgErr = false;
+  let msg = ssoMsg, msgErr = ssoErr;
   let targets = [], creds = [], audit = [], viewCred = null;
 
   const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
@@ -119,7 +129,8 @@
 </form>
 
 <div class="cyan indent">Directory (AD) users: enter User + Password (+ MFA code if enrolled). Token
-users: leave Password blank and enter the access token. Press Enter to sign on.</div>
+users: leave Password blank and enter the access token. Press Enter to sign on.
+Single sign-on (OIDC): <a href="/api/auth/oidc/start" style="color:#4be0e0">/api/auth/oidc/start</a></div>
 ${fkeys("")}
 <div class="red indent">UNAUTHORIZED USE OF THIS SYSTEM IS PROHIBITED AND AUDITED.</div>`;
         document.getElementById("f-signon").onsubmit = async (ev) => {

@@ -68,7 +68,7 @@ flowchart TB
 | **Break-glass** | Sealed emergency access, loud + audited | ✅ Phase 1 |
 | **Session Proxy** | Broker SSH; **JIT credential injection**; record sessions | ✅ Phase 2 |
 | **RBAC** | Four profiles (admin/user/auditor/approver), per-user tokens | ✅ Phase 3a |
-| **AD / Entra login** | LDAPS + Entra ID (Azure AD), groups/app-roles → roles, session tokens | ✅ Phase 3b |
+| **AD / Entra / OIDC login** | LDAPS + Entra ID (ROPC) + OIDC auth-code SSO, groups/app-roles → roles, session tokens | ✅ Phase 3b |
 | **MFA** | TOTP (RFC 6238), recovery codes, enforce-MFA policy | ✅ Phase 3b |
 | **Windows access** | WinRM command exec with JIT credentials (RDP planned) | 🚧 Phase 4 |
 | **Credential lifecycle** | Rotation, checkout/check-in, discovery | ⬜ Phase 7 |
@@ -152,6 +152,7 @@ flowchart LR
 
 | Date | Change |
 |---|---|
+| 2026-07-18 | Phase 3b hardening: OIDC Authorization Code SSO (PKCE + JWKS signature validation) |
 | 2026-07-18 | Phase 4: Windows targets — WinRM command execution with JIT credential injection, recorded + audited |
 | 2026-07-18 | Phase 3b: AD (LDAPS) **+ Entra ID (Azure AD)** login, groups/app-roles → roles, session tokens; **TOTP MFA**; envelope-encrypted vault + operational logging |
 | 2026-07-18 | Phase 3a: RBAC with four profiles (admin/user/auditor/approver), per-user tokens, enforced in API + proxy |

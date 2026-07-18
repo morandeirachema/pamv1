@@ -127,16 +127,5 @@ func (a *LDAPAuthenticator) Authenticate(ctx context.Context, username, password
 
 // roleForGroups returns the highest-privilege role among the user's groups.
 func (a *LDAPAuthenticator) roleForGroups(groups []string) (Role, bool) {
-	have := make(map[Role]bool)
-	for _, g := range groups {
-		if r, ok := a.cfg.GroupRoleMap[strings.ToLower(g)]; ok {
-			have[r] = true
-		}
-	}
-	for _, r := range []Role{RoleAdmin, RoleApprover, RoleAuditor, RoleUser} {
-		if have[r] {
-			return r, true
-		}
-	}
-	return "", false
+	return HighestRole(groups, a.cfg.GroupRoleMap)
 }

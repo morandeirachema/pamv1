@@ -20,6 +20,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/morandeirachema/pamv1/internal/store"
 )
@@ -80,6 +81,24 @@ var roleCaps = map[Role]map[Capability]bool{
 // Can reports whether the role is granted the capability.
 func (r Role) Can(c Capability) bool {
 	return roleCaps[r][c]
+}
+
+// HighestRole maps directory claims (group DNs, group ids or app-role values) to
+// a role via m (keys compared lower-cased) and returns the highest-privilege
+// match. Shared by the LDAP, Entra and OIDC identity sources.
+func HighestRole(claims []string, m map[string]Role) (Role, bool) {
+	have := make(map[Role]bool)
+	for _, c := range claims {
+		if r, ok := m[strings.ToLower(c)]; ok {
+			have[r] = true
+		}
+	}
+	for _, r := range []Role{RoleAdmin, RoleApprover, RoleAuditor, RoleUser} {
+		if have[r] {
+			return r, true
+		}
+	}
+	return "", false
 }
 
 // SessionScopeEnroll marks a login session that may only be used to complete
