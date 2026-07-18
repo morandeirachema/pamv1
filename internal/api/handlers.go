@@ -10,6 +10,8 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -17,6 +19,7 @@ import (
 	"github.com/morandeirachema/pamv1/internal/auth"
 	"github.com/morandeirachema/pamv1/internal/mfa"
 	"github.com/morandeirachema/pamv1/internal/store"
+	"github.com/morandeirachema/pamv1/internal/winrm"
 )
 
 var (
@@ -202,6 +205,112 @@ func (s *Server) deleteCredential(w http.ResponseWriter, r *http.Request) {
 	}
 	s.audit(r.Context(), "credential.delete", strconv.FormatInt(id, 10))
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// --- Windows targets (WinRM command execution) ---
+
+type winrmRunIn struct {
+	Command string `json:"command"`
+}
+
+// runWinRM executes a command on a Windows target over WinRM, injecting the
+// target's vaulted credential just-in-time (the caller never sees it). The
+// command + output are recorded and the run is audited.
+func (s *Server) runWinRM(w http.ResponseWriter, r *http.Request) {
+	id, ok := idParam(w, r)
+	if !ok {
+		return
+	}
+	var in winrmRunIn
+	if !readJSON(w, r, &in) {
+		return
+	}
+	if in.Command == "" {
+		writeError(w, http.StatusUnprocessableEntity, "command is required")
+		return
+	}
+	target, err := s.store.GetTarget(r.Context(), id)
+	if err != nil {
+		storeError(w, err)
+		return
+	}
+	if target.Protocol != "winrm" {
+		writeError(w, http.StatusUnprocessableEntity, "target protocol is not winrm")
+		return
+	}
+	creds, err := s.store.ListCredentials(r.Context(), target.ID)
+	if err != nil {
+		storeError(w, err)
+		return
+	}
+	if len(creds) == 0 {
+		writeError(w, http.StatusUnprocessableEntity, "target has no credential")
+		return
+	}
+	cred := creds[0]
+
+	// Just-in-time: the secret exists only for this call.
+	secret, err := s.vault.Decrypt(r.Context(), cred.SecretEnc, store.CredentialAAD(target.ID))
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "decryption failed")
+		return
+	}
+	res, err := s.winrm.Run(r.Context(), target.Host, target.Port, cred.Username, secret, in.Command)
+	if err != nil {
+		s.log.Error("winrm run failed", "target", target.Name, "err", err)
+		s.audit(r.Context(), "winrm.error", fmt.Sprintf("target:%s cred_user:%s error:%v", target.Name, cred.Username, err))
+		writeError(w, http.StatusBadGateway, "winrm execution failed")
+		return
+	}
+
+	file, sum := s.recordWinRM(target, cred.Username, actorFrom(r.Context()), in.Command, res)
+	s.audit(r.Context(), "winrm.run",
+		fmt.Sprintf("target:%s cred_user:%s exit:%d file:%s sha256:%s", target.Name, cred.Username, res.ExitCode, file, sum))
+	writeJSON(w, http.StatusOK, map[string]any{
+		"target":    target.Name,
+		"exit_code": res.ExitCode,
+		"stdout":    res.Stdout,
+		"stderr":    res.Stderr,
+	})
+}
+
+// recordWinRM writes a transcript of the command and its output, returning the
+// file path and its SHA-256 (tamper evidence in the audit trail). Best-effort:
+// a recording failure is logged but does not fail the request.
+func (s *Server) recordWinRM(target *store.Target, credUser, actor, command string, res winrm.Result) (string, string) {
+	if s.recordingDir == "" {
+		return "", ""
+	}
+	if err := os.MkdirAll(s.recordingDir, 0o700); err != nil {
+		s.log.Error("winrm recording dir", "err", err)
+		return "", ""
+	}
+	ts := time.Now()
+	name := fmt.Sprintf("%d_%s_%s.winrm.log", ts.UnixNano(), sanitizeName(target.Name), sanitizeName(actor))
+	path := filepath.Join(s.recordingDir, name)
+	transcript := fmt.Sprintf(
+		"# pamv1 WinRM session\n# target: %s (%s:%d)\n# user: %s\n# actor: %s\n# time: %s\n\n$ %s\n\n--- stdout ---\n%s\n--- stderr ---\n%s\n--- exit: %d ---\n",
+		target.Name, target.Host, target.Port, credUser, actor, ts.Format(time.RFC3339),
+		command, res.Stdout, res.Stderr, res.ExitCode)
+	data := []byte(transcript)
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		s.log.Error("winrm recording write", "err", err)
+		return "", ""
+	}
+	return path, hashHex(transcript)
+}
+
+func sanitizeName(s string) string {
+	var b strings.Builder
+	for _, c := range s {
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9', c == '-', c == '_', c == '.', c == '@':
+			b.WriteRune(c)
+		default:
+			b.WriteByte('-')
+		}
+	}
+	return b.String()
 }
 
 // --- login sessions (Active Directory / password identities) ---

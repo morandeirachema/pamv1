@@ -13,6 +13,7 @@ import (
 	"github.com/morandeirachema/pamv1/internal/store"
 	"github.com/morandeirachema/pamv1/internal/vault"
 	"github.com/morandeirachema/pamv1/internal/web"
+	"github.com/morandeirachema/pamv1/internal/winrm"
 )
 
 type ctxKey int
@@ -52,17 +53,23 @@ type Options struct {
 	// MFARequired makes password login require a confirmed second factor: users
 	// without one get an enrollment-only session until they set up MFA.
 	MFARequired bool
+	// WinRM runs commands on Windows targets; defaults to a real HTTPS client.
+	WinRM winrm.Runner
+	// RecordingDir is where session/command transcripts are written.
+	RecordingDir string
 }
 
 type Server struct {
-	store       store.Store
-	vault       *vault.Vault
-	resolver    *auth.Resolver
-	authn       auth.Authenticator // password login (e.g. AD); nil if not configured
-	mfaRequired bool
-	log         *slog.Logger
-	mux         *http.ServeMux
-	handler     http.Handler
+	store        store.Store
+	vault        *vault.Vault
+	resolver     *auth.Resolver
+	authn        auth.Authenticator // password login (e.g. AD); nil if not configured
+	winrm        winrm.Runner
+	mfaRequired  bool
+	recordingDir string
+	log          *slog.Logger
+	mux          *http.ServeMux
+	handler      http.Handler
 }
 
 // New builds the HTTP handler. The resolver authenticates the X-API-Key header
@@ -73,14 +80,20 @@ func New(st store.Store, v *vault.Vault, resolver *auth.Resolver, authn auth.Aut
 	if resolver == nil {
 		return nil, errors.New("api: resolver is required")
 	}
+	runner := opts.WinRM
+	if runner == nil {
+		runner = winrm.Client{HTTPS: true}
+	}
 	s := &Server{
-		store:       st,
-		vault:       v,
-		resolver:    resolver,
-		authn:       authn,
-		mfaRequired: opts.MFARequired,
-		log:         logging.Component("api"),
-		mux:         http.NewServeMux(),
+		store:        st,
+		vault:        v,
+		resolver:     resolver,
+		authn:        authn,
+		winrm:        runner,
+		mfaRequired:  opts.MFARequired,
+		recordingDir: opts.RecordingDir,
+		log:          logging.Component("api"),
+		mux:          http.NewServeMux(),
 	}
 	s.routes()
 	s.handler = s.withAccessLog(s.mux)
@@ -153,6 +166,8 @@ func (s *Server) routes() {
 	s.mux.Handle("GET /api/targets", s.authz(auth.CapReadInventory, s.listTargets))
 	s.mux.Handle("GET /api/targets/{id}", s.authz(auth.CapReadInventory, s.getTarget))
 	s.mux.Handle("DELETE /api/targets/{id}", s.authz(auth.CapManageTargets, s.deleteTarget))
+
+	s.mux.Handle("POST /api/targets/{id}/winrm", s.authz(auth.CapConnect, s.runWinRM))
 
 	s.mux.Handle("POST /api/credentials", s.authz(auth.CapManageCredentials, s.createCredential))
 	s.mux.Handle("GET /api/credentials", s.authz(auth.CapReadInventory, s.listCredentials))

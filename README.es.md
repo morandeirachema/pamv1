@@ -85,6 +85,10 @@ Los componentes con línea discontinua (objetivos Windows) llegan en la [Fase 4]
   momento de la conexión**, la inyecta en la sesión SSH de destino y lo graba todo. Probado
   de extremo a extremo con un test donde el servidor destino acepta *solo* la contraseña del
   vault que el cliente nunca tuvo.
+- **Objetivos Windows (WinRM)** — ejecuta comandos en hosts Windows con `POST
+  /api/targets/{id}/winrm`; la credencial se inyecta just-in-time (funcionan cuentas de
+  dominio de AD), la transcripción se graba con un SHA-256 en la auditoría y quien lo invoca
+  nunca ve el secreto. El acceso RDP está en la hoja de ruta.
 - **Grabación de sesiones** — cada sesión en formato [asciicast v2](https://docs.asciinema.org/manual/asciicast/v2/),
   con hash SHA-256 escrito en la auditoría (evidencia anti-manipulación).
 - **Vault endurecido (cifrado en sobre)** — cada secreto se sella con una clave de datos

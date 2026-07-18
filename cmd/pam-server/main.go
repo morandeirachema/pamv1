@@ -32,6 +32,7 @@ import (
 	"github.com/morandeirachema/pamv1/internal/store/memstore"
 	"github.com/morandeirachema/pamv1/internal/store/pgstore"
 	"github.com/morandeirachema/pamv1/internal/vault"
+	"github.com/morandeirachema/pamv1/internal/winrm"
 )
 
 func main() {
@@ -168,7 +169,11 @@ func run() error {
 		return err
 	}
 
-	handler, err := api.New(st, v, resolver, authn, api.Options{MFARequired: cfg.MFARequired})
+	handler, err := api.New(st, v, resolver, authn, api.Options{
+		MFARequired:  cfg.MFARequired,
+		RecordingDir: cfg.RecordingDir,
+		WinRM:        winrm.Client{HTTPS: cfg.WinRMHTTPS, Insecure: cfg.WinRMInsecure, Timeout: 30 * time.Second},
+	})
 	if err != nil {
 		return err
 	}

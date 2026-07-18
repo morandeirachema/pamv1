@@ -31,6 +31,10 @@ type Config struct {
 	// MFARequired makes password login require a confirmed TOTP second factor.
 	MFARequired bool
 
+	// WinRMHTTPS uses HTTPS (5986) for WinRM; WinRMInsecure skips TLS verify (dev).
+	WinRMHTTPS    bool
+	WinRMInsecure bool
+
 	// KEKProvider selects the vault Key Encryption Key backend:
 	// "local" (default, dev/test — uses MasterKey) or "vault-transit".
 	KEKProvider string
@@ -76,6 +80,8 @@ func Load() (*Config, error) {
 		LogLevel:          getenv("PAM_LOG_LEVEL", "info"),
 		LogFormat:         getenv("PAM_LOG_FORMAT", "json"),
 		MFARequired:       os.Getenv("PAM_MFA_REQUIRED") == "true",
+		WinRMHTTPS:        os.Getenv("PAM_WINRM_HTTPS") != "false", // default HTTPS
+		WinRMInsecure:     os.Getenv("PAM_WINRM_INSECURE_SKIP_VERIFY") == "true",
 		KEKProvider:       getenv("PAM_KEK_PROVIDER", "local"),
 		TransitAddr:       os.Getenv("PAM_KEK_TRANSIT_ADDR"),
 		TransitToken:      os.Getenv("PAM_KEK_TRANSIT_TOKEN"),

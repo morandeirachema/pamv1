@@ -187,6 +187,24 @@ curl -H "X-API-Key: $PAM_API_KEY" -X DELETE http://localhost:8080/api/credential
 Once the proxy is your normal path, **`reveal` should be the exception** — prefer
 brokered sessions so the secret is never shown.
 
+### Windows targets (WinRM)
+
+Create a Windows target (`os_type=windows`, `protocol=winrm`, port `5986` for
+HTTPS) with a credential (an AD-joined domain account like `CONTOSO\\svc-admin`
+works). Users with the connect capability run commands through pamv1 — the
+credential is injected just-in-time and never shown:
+
+```bash
+curl -H "X-API-Key: $TOKEN" -X POST http://localhost:8080/api/targets/1/winrm \
+  -d '{"command":"whoami; hostname"}'
+# → {"target":"win-01","exit_code":0,"stdout":"contoso\\svc-admin\r\n...","stderr":""}
+```
+
+Every run is recorded (a `.winrm.log` transcript with its SHA-256 in the audit as
+`winrm.run`). WinRM uses HTTPS by default (`PAM_WINRM_HTTPS`); only set
+`PAM_WINRM_INSECURE_SKIP_VERIFY=true` in isolated dev. RDP brokering (a recorded
+graphical gateway) and an interactive PowerShell shell are on the roadmap.
+
 ## 7. Managing users & roles
 
 Only `admin` may manage users. Creating a user returns the access token **once** —
@@ -408,6 +426,7 @@ evidence). Replay with [asciinema](https://asciinema.org/): `asciinema play <fil
 
 | Date | Change |
 |---|---|
+| 2026-07-18 | Phase 4: Windows targets — WinRM command execution with JIT credentials |
 | 2026-07-18 | Phase 3b: enforce-MFA policy (`PAM_MFA_REQUIRED`) + single-use recovery codes |
 | 2026-07-18 | Phase 3b: Microsoft Entra ID (Azure AD) login setup (app roles → roles, sovereign host) |
 | 2026-07-18 | Phase 3b: TOTP MFA (self-service enroll/verify, enforced on login) |

@@ -56,11 +56,13 @@ The flagship: users connect *through* pamv1, never holding the credential.
 - [ ] Optional Kerberos bind
 - [x] Local emergency admin kept for AD-down scenarios (bootstrap key + break-glass)
 
-## Phase 4 — Windows targets ⬜
+## Phase 4 — Windows targets 🚧
 
-- [ ] WinRM command execution with JIT credentials
-- [ ] RDP access via gateway (Guacamole-style flow or RD Gateway integration), recorded
-- [ ] AD-joined target support: use domain service accounts from the vault
+- [x] **WinRM command execution with JIT credentials** (`internal/winrm`): `POST /api/targets/{id}/winrm` decrypts the target's credential only at run time, executes over WinRM, records the transcript (SHA-256 in the audit), returns stdout/stderr/exit — the caller never sees the secret
+- [x] AD-joined target support: uses domain service accounts stored in the vault (the credential username may be `DOMAIN\\user` or UPN)
+- [ ] NTLM/Kerberos WinRM auth (currently basic over HTTPS)
+- [ ] RDP access via a recorded gateway (Apache Guacamole `guacd` / RD Gateway) — needs a graphical broker
+- [ ] Interactive WinRM/PowerShell shell through the SSH proxy (beyond one-shot commands)
 
 ## Phase 5 — Hardening: database, vault, transport ⬜
 

@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strconv"
 	"strings"
 	"testing"
@@ -20,6 +21,7 @@ import (
 	"github.com/morandeirachema/pamv1/internal/store"
 	"github.com/morandeirachema/pamv1/internal/store/memstore"
 	"github.com/morandeirachema/pamv1/internal/vault"
+	"github.com/morandeirachema/pamv1/internal/winrm"
 )
 
 const (
@@ -470,6 +472,91 @@ func TestLoginNotConfigured(t *testing.T) {
 		"username": "x", "password": "y",
 	}); status != http.StatusServiceUnavailable {
 		t.Fatalf("login without authenticator: status %d, want 503", status)
+	}
+}
+
+// fakeWinRM records what it was asked to run and returns a canned result.
+type fakeWinRM struct {
+	gotHost, gotUser, gotPass, gotCmd string
+	gotPort                           int
+	result                            winrm.Result
+	err                               error
+}
+
+func (f *fakeWinRM) Run(_ context.Context, host string, port int, user, password, command string) (winrm.Result, error) {
+	f.gotHost, f.gotPort, f.gotUser, f.gotPass, f.gotCmd = host, port, user, password, command
+	return f.result, f.err
+}
+
+func TestWinRMRun(t *testing.T) {
+	fake := &fakeWinRM{result: winrm.Result{Stdout: "contoso\\Administrator\r\n", ExitCode: 0}}
+	recDir := t.TempDir()
+	srv, _ := newTestServerOpts(t, nil, api.Options{WinRM: fake, RecordingDir: recDir})
+
+	// Seed a Windows/WinRM target + credential (as admin).
+	_, data := do(t, srv, http.MethodPost, "/api/targets", testAPIKey, map[string]any{
+		"name": "win-01", "host": "10.0.0.5", "port": 5986, "os_type": "windows", "protocol": "winrm",
+	})
+	targetID := int64(jsonMap(t, data)["id"].(float64))
+	if _, d := do(t, srv, http.MethodPost, "/api/credentials", testAPIKey, map[string]any{
+		"target_id": targetID, "username": "Administrator", "secret": "Win-S3cret!",
+	}); d == nil {
+		t.Fatal("seed credential failed")
+	}
+
+	// Run a command through the proxy path (admin has CapConnect).
+	status, data := do(t, srv, http.MethodPost, "/api/targets/"+itoa(targetID)+"/winrm", testAPIKey,
+		map[string]any{"command": "whoami"})
+	if status != http.StatusOK {
+		t.Fatalf("winrm run: %d %s", status, data)
+	}
+	m := jsonMap(t, data)
+	if m["stdout"] != "contoso\\Administrator\r\n" || m["exit_code"].(float64) != 0 {
+		t.Fatalf("unexpected result: %s", data)
+	}
+
+	// JIT injection proof: the vaulted secret + username reached the runner,
+	// and the client never possessed them.
+	if fake.gotPass != "Win-S3cret!" || fake.gotUser != "Administrator" {
+		t.Fatalf("credential not injected: user=%q pass=%q", fake.gotUser, fake.gotPass)
+	}
+	if fake.gotHost != "10.0.0.5" || fake.gotPort != 5986 || fake.gotCmd != "whoami" {
+		t.Fatalf("wrong dial params: %+v", fake)
+	}
+
+	// Audited, and a transcript was recorded.
+	if status, data := do(t, srv, http.MethodGet, "/api/audit", testAPIKey, nil); status != http.StatusOK ||
+		!strings.Contains(string(data), "winrm.run") {
+		t.Fatalf("winrm run must be audited: %s", data)
+	}
+	entries, _ := os.ReadDir(recDir)
+	if len(entries) != 1 || !strings.HasSuffix(entries[0].Name(), ".winrm.log") {
+		t.Fatalf("expected one transcript, got %v", entries)
+	}
+}
+
+func TestWinRMRejectsNonWindowsTarget(t *testing.T) {
+	srv, _ := newTestServerOpts(t, nil, api.Options{WinRM: &fakeWinRM{}})
+	_, data := do(t, srv, http.MethodPost, "/api/targets", testAPIKey, map[string]any{
+		"name": "lnx", "host": "h", "os_type": "linux", "protocol": "ssh",
+	})
+	id := int64(jsonMap(t, data)["id"].(float64))
+	if status, _ := do(t, srv, http.MethodPost, "/api/targets/"+itoa(id)+"/winrm", testAPIKey,
+		map[string]any{"command": "whoami"}); status != http.StatusUnprocessableEntity {
+		t.Fatalf("winrm on ssh target should be 422, got %d", status)
+	}
+}
+
+func TestWinRMRequiresConnectCapability(t *testing.T) {
+	srv, _ := newTestServerOpts(t, nil, api.Options{WinRM: &fakeWinRM{}})
+	auditorTok := seedUser(t, srv, "theo", "auditor")
+	_, data := do(t, srv, http.MethodPost, "/api/targets", testAPIKey, map[string]any{
+		"name": "win-02", "host": "h", "port": 5986, "os_type": "windows", "protocol": "winrm",
+	})
+	id := int64(jsonMap(t, data)["id"].(float64))
+	if status, _ := do(t, srv, http.MethodPost, "/api/targets/"+itoa(id)+"/winrm", auditorTok,
+		map[string]any{"command": "whoami"}); status != http.StatusForbidden {
+		t.Fatalf("auditor should not run winrm, got %d", status)
 	}
 }
 

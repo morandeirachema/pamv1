@@ -20,6 +20,7 @@ internal/
   logging/     # slog setup (json/text, level) + per-service loggers
   vault/       # AES-256-GCM encrypt/decrypt, key gen
   mfa/         # TOTP (RFC 6238) generate/validate + otpauth URI
+  winrm/       # WinRM command Runner (Windows targets) + real client
   auth/        # roles, capabilities, Principal, Resolver (RBAC)
   store/       # Store interface + domain types + CredentialAAD
     memstore/  # in-memory impl (tests, demo)
@@ -129,6 +130,12 @@ endpoints arrive with the OT/approval phase).
 - Handlers validate input (os_type ∈ {linux,windows}, protocol ∈ {ssh,winrm,rdp}),
   translate store errors to HTTP codes, and append audit events.
 - `reveal` (needs `CapRevealSecret`, admin only) decrypts on demand and is audited.
+- **WinRM** (`POST /api/targets/{id}/winrm`, needs `CapConnect`): the Windows
+  counterpart to the SSH proxy. Resolves the target (must be `protocol=winrm`),
+  decrypts its credential **just-in-time**, runs the command via `winrm.Runner`,
+  writes a transcript to `RecordingDir` with its SHA-256 in the audit, and
+  returns stdout/stderr/exit — the secret is never returned. `winrm.Runner` is an
+  interface (tests inject a fake); `winrm.Client` wraps masterzen/winrm over HTTPS.
 
 ### 2.5 `proxy`  *(Phase 2, RBAC in 3a)*
 
@@ -227,6 +234,8 @@ the client channel closes.
 | `PAM_ENTRA_CLIENT_ID` / `_CLIENT_SECRET` / `_SCOPE` / `_AUTHORITY_HOST` | — | Entra app registration |
 | `PAM_ENTRA_ROLE_ADMIN` / `_USER` / `_AUDITOR` / `_APPROVER` | — | Entra app-role/group → role |
 | `PAM_MFA_REQUIRED` | `false` | require a confirmed TOTP factor for password login |
+| `PAM_WINRM_HTTPS` | `true` | use HTTPS (5986) for WinRM |
+| `PAM_WINRM_INSECURE_SKIP_VERIFY` | `false` | skip WinRM TLS verify (dev only) |
 
 ## 4a. Logging (operational, to stdout)
 
@@ -245,8 +254,9 @@ secrets. Format `json` (SIEM) or `text` (humans); collect from stdout.
 `target.create` · `target.delete` · `credential.create` · `credential.reveal` ·
 `credential.delete` · `user.create` · `user.delete` · `login` · `logout` ·
 `mfa.enroll` · `mfa.confirm` · `mfa.disable` · `mfa.recovery_generated` ·
-`mfa.recovery_used` · `authz.denied` · `breakglass.access` · `session.start` ·
-`session.record` · `session.end` · `session.denied` · `session.error`. The actor is the Principal name
+`mfa.recovery_used` · `winrm.run` · `winrm.error` · `authz.denied` ·
+`breakglass.access` · `session.start` · `session.record` · `session.end` ·
+`session.denied` · `session.error`. The actor is the Principal name
 (`bootstrap-admin`, `break-glass`, or a username).
 
 ## 6. Security-relevant invariants (do not regress)
@@ -272,7 +282,8 @@ secrets. Format `json` (SIEM) or `text` (humans); collect from stdout.
 
 - `vault`: envelope roundtrip, AAD binding, tamper detection, version rejection, distinct tokens; local KEK wrap/unwrap + tamper; KEK factory; **Transit KMS** wrap/unwrap and full envelope over a mock Vault Transit server.
 - `auth`: role→capability matrix, role parsing, resolver (bootstrap/break-glass/token/**session**/unknown); **LDAP** authenticate (success, highest-privilege-wins, wrong password, no mapped group, unknown user) against a fake `ldapConn`.
-- `mfa`: RFC 6238 test vector, validate roundtrip + skew + wrong/short code, otpauth URI, secret randomness.
+- `mfa`: RFC 6238 test vector, validate roundtrip + skew + wrong/short code, otpauth URI, secret randomness, recovery-code generation.
+- `api` (WinRM): JIT injection (fake runner receives the vaulted secret), non-Windows target rejected, `CapConnect` required, transcript recorded + audited.
 - `auth` (Entra/chain): Entra app-role & group login, highest-privilege-wins, bad password, no mapped role (mock token endpoint); chain resolves via a later source and rejects when none match.
 - `api`: full CRUD flow, auth required, secret-non-leak, cascade delete, break-glass audited, validation/conflict, **RBAC** (user/auditor/approver each allowed only their capabilities), **login session** (issue → use with role enforcement → logout revokes), login-not-configured 503, **MFA** (enroll → confirm → login requires OTP → wrong OTP rejected), **enforce-MFA** (enrollment-only session blocked from other routes → enroll → full session), **recovery codes** (login with a code, single-use).
 - `proxy`: **end-to-end JIT injection** against an in-process upstream sshd that
@@ -285,6 +296,7 @@ secrets. Format `json` (SIEM) or `text` (humans); collect from stdout.
 
 | Date | Change |
 |---|---|
+| 2026-07-18 | Phase 4: `winrm` package + `POST /api/targets/{id}/winrm` (JIT credential injection on Windows, transcript recording, `winrm.run` audit); `PAM_WINRM_*` config |
 | 2026-07-18 | Phase 3b hardening: enforce-MFA policy (`PAM_MFA_REQUIRED`, enrollment-only sessions via `Session.Scope`/`Principal.EnrollOnly`) + single-use recovery codes (`/api/mfa/recovery-codes`) |
 | 2026-07-18 | Phase 3b Entra: `EntraAuthenticator` (Azure AD, OAuth2 ROPC, app-roles/groups → role); `ChainAuthenticator`; `PAM_ENTRA_*` env; LDAP + Entra composable |
 | 2026-07-18 | Phase 3b MFA: `mfa` package (TOTP RFC 6238); `store.MFAEnrollment` (vault-encrypted secret); `/api/mfa/*` self-service; `/api/login` enforces confirmed TOTP; portal Sign On OTP field |
