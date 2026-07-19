@@ -4,6 +4,15 @@ Guiding principle: **fully functional at every step**. Each phase ships somethin
 
 Status: ✅ done · 🚧 in progress · ⬜ planned
 
+**All 10 phases are shipped.** The only remaining items are four that genuinely
+require external infrastructure to build and verify honestly, so they are left as
+documented follow-ons rather than faked:
+
+- **Optional Kerberos bind** (Phase 3b) — needs a KDC.
+- **Browser RDP viewer** (Phase 4) — needs the vendored guacamole-common-js renderer + a real browser/guacd/RDP host (the server-side tunnel is done and tested).
+- **Kerberos WinRM auth** (Phase 4) — needs a KDC + an AD-joined host.
+- **Serial (RS-232 / terminal-server) connectors** (Phase 8) — needs serial hardware.
+
 ---
 
 ## Phase 0 — Project foundation ✅
@@ -64,9 +73,9 @@ The flagship: users connect *through* pamv1, never holding the credential.
 - [x] AD-joined target support: uses domain service accounts stored in the vault (the credential username may be `DOMAIN\\user` or UPN)
 - [x] **NTLM WinRM auth** (`PAM_WINRM_AUTH=ntlm`) — NTLMv2 transport, which AD-joined hosts usually require
 - [x] **RDP brokering via Apache Guacamole `guacd`** (`internal/guacd` + `GET /api/targets/{id}/rdp` WebSocket tunnel): the credential is injected just-in-time into the guacd handshake — it reaches guacd, never the browser (`PAM_GUACD_ADDR`)
-- [ ] Browser RDP viewer: bundle guacamole-common-js and add a portal display (server-side tunnel is done and tested)
+- [ ] Browser RDP viewer: bundle guacamole-common-js and add a portal display (server-side tunnel is done and tested) — **infra-bound**: needs the vendored JS renderer plus a real browser + guacd + RDP host to verify end to end
 - [x] guacd server-side session recording for RDP (`PAM_GUACD_RECORDING_PATH`; recording name in the `rdp.connect` audit)
-- [ ] Kerberos WinRM auth
+- [ ] Kerberos WinRM auth — **infra-bound**: needs a KDC + an AD-joined Windows host to verify
 - [x] **Interactive WinRM shell through the SSH proxy** (`PAM_PROXY_WINRM`): `ssh <cred>@<winrm-target>@pam` opens a command loop — each line runs as a WinRM command (JIT credential), output streams back and is recorded. (A command loop, not a stateful PowerShell — working directory/variables don't persist across lines; a WinRS streaming shell is a follow-on needing a real host to verify.)
 
 ## Phase 5 — Hardening: database, vault, transport ✅
