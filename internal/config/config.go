@@ -57,6 +57,9 @@ type Config struct {
 	// credentials older than this (0 = reconcile/report only).
 	RotateInterval time.Duration
 	RotateMaxAge   time.Duration
+	// RotateAfterSession forces credential rotation when a proxied SSH session
+	// ends, so a secret used in one session cannot be reused in the next.
+	RotateAfterSession bool
 
 	// OT hardening (Phase 8). RequireApproval gates every target's connect paths
 	// behind an approved access request (4-eyes / maintenance window).
@@ -165,6 +168,7 @@ func Load() (*Config, error) {
 		MFARequired:         os.Getenv("PAM_MFA_REQUIRED") == "true",
 		RotateInterval:      time.Duration(getenvInt("PAM_ROTATE_INTERVAL_MIN", 0)) * time.Minute,
 		RotateMaxAge:        time.Duration(getenvInt("PAM_ROTATE_MAX_AGE_HOURS", 0)) * time.Hour,
+		RotateAfterSession:  os.Getenv("PAM_ROTATE_AFTER_SESSION") == "true",
 		RequireApproval:     os.Getenv("PAM_REQUIRE_APPROVAL") == "true",
 		ApprovalWindow:      time.Duration(getenvInt("PAM_APPROVAL_WINDOW_MIN", 60)) * time.Minute,
 		AirGap:              os.Getenv("PAM_OT_AIRGAP") == "true",

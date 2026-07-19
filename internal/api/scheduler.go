@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"fmt"
 	"strconv"
 	"time"
 
@@ -28,6 +29,29 @@ type lifecycleReport struct {
 // systemContext is the actor context the scheduler audits under.
 func systemContext(ctx context.Context) context.Context {
 	return withPrincipal(ctx, &auth.Principal{Name: "system-scheduler", Role: auth.RoleAdmin})
+}
+
+// RotateCredentialByID rotates a single credential by ID and audits the result.
+// It is the entry point the SSH proxy calls to force post-session rotation
+// (actor system-scheduler); a missing credential/target is a no-op with a log.
+func (s *Server) RotateCredentialByID(ctx context.Context, credentialID int64) {
+	ctx = systemContext(ctx)
+	cred, err := s.store.GetCredential(ctx, credentialID)
+	if err != nil {
+		s.log.Warn("post-session rotation: credential not found", "credential", credentialID, "err", err)
+		return
+	}
+	target, err := s.store.GetTarget(ctx, cred.TargetID)
+	if err != nil {
+		s.log.Warn("post-session rotation: target not found", "credential", credentialID, "err", err)
+		return
+	}
+	if _, err := s.rotateCredential(ctx, cred, target); err != nil {
+		s.audit(ctx, "credential.rotate_failed", fmt.Sprintf("credential:%d reason:post-session error:%v", cred.ID, err))
+		s.log.Error("post-session rotation failed", "credential", cred.ID, "err", err)
+		return
+	}
+	s.audit(ctx, "credential.rotate", fmt.Sprintf("credential:%d target:%s reason:post-session", cred.ID, target.Name))
 }
 
 // RunLifecycleWorker runs the credential-lifecycle worker until ctx is cancelled:

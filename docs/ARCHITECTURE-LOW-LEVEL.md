@@ -440,6 +440,7 @@ secrets. Format `json` (SIEM) or `text` (humans); collect from stdout.
 
 | Date | Change |
 |---|---|
+| 2026-07-19 | Lifecycle: forced rotation after a proxied SSH session ends (`proxy.Config.OnSessionEnd` → `Server.RotateCredentialByID`, `PAM_ROTATE_AFTER_SESSION`) |
 | 2026-07-19 | Lifecycle: `ssh_key` credential rotation (`rotate.GenerateSSHKey` + `SSHConnector.RotateKey` / `KeyRotator`) — generates a keypair and replaces `authorized_keys` |
 | 2026-07-19 | Tests: shared store conformance suite (`internal/store/storetest.RunStoreContract`) run by memstore and, in CI, against a live PostgreSQL (`PAM_TEST_DATABASE_URL`, a `postgres` service job) — verifies the pgstore SQL/migrations |
 | 2026-07-19 | Hardening: Entra ROPC now validates the id_token RS256 signature against the tenant JWKS (`oidc.VerifyRS256`) instead of reading unverified claims |

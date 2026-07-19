@@ -87,7 +87,7 @@ The flagship: users connect *through* pamv1, never holding the credential.
 - [x] **Auto-expiring break-glass sessions** (short-TTL session, `PAM_BREAK_GLASS_TTL_MIN`, scope `breakglass` → admin + loud audit)
 - [x] **Real-time alerting** (`internal/alert` webhook, `PAM_ALERT_WEBHOOK`) on every break-glass **access** and **unseal**
 - [x] Documented offline procedure (sealed shares, dual control) — see the [Admin Guide](docs/ADMIN-GUIDE.md)
-- [ ] Forced credential rotation after break-glass use (needs the rotation connectors from Phase 7)
+- [x] Forced credential rotation after break-glass use — a break-glass session that connects through the proxy triggers `PAM_ROTATE_AFTER_SESSION` on session end (a reveal-path break-glass rotation is a smaller follow-on)
 - [ ] Additional alert channels (email/syslog) on the same `Notifier` interface
 
 ## Phase 7 — Credential lifecycle ✅
@@ -101,7 +101,7 @@ The flagship: users connect *through* pamv1, never holding the credential.
 - [x] **Credential checkout/check-in with lease** — `POST /api/credentials/{id}/checkout` grants an exclusive, time-boxed lease (`PAM_CHECKOUT_TTL_MIN`) and returns the secret; `/checkin` ends it and **rotates** the credential so the seen password is invalidated. Enforced single-holder; honors the reveal-disabled policy
 - [x] **Discovery** — `POST /api/discovery/scan` probes hosts for reachable management ports (SSH/WinRM/RDP) and can auto-onboard new targets (`internal/discovery`, reachability only — no credentials used)
 - [ ] AD/LDAPS password-change connector + identity reconciliation (revoke access for disabled directory users; surface orphaned accounts) — needs the AD write path (follow-on)
-- [ ] Forced rotation immediately after each proxied *SSH* session ends (follow-on; ties the proxy back into the rotation orchestrator — checkout already covers the reveal path)
+- [x] **Forced rotation after each proxied SSH session ends** (`PAM_ROTATE_AFTER_SESSION`): the proxy's `OnSessionEnd` hook calls `Server.RotateCredentialByID`, so a secret used in one session can't be reused in the next (covers break-glass proxied sessions too)
 
 ## Phase 8 — OT adaptation ✅
 

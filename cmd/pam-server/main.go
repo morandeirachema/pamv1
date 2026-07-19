@@ -378,12 +378,18 @@ func run() error {
 		if err != nil {
 			return fmt.Errorf("ssh host key: %w", err)
 		}
+		var onSessionEnd func(int64)
+		if cfg.RotateAfterSession {
+			onSessionEnd = func(credID int64) { handler.RotateCredentialByID(context.Background(), credID) }
+			log.Info("post-session credential rotation enabled")
+		}
 		px, err := proxy.New(st, v, resolver, proxy.Config{
 			HostKey:         hostKey,
 			RecordingDir:    cfg.RecordingDir,
 			Sessions:        sessions,
 			RequireApproval: cfg.RequireApproval,
 			UpstreamHostKey: upstreamHostKey,
+			OnSessionEnd:    onSessionEnd,
 		})
 		if err != nil {
 			return err

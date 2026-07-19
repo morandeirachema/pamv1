@@ -131,3 +131,20 @@ func TestLifecycleWorkerRotatesByMaxAge(t *testing.T) {
 		t.Fatal("secret was not rotated by the worker")
 	}
 }
+
+// TestRotateCredentialByID proves the proxy's post-session hook rotates the
+// credential and stamps rotated_at.
+func TestRotateCredentialByID(t *testing.T) {
+	fc := &schedFake{}
+	srv, cred := newSchedTestServer(t, fc)
+	srv.RotateCredentialByID(context.Background(), cred.ID)
+	got, err := srv.store.GetCredential(context.Background(), cred.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.RotatedAt == nil {
+		t.Fatal("RotateCredentialByID did not rotate the credential")
+	}
+	// A missing credential is a safe no-op (no panic).
+	srv.RotateCredentialByID(context.Background(), 999999)
+}

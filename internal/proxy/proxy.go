@@ -45,6 +45,10 @@ type Config struct {
 	// UpstreamHostKey verifies the target's SSH host key (e.g. a known_hosts
 	// callback). nil trusts any upstream key — insecure, and logged loudly.
 	UpstreamHostKey ssh.HostKeyCallback
+	// OnSessionEnd, if set, is called with the credential ID when a proxied
+	// session ends — used to force credential rotation after use. It runs in a
+	// goroutine and must not block.
+	OnSessionEnd func(credentialID int64)
 }
 
 type Proxy struct {
@@ -59,6 +63,7 @@ type Proxy struct {
 	sessions     *session.Registry
 	requireApprv bool
 	upstreamHKCB ssh.HostKeyCallback
+	onSessionEnd func(credentialID int64)
 	chain        *recordChain
 
 	mu sync.Mutex
@@ -93,6 +98,7 @@ func New(st store.Store, v *vault.Vault, resolver *auth.Resolver, cfg Config) (*
 		sessions:     cfg.Sessions,
 		requireApprv: cfg.RequireApproval,
 		upstreamHKCB: cfg.UpstreamHostKey,
+		onSessionEnd: cfg.OnSessionEnd,
 		chain:        newRecordChain(cfg.RecordingDir),
 	}
 	if p.upstreamHKCB == nil {
@@ -284,6 +290,11 @@ func (p *Proxy) handleConn(ctx context.Context, nConn net.Conn) {
 	defer func() {
 		p.log.Info("session ended", "actor", actor, "target", target.Name)
 		p.audit(ctx, actor, "session.end", "target:"+target.Name)
+		// Force post-session credential rotation, if configured, so a secret
+		// used in one session cannot be reused in the next.
+		if p.onSessionEnd != nil {
+			go p.onSessionEnd(cred.ID)
+		}
 	}()
 
 	var wg sync.WaitGroup
