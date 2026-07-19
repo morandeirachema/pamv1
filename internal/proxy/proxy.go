@@ -60,6 +60,9 @@ type Config struct {
 	// Jump, if set, reaches SSH targets through an SSH bastion (for legacy
 	// equipment only accessible via a jump host).
 	Jump *JumpConfig
+	// RequireRecording refuses a session when its recording cannot be created,
+	// rather than proceeding unrecorded (fail-closed session auditing).
+	RequireRecording bool
 }
 
 // JumpConfig configures reaching SSH targets through an SSH bastion.
@@ -87,6 +90,7 @@ type Proxy struct {
 	winrm        winrm.Runner
 	upstreamDial func(addr string) (net.Conn, error)
 	chain        *recordChain
+	requireRec   bool
 
 	mu      sync.Mutex
 	ln      net.Listener
@@ -126,6 +130,7 @@ func New(st store.Store, v *vault.Vault, resolver *auth.Resolver, cfg Config) (*
 		allowedProto: protocolSet(cfg.AllowedProtocols),
 		winrm:        cfg.WinRMRunner,
 		chain:        newRecordChain(cfg.RecordingDir),
+		requireRec:   cfg.RequireRecording,
 		conns:        make(map[net.Conn]struct{}),
 	}
 	if p.upstreamHKCB == nil {
@@ -606,7 +611,13 @@ func (p *Proxy) handleSession(ctx context.Context, nc ssh.NewChannel, upstream *
 	title := fmt.Sprintf("%d_%s_%s", now.UnixNano(), target.Name, actor)
 	rec, err := newRecording(p.recordingDir, title, now)
 	if err != nil {
-		p.log.Error("recording setup failed", "err", err)
+		p.log.Error("recording setup failed", "actor", actor, "target", target.Name, "err", err)
+		p.audit(ctx, actor, "session.record_failed",
+			fmt.Sprintf("target:%s cred_user:%s error:%v", target.Name, cred.Username, err))
+		if p.requireRec {
+			fmt.Fprintln(clientChan.Stderr(), "pamv1: session recording is unavailable; session refused")
+			return
+		}
 	}
 
 	// Forward channel requests both directions (pty-req, shell, exec,
@@ -634,7 +645,13 @@ func (p *Proxy) handleSession(ctx context.Context, nc ssh.NewChannel, upstream *
 		pumpRequests(upReqs, clientChan, nil) // exits when the upstream channel closes
 	}()
 
-	go io.Copy(clientChan.Stderr(), upChan.Stderr())
+	// Target stderr -> operator, also tee'd into the recording so the audited
+	// hash covers stderr, not just stdout (Recording.Write is concurrency-safe).
+	var errOut io.Writer = clientChan.Stderr()
+	if rec != nil {
+		errOut = io.MultiWriter(clientChan.Stderr(), rec)
+	}
+	go io.Copy(errOut, upChan.Stderr())
 	if observe {
 		// Read-only: drop operator keystrokes; never touch the upstream channel.
 		go io.Copy(io.Discard, clientChan)
@@ -727,7 +744,13 @@ func (p *Proxy) handleWinRMSession(ctx context.Context, nc ssh.NewChannel, targe
 	now := time.Now()
 	rec, err := newRecording(p.recordingDir, fmt.Sprintf("%d_%s_%s", now.UnixNano(), target.Name, actor), now)
 	if err != nil {
-		p.log.Error("recording setup failed", "err", err)
+		p.log.Error("recording setup failed", "actor", actor, "target", target.Name, "err", err)
+		p.audit(ctx, actor, "session.record_failed",
+			fmt.Sprintf("target:%s cred_user:%s protocol:winrm error:%v", target.Name, cred.Username, err))
+		if p.requireRec {
+			fmt.Fprintln(ch, "pamv1: session recording is unavailable; session refused")
+			return
+		}
 	}
 	defer func() {
 		if rec != nil {

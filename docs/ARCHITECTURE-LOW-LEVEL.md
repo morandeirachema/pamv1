@@ -365,6 +365,7 @@ cancelled shutdown context so they are not dropped mid-drain.
 | `PAM_ROTATE_INTERVAL_MIN` | `0` (off) | credential-lifecycle worker interval (minutes) |
 | `PAM_ROTATE_MAX_AGE_HOURS` | `0` (report only) | auto-rotate password credentials older than this |
 | `PAM_REQUIRE_APPROVAL` | `false` | OT: gate every target behind an approved access request (4-eyes) |
+| `PAM_REQUIRE_RECORDING` | `false` | refuse a proxied session if its recording cannot be created (fail-closed audit) |
 | `PAM_APPROVAL_WINDOW_MIN` | `60` | how long an approved access request stays valid |
 | `PAM_CHECKOUT_TTL_MIN` | `30` | credential checkout lease lifetime (minutes) |
 | `PAM_OT_AIRGAP` | `false` | disable all outbound calls (alert webhooks) for air-gapped sites |
@@ -403,7 +404,7 @@ secrets. Format `json` (SIEM) or `text` (humans); collect from stdout.
 `mfa.enroll` · `mfa.confirm` · `mfa.disable` · `mfa.recovery_generated` ·
 `mfa.recovery_used` · `winrm.run` · `winrm.error` · `rdp.connect` · `rdp.end` ·
 `rdp.error` · `authz.denied` · `breakglass.access` · `session.start` ·
-`session.record` · `session.end` · `session.denied` · `session.error`. The actor is the Principal name
+`session.record` · `session.record_failed` · `session.end` · `session.denied` · `session.error`. The actor is the Principal name
 (`bootstrap-admin`, `break-glass`, or a username).
 
 ## 6. Security-relevant invariants (do not regress)
@@ -455,6 +456,7 @@ secrets. Format `json` (SIEM) or `text` (humans); collect from stdout.
 
 | Date | Change |
 |---|---|
+| 2026-07-19 | Proxy hardening: decrypt the JIT secret only after all authz gates; record target stderr into the asciicast (hash now covers stderr); audit `session.record_failed` and optionally refuse (`PAM_REQUIRE_RECORDING`) when a session can't be recorded |
 | 2026-07-19 | Proxy: graceful shutdown flushes session audit — `main` awaits the (bounded) proxy drain on SIGTERM before closing the store, and closing audits (`session.end`/`session.record`) use `auditClosing` (detached from the cancelled ctx) so they are no longer dropped mid-drain |
 | 2026-07-19 | Proxy: session teardown keyed on the connection lifecycle — stdin half-close only `CloseWrite`s (batch/piped/`ssh -n` output + `exit-status` no longer truncated), `handleConn` closes the upstream when the client is gone; client→upstream request pump joined so the `exec`/`shell` reply flushes before teardown (fixes an EOF flake); `Serve` shutdown drain bounded by force-closing active connections |
 | 2026-07-19 | Phase 10: Postgres HA (CloudNativePG `Cluster`, `deploy/k8s/postgres-cnpg.yaml`), cloud-Postgres Terraform (`deploy/terraform/cloud-postgres`, AWS RDS), SLSA build-provenance attestation in `release.yml` |

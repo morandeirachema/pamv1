@@ -74,6 +74,10 @@ type Config struct {
 	// ends, so a secret used in one session cannot be reused in the next.
 	RotateAfterSession bool
 
+	// RequireRecording refuses a proxied session when its recording cannot be
+	// created, rather than proceeding unrecorded (fail-closed session auditing).
+	RequireRecording bool
+
 	// OT hardening (Phase 8). RequireApproval gates every target's connect paths
 	// behind an approved access request (4-eyes / maintenance window).
 	// ApprovalWindow is how long an approval stays valid. AirGap disables all
@@ -198,6 +202,7 @@ func Load() (*Config, error) {
 		RotateInterval:      time.Duration(getenvInt("PAM_ROTATE_INTERVAL_MIN", 0)) * time.Minute,
 		RotateMaxAge:        time.Duration(getenvInt("PAM_ROTATE_MAX_AGE_HOURS", 0)) * time.Hour,
 		RotateAfterSession:  os.Getenv("PAM_ROTATE_AFTER_SESSION") == "true",
+		RequireRecording:    os.Getenv("PAM_REQUIRE_RECORDING") == "true",
 		RequireApproval:     os.Getenv("PAM_REQUIRE_APPROVAL") == "true",
 		ApprovalWindow:      time.Duration(getenvInt("PAM_APPROVAL_WINDOW_MIN", 60)) * time.Minute,
 		AirGap:              os.Getenv("PAM_OT_AIRGAP") == "true",

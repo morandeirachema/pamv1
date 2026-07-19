@@ -415,6 +415,7 @@ func run() error {
 			AllowedProtocols: splitAndTrim(cfg.AllowedProtocols),
 			WinRMRunner:      proxyWinRM,
 			Jump:             jump,
+			RequireRecording: cfg.RequireRecording,
 		})
 		if err != nil {
 			return err
