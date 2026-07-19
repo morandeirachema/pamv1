@@ -197,8 +197,12 @@ func (p *Proxy) ListenAndServe(ctx context.Context, addr string) error {
 	return p.Serve(ctx, ln)
 }
 
-// Serve accepts connections on ln until ctx is cancelled. Exposed separately
-// so tests can supply a 127.0.0.1:0 listener and read back the address.
+// Serve accepts connections on ln until ctx is cancelled, then closes the
+// listener and waits for in-flight connection handlers to return before it
+// returns — so no handler goroutine outlives Serve. (Active sessions end when
+// their client disconnects; the process-level shutdown does not block on them.)
+// Exposed separately so tests can supply a 127.0.0.1:0 listener and read the
+// address back.
 func (p *Proxy) Serve(ctx context.Context, ln net.Listener) error {
 	p.mu.Lock()
 	p.ln = ln
@@ -212,15 +216,21 @@ func (p *Proxy) Serve(ctx context.Context, ln net.Listener) error {
 	p.log.Info("ssh proxy listening",
 		"addr", ln.Addr().String(),
 		"hostkey_fp", ssh.FingerprintSHA256(p.hostKey.PublicKey()))
+	var wg sync.WaitGroup
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
+			wg.Wait() // let in-flight handlers finish before returning
 			if ctx.Err() != nil {
 				return nil
 			}
 			return err
 		}
-		go p.handleConn(ctx, conn)
+		wg.Add(1)
+		go func(c net.Conn) {
+			defer wg.Done()
+			p.handleConn(ctx, c)
+		}(conn)
 	}
 }
 
@@ -547,14 +557,17 @@ func (p *Proxy) handleSession(ctx context.Context, nc ssh.NewChannel, upstream *
 	}()
 
 	go io.Copy(clientChan.Stderr(), upChan.Stderr())
-	if observe {
-		go io.Copy(io.Discard, clientChan) // drop operator keystrokes
-	} else {
-		go func() {
+	go func() {
+		if observe {
+			io.Copy(io.Discard, clientChan) // drop operator keystrokes
+		} else {
 			io.Copy(upChan, clientChan) // operator keystrokes -> target
-			upChan.CloseWrite()
-		}()
-	}
+		}
+		// The client is gone (or read-only): tear down the upstream channel so the
+		// target-output copy below unblocks even if the upstream is idle.
+		upChan.CloseWrite()
+		upChan.Close()
+	}()
 
 	// Target output -> operator, tee'd into the recording.
 	var out io.Writer = clientChan
