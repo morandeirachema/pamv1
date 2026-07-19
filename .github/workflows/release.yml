@@ -7,9 +7,10 @@ on:
       - "v*"
 
 permissions:
-  contents: write   # create the GitHub Release
-  packages: write   # push to GHCR
-  id-token: write   # cosign keyless (OIDC) signing
+  contents: write      # create the GitHub Release
+  packages: write      # push to GHCR
+  id-token: write      # cosign keyless (OIDC) signing + provenance
+  attestations: write  # SLSA build-provenance attestation
 
 env:
   IMAGE: ghcr.io/${{ github.repository }}
@@ -62,6 +63,13 @@ jobs:
         run: |
           cosign attest --yes --predicate sbom.spdx.json \
             --type spdxjson ${{ env.IMAGE }}@${{ steps.build.outputs.digest }}
+
+      - name: Attest build provenance (SLSA)
+        uses: actions/attest-build-provenance@v1
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2

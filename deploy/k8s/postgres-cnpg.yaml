@@ -1,0 +1,60 @@
+# High-availability PostgreSQL for pamv1 via the CloudNativePG operator.
+#
+# Prerequisites: install the CloudNativePG operator first, e.g.
+#   kubectl apply --server-side -f \
+#     https://raw.githubusercontent.com/cloudnative-pg/cloudnative-pg/release-1.24/releases/cnpg-1.24.0.yaml
+#
+# This provisions a 3-instance cluster (1 primary + 2 replicas) with automatic
+# failover, scram-sha-256, continuous WAL archiving disabled by default (enable a
+# backup section for production), and a "pamv1-pg-app" secret CNPG generates with
+# the app credentials. pam-server connects via the read-write service:
+#
+#   PAM_DATABASE_URL=postgres://pam:<pw>@pamv1-pg-rw:5432/pam?sslmode=require
+#
+# (the password lives in the CNPG-managed secret "pamv1-pg-app").
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: pamv1-pg
+  namespace: pamv1
+  labels:
+    app.kubernetes.io/name: pamv1
+spec:
+  instances: 3
+  imageName: ghcr.io/cloudnative-pg/postgresql:17
+  primaryUpdateStrategy: unsupervised
+
+  bootstrap:
+    initdb:
+      database: pam
+      owner: pam
+
+  postgresql:
+    parameters:
+      password_encryption: scram-sha-256
+    pg_hba:
+      # Require scram-sha-256 over TLS for the app user.
+      - hostssl pam pam all scram-sha-256
+
+  storage:
+    size: 10Gi
+
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      memory: 1Gi
+
+  # Uncomment and point at an object store to enable continuous backups + PITR:
+  # backup:
+  #   barmanObjectStore:
+  #     destinationPath: s3://my-bucket/pamv1
+  #     s3Credentials:
+  #       accessKeyId:
+  #         name: pamv1-backup-creds
+  #         key: ACCESS_KEY_ID
+  #       secretAccessKey:
+  #         name: pamv1-backup-creds
+  #         key: ACCESS_SECRET_KEY
+  #   retentionPolicy: "30d"

@@ -131,6 +131,13 @@ helm install pamv1 deploy/helm/pamv1 \
 For production, set `secret.existingSecret` and manage PAM_* with an external
 secret manager (Vault / External Secrets Operator) rather than chart values.
 
+**Highly-available PostgreSQL.** For an in-cluster HA database, install the
+[CloudNativePG](https://cloudnative-pg.io/) operator and apply
+`deploy/k8s/postgres-cnpg.yaml` (a 3-instance cluster with automatic failover);
+point `PAM_DATABASE_URL` at the `pamv1-pg-rw` service. For a cloud-managed
+database, `deploy/terraform/cloud-postgres/` is an AWS RDS example (multi-AZ,
+encrypted, TLS-forced) to adapt.
+
 ### 3.5 Terraform (IaC)
 
 ```bash

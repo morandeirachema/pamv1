@@ -442,6 +442,7 @@ secrets. Format `json` (SIEM) or `text` (humans); collect from stdout.
 
 | Date | Change |
 |---|---|
+| 2026-07-19 | Phase 10: Postgres HA (CloudNativePG `Cluster`, `deploy/k8s/postgres-cnpg.yaml`), cloud-Postgres Terraform (`deploy/terraform/cloud-postgres`, AWS RDS), SLSA build-provenance attestation in `release.yml` |
 | 2026-07-19 | Phase 8: SSH jump-host / bastion connector (`proxy.Config.Jump`, `PAM_SSH_JUMP_*`) — targets reached via a `direct-tcpip` tunnel through the bastion |
 | 2026-07-19 | Phase 7: identity reconciliation (`POST /api/identity/reconcile`, `auth.DirectorySource.UserStatus`, revokes disabled directory users) + AD `ChangePassword` primitive (`unicodePwd`) |
 | 2026-07-19 | Proxy: interactive WinRM command loop through the SSH proxy (`proxy.Config.WinRMRunner`, `PAM_PROXY_WINRM`) — each operator line runs as a WinRM command, recorded; stateless-per-line |
