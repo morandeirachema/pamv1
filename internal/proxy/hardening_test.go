@@ -154,23 +154,23 @@ func startStderrUpstream(t *testing.T, wantUser, wantPass, stderrMark string) (h
 	return h, pn
 }
 
-// readCast returns the contents of the first .cast file found under dir, polling
-// briefly because the recording is flushed when the session tears down.
-func readCast(t *testing.T, dir string) string {
+// castContains polls the .cast files under dir until one contains want (the
+// recording's header is written immediately but session output arrives from an
+// async copy, so we must wait for the content, not just a non-empty file).
+func castContains(t *testing.T, dir, want string) bool {
 	t.Helper()
 	deadline := time.Now().Add(3 * time.Second)
 	for {
 		entries, _ := os.ReadDir(dir)
 		for _, e := range entries {
 			if strings.HasSuffix(e.Name(), ".cast") {
-				b, err := os.ReadFile(filepath.Join(dir, e.Name()))
-				if err == nil && len(b) > 0 {
-					return string(b)
+				if b, err := os.ReadFile(filepath.Join(dir, e.Name())); err == nil && strings.Contains(string(b), want) {
+					return true
 				}
 			}
 		}
 		if time.Now().After(deadline) {
-			return ""
+			return false
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
@@ -199,7 +199,7 @@ func TestStderrIsRecorded(t *testing.T) {
 	sess.Close()
 	client.Close()
 
-	if cast := readCast(t, recDir); !strings.Contains(cast, mark) {
+	if !castContains(t, recDir, mark) {
 		t.Errorf("stderr marker %q not found in recording; stderr is not being recorded", mark)
 	}
 }
