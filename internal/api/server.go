@@ -12,6 +12,7 @@ import (
 	"github.com/morandeirachema/pamv1/internal/alert"
 	"github.com/morandeirachema/pamv1/internal/auth"
 	"github.com/morandeirachema/pamv1/internal/logging"
+	"github.com/morandeirachema/pamv1/internal/metrics"
 	"github.com/morandeirachema/pamv1/internal/oidc"
 	"github.com/morandeirachema/pamv1/internal/rotate"
 	"github.com/morandeirachema/pamv1/internal/session"
@@ -134,6 +135,7 @@ type Server struct {
 	approvalRequired   bool
 	approvalWindow     time.Duration
 	airGap             bool
+	metrics            *metrics.Metrics
 	log                *slog.Logger
 	mux                *http.ServeMux
 	handler            http.Handler
@@ -215,8 +217,12 @@ func New(st store.Store, v *vault.Vault, resolver *auth.Resolver, authn auth.Aut
 		approvalRequired:   opts.RequireApproval,
 		approvalWindow:     approvalWindow,
 		airGap:             opts.AirGap,
+		metrics:            metrics.New(),
 		log:                logging.Component("api"),
 		mux:                http.NewServeMux(),
+	}
+	if s.sessions != nil {
+		s.metrics.SetActiveSessionsSource(func() int { return len(s.sessions.List()) })
 	}
 	s.routes()
 	s.handler = s.withAccessLog(s.withSecurityHeaders(s.mux))
@@ -252,7 +258,10 @@ func (w *statusWriter) Write(b []byte) (int, error) {
 // duration, actor, remote). Health probes are skipped to avoid noise.
 func (s *Server) withAccessLog(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/healthz" {
+		// Skip health/readiness/metrics probes: they are high-frequency and would
+		// drown the access log and inflate the request counter (self-counting).
+		switch r.URL.Path {
+		case "/healthz", "/readyz", "/metrics":
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -264,6 +273,7 @@ func (s *Server) withAccessLog(next http.Handler) http.Handler {
 		if sw.status == 0 {
 			sw.status = http.StatusOK
 		}
+		s.metrics.HTTPRequest(sw.status)
 		s.log.Info("http request",
 			"method", r.Method, "path", r.URL.Path, "status", sw.status,
 			"bytes", sw.bytes, "dur_ms", time.Since(start).Milliseconds(),
@@ -272,7 +282,9 @@ func (s *Server) withAccessLog(next http.Handler) http.Handler {
 }
 
 func (s *Server) routes() {
-	s.mux.HandleFunc("GET /healthz", s.health)
+	s.mux.HandleFunc("GET /healthz", s.health)         // liveness
+	s.mux.HandleFunc("GET /readyz", s.readyz)          // readiness (store reachable)
+	s.mux.HandleFunc("GET /metrics", s.metricsHandler) // Prometheus exposition
 	s.mux.HandleFunc("GET /{$}", web.Index)
 
 	// Authentication endpoints are rate-limited per client IP.
@@ -342,6 +354,7 @@ func (s *Server) authz(cap auth.Capability, next http.HandlerFunc) http.Handler 
 		setActor(r.Context(), p.Name)
 		ctx := withPrincipal(r.Context(), p)
 		if p.BreakGlass {
+			s.metrics.BreakGlass()
 			s.log.Warn("BREAK-GLASS access", "method", r.Method, "path", r.URL.Path, "remote", r.RemoteAddr)
 			s.audit(ctx, "breakglass.access", r.Method+" "+r.URL.Path)
 			s.alerter.Notify(ctx, alert.Event{
@@ -384,9 +397,34 @@ func (s *Server) audit(ctx context.Context, action, detail string) {
 	if err := s.store.AppendAudit(ctx, &e); err != nil {
 		s.log.Error("audit append failed", "action", action, "err", err)
 	}
+	s.metrics.Audit()
+	if action == "credential.rotate" {
+		s.metrics.Rotation()
+	}
 	s.log.Info("audit", "actor", e.Actor, "action", action, "detail", detail)
 }
 
 func (s *Server) health(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// readyz reports readiness: the server is up AND its store backend is reachable.
+// Kubernetes should gate traffic on this, and liveness on /healthz.
+func (s *Server) readyz(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+	defer cancel()
+	if err := s.store.Ping(ctx); err != nil {
+		s.log.Warn("readiness check failed", "err", err)
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"status": "not ready", "reason": "store unreachable"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ready"})
+}
+
+// metricsHandler serves the Prometheus exposition. It is intentionally
+// unauthenticated (like /healthz) and exposes only low-sensitivity counts;
+// restrict it at the network/ingress layer.
+func (s *Server) metricsHandler(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
+	s.metrics.WritePrometheus(w)
 }

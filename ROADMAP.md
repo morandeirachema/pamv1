@@ -120,9 +120,10 @@ Mapping to [Directive (EU) 2022/2555](https://eur-lex.europa.eu/eli/dir/2022/255
 - [x] **Audit retention + SIEM forwarding** guidance (append-only trail in Postgres; JSON logs + audit events to stdout for a collector; real-time alert webhook)
 - [x] **Risk-management documentation template** for essential/important entities
 
-## Phase 10 — Scale & operations ⬜
+## Phase 10 — Scale & operations ✅
 
-- [ ] HA: stateless multi-replica server; Postgres HA via [CloudNativePG](https://cloudnative-pg.io/)
-- [ ] Helm chart; Terraform modules for cloud-managed Postgres
-- [ ] Observability: Prometheus metrics, structured logs, health/readiness split
-- [ ] Supply chain: SBOM, signed releases (cosign), pinned digests, SLSA provenance
+- [x] **Observability**: Prometheus `/metrics` (`internal/metrics`, dependency-free exposition — request counts by status, audit volume, break-glass use, rotations, active-sessions gauge), structured JSON logs, **health/readiness split** (`/healthz` liveness + `/readyz` store-reachability readiness, `store.Ping`)
+- [x] **Helm chart** (`deploy/helm/pamv1`): deployment/service/secret/ingress/ServiceMonitor, configurable replicas, PVC or emptyDir, hardened pod security context
+- [x] **Signed releases** (`.github/workflows/release.yml`): build + push by digest on a version tag, **SBOM** (SPDX) generation + attestation, **cosign** keyless image signing, GitHub Release
+- [ ] HA: fully stateless multi-replica (shared store for OIDC PKCE / break-glass unseal / rate-limit state — currently per-replica in-memory); Postgres HA via [CloudNativePG](https://cloudnative-pg.io/) (follow-on)
+- [ ] Terraform modules for cloud-managed Postgres; SLSA provenance (follow-on)

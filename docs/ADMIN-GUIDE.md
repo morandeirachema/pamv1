@@ -112,7 +112,21 @@ kubectl -n pamv1 logs deploy/pam-server -f
 ```
 
 The deployment runs non-root, read-only root filesystem, all capabilities
-dropped, under the restricted [Pod Security Standard](https://kubernetes.io/docs/concepts/security/pod-security-standards/). Recordings and the host key live on a writable `/data` volume.
+dropped, under the restricted [Pod Security Standard](https://kubernetes.io/docs/concepts/security/pod-security-standards/). Recordings and the host key live on a writable `/data` volume. Readiness is gated on `/readyz` (DB reachable), liveness on `/healthz`.
+
+Or with **Helm** (`deploy/helm/pamv1`) — configurable replicas, a PVC option, a
+Prometheus `ServiceMonitor`, and the same hardened pod security context:
+
+```bash
+helm install pamv1 deploy/helm/pamv1 \
+  --set secret.data.PAM_MASTER_KEY=... \
+  --set secret.data.PAM_API_KEY=... \
+  --set secret.data.PAM_DATABASE_URL='postgres://pam:...@postgres:5432/pam?sslmode=verify-full' \
+  --set metrics.serviceMonitor.enabled=true
+```
+
+For production, set `secret.existingSecret` and manage PAM_* with an external
+secret manager (Vault / External Secrets Operator) rather than chart values.
 
 ### 3.5 Terraform (IaC)
 
@@ -553,6 +567,17 @@ Each proxied session is recorded in [asciicast v2](https://docs.asciinema.org/ma
 under `PAM_RECORDING_DIR`, and its SHA-256 is written to the audit trail (tamper
 evidence). Replay with [asciinema](https://asciinema.org/): `asciinema play <file>.cast`.
 
+### 9.4 Metrics & probes
+
+- `GET /metrics` — a Prometheus exposition: `pam_http_requests_total{status}`,
+  `pam_audit_events_total`, `pam_breakglass_access_total`,
+  `pam_auth_failures_total`, `pam_credential_rotations_total`, and the
+  `pam_active_sessions` gauge. It is **unauthenticated** (like `/healthz`) and
+  exposes only low-sensitivity counts — restrict it at the ingress/network. The
+  Helm chart can render a `ServiceMonitor` (`metrics.serviceMonitor.enabled`).
+- `GET /healthz` — liveness (process up). `GET /readyz` — readiness (returns 503
+  until the database is reachable); point your load balancer at `/readyz`.
+
 ---
 
 ## 10. Security & hardening notes
@@ -586,6 +611,7 @@ evidence). Replay with [asciinema](https://asciinema.org/): `asciinema play <fil
 
 | Date | Change |
 |---|---|
+| 2026-07-19 | Phase 10: scale & ops — Prometheus `/metrics`, `/readyz` readiness, Helm chart (`deploy/helm/pamv1`), SBOM + cosign-signed release workflow |
 | 2026-07-19 | Phase 9: NIS2 pack — tamper-evident audit export (`GET /api/audit/export`, JSON/CSV + SHA-256) for Art. 23; see [NIS2-COMPLIANCE.md](NIS2-COMPLIANCE.md) |
 | 2026-07-19 | Phase 8: OT adaptation — 4-eyes access-request approval (`/api/access-requests`), per-target/global gate (`PAM_REQUIRE_APPROVAL`), air-gap mode (`PAM_OT_AIRGAP`); see [OT-DEPLOYMENT.md](OT-DEPLOYMENT.md) |
 | 2026-07-19 | Phase 7: credential lifecycle — rotation (`/api/credentials/{id}/rotate`), reconciliation (`/reconcile`, `?remediate`, `GET /api/reconcile`), scheduled worker (`PAM_ROTATE_*`) |

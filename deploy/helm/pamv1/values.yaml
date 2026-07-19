@@ -1,0 +1,78 @@
+# Default values for the pamv1 chart. Override with -f my-values.yaml.
+
+replicaCount: 1
+
+image:
+  repository: ghcr.io/morandeirachema/pamv1
+  # Pin to a digest in production (e.g. @sha256:...); "latest" is for demos.
+  tag: ""            # defaults to .Chart.AppVersion
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+service:
+  type: ClusterIP
+  httpPort: 8080
+  sshPort: 2222
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  host: pam.example.com
+  tls:
+    enabled: true
+    secretName: pamv1-tls
+
+# Non-secret configuration passed as environment variables (PAM_*).
+config:
+  PAM_LOG_FORMAT: "json"
+  PAM_LOG_LEVEL: "info"
+  PAM_SSH_HOST_KEY: "/data/ssh_host_key"
+  PAM_RECORDING_DIR: "/data/recordings"
+  # OT / compliance toggles (see docs/OT-DEPLOYMENT.md, docs/NIS2-COMPLIANCE.md)
+  # PAM_REQUIRE_APPROVAL: "true"
+  # PAM_OT_AIRGAP: "true"
+
+# Secret PAM_* values. If create=true a Secret is rendered from these entries
+# (base64-encoded by Helm). In production prefer existingSecret + an external
+# secret manager (Vault, External Secrets Operator).
+secret:
+  create: true
+  existingSecret: ""
+  data:
+    PAM_MASTER_KEY: ""      # ./pam-server -genkey
+    PAM_API_KEY: ""
+    PAM_DATABASE_URL: ""    # postgres://... (use sslmode=verify-full)
+    # PAM_BREAK_GLASS_KEY_HASH: ""
+
+# Writable state for the read-only root FS (SSH host key + recordings).
+persistence:
+  enabled: false            # emptyDir when false; set true for a PVC
+  size: 1Gi
+  storageClass: ""
+
+metrics:
+  # Render a Prometheus Operator ServiceMonitor for /metrics.
+  serviceMonitor:
+    enabled: false
+    interval: 30s
+    labels: {}
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    memory: 256Mi
+
+podAnnotations:
+  prometheus.io/scrape: "true"
+  prometheus.io/port: "8080"
+  prometheus.io/path: "/metrics"
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

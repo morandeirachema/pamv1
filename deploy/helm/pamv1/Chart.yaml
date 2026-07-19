@@ -1,0 +1,17 @@
+apiVersion: v2
+name: pamv1
+description: pamv1 — open-source Privileged Access Management (alpha, educational; not production/audited)
+type: application
+# Chart version — bump on chart changes.
+version: 0.1.0
+# Application version — the pamv1 release this chart deploys by default.
+appVersion: "0.10.0"
+home: https://github.com/morandeirachema/pamv1
+sources:
+  - https://github.com/morandeirachema/pamv1
+keywords:
+  - pam
+  - privileged-access-management
+  - security
+maintainers:
+  - name: morandeirachema

@@ -519,6 +519,10 @@ func (s *PGStore) CountMFARecoveryCodes(ctx context.Context, username string) (i
 	return n, err
 }
 
+func (s *PGStore) Ping(ctx context.Context) error {
+	return s.pool.Ping(ctx)
+}
+
 func (s *PGStore) Close() {
 	s.pool.Close()
 }

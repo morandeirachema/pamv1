@@ -78,7 +78,8 @@ flowchart LR
 - **OT session approval (4-eyes)** — for industrial/[OT](docs/OT-DEPLOYMENT.md) deployments, gate a target behind an **approved access request**: a user files a request, a *different* approver approves it (self-approval refused), and only then may the user connect — enforced on the SSH proxy, WinRM **and** RDP, with break-glass as the bypass. Per-target (`require_approval`) or global (`PAM_REQUIRE_APPROVAL`), time-boxed for maintenance windows, plus an **air-gap mode** (`PAM_OT_AIRGAP`) that makes zero outbound calls.
 - **AS/400 portal** — Sign On screen, menu-driven `Work with…` screens, numeric options (`4=Delete`, `5=Display`), F3/F5/F6/F12 keys, green phosphor and scanlines.
 - **PostgreSQL storage** via [pgx](https://github.com/jackc/pgx); in-memory store for tests and demos.
-- **IaC deployment** — [Docker](https://docs.docker.com/) (distroless, non-root), [docker-compose](https://docs.docker.com/compose/) with hardened Postgres, [Kubernetes](https://kubernetes.io/) manifests under the restricted Pod Security Standard, and a [Terraform](https://developer.hashicorp.com/terraform) module.
+- **Observability** — a dependency-free [Prometheus](https://prometheus.io/) `/metrics` endpoint (request counts by status, audit volume, break-glass use, rotations, active-sessions gauge), plus a health/readiness split (`/healthz` liveness, `/readyz` checks the database).
+- **IaC deployment** — [Docker](https://docs.docker.com/) (distroless, non-root), [docker-compose](https://docs.docker.com/compose/) with hardened Postgres, [Kubernetes](https://kubernetes.io/) manifests under the restricted Pod Security Standard, a **[Helm chart](deploy/helm/pamv1)**, and a [Terraform](https://developer.hashicorp.com/terraform) module. Releases are built by digest with an **[SBOM](https://www.cisa.gov/sbom) and [cosign](https://docs.sigstore.dev/) keyless signature**.
 
 ## Roles & users
 
@@ -153,6 +154,15 @@ kubectl -n pamv1 create secret generic pam-secrets \
   --from-literal=PAM_BREAK_GLASS_KEY_HASH=... \
   --from-literal=PAM_DATABASE_URL=postgres://...
 kubectl apply -f deploy/k8s/
+```
+
+Or with Helm (readiness/metrics wired, configurable replicas, optional ServiceMonitor):
+
+```bash
+helm install pamv1 deploy/helm/pamv1 \
+  --set secret.data.PAM_MASTER_KEY=... \
+  --set secret.data.PAM_API_KEY=... \
+  --set secret.data.PAM_DATABASE_URL=postgres://...
 ```
 
 ### Terraform (IaC)

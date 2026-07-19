@@ -468,4 +468,6 @@ func (m *Memstore) CountMFARecoveryCodes(_ context.Context, username string) (in
 	return len(m.recovery[username]), nil
 }
 
+func (m *Memstore) Ping(_ context.Context) error { return nil }
+
 func (m *Memstore) Close() {}

@@ -213,6 +213,13 @@ endpoints arrive with the OT/approval phase).
   over the canonical event list in the body and the `X-PAM-Export-SHA256` header
   (tamper evidence for Art. 23 incident reports). The export is audited
   (`audit.export`).
+- **Observability** (Phase 10, unauthenticated like `/healthz` — restrict at the
+  network): `GET /metrics` renders a dependency-free Prometheus exposition
+  (`internal/metrics`: `pam_http_requests_total{status}`, `pam_audit_events_total`,
+  `pam_breakglass_access_total`, `pam_auth_failures_total`,
+  `pam_credential_rotations_total`, `pam_active_sessions` gauge). `GET /healthz`
+  is liveness; `GET /readyz` is readiness (calls `store.Ping`, 503 if the DB is
+  unreachable). All three are skipped by the access log + request counter.
 
 ### 2.5 `proxy`  *(Phase 2, RBAC in 3a)*
 
@@ -408,6 +415,7 @@ secrets. Format `json` (SIEM) or `text` (humans); collect from stdout.
 
 | Date | Change |
 |---|---|
+| 2026-07-19 | Phase 10: scale & ops — `internal/metrics` + `GET /metrics` (Prometheus), `GET /readyz` (`store.Ping`), `deploy/helm/pamv1` chart, `release.yml` (SBOM + cosign signing) |
 | 2026-07-19 | Phase 9: NIS2 pack — `GET /api/audit/export` (`compliance_handlers.go`, `store.ExportAudit`, JSON/CSV, SHA-256 tamper digest), `docs/NIS2-COMPLIANCE.md` (Art. 21 matrix + Art. 23 export) |
 | 2026-07-19 | Phase 8: OT adaptation — access-request approval workflow (`approval_handlers.go`, `store.AccessRequest`, migration `0002`, 4-eyes, enforced on proxy/WinRM/RDP), air-gap mode (`PAM_OT_AIRGAP`), `docs/OT-DEPLOYMENT.md` |
 | 2026-07-19 | Phase 7: credential lifecycle — `internal/rotate` (SSH/WinRM `Rotator`/`Verifier`, strong password gen), `POST /api/credentials/{id}/rotate`, `/reconcile[?remediate]`, `GET /api/reconcile`, background worker (`scheduler.go`), store `RotateCredentialSecret` |

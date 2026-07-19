@@ -190,5 +190,8 @@ type Store interface {
 	// CountMFARecoveryCodes returns how many recovery codes remain.
 	CountMFARecoveryCodes(ctx context.Context, username string) (int, error)
 
+	// Ping reports whether the backend is reachable (readiness probe).
+	Ping(ctx context.Context) error
+
 	Close()
 }

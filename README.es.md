@@ -123,10 +123,15 @@ Los componentes con línea discontinua (objetivos Windows) llegan en la [Fase 4]
   teclas F), deliberatamente austera para que los administradores sientan el peso del sistema.
 - **Almacenamiento PostgreSQL** vía [pgx](https://github.com/jackc/pgx); almacén en memoria
   para pruebas y demos.
+- **Observabilidad** — endpoint [Prometheus](https://prometheus.io/) `/metrics` sin dependencias
+  (peticiones por estado, volumen de auditoría, uso de break-glass, rotaciones, gauge de sesiones
+  activas), más división liveness/readiness (`/healthz` y `/readyz`, que comprueba la base de datos).
 - **Despliegue como IaC** — [Docker](https://docs.docker.com/) (distroless, sin root),
   [docker-compose](https://docs.docker.com/compose/) con PostgreSQL endurecida,
   manifiestos de [Kubernetes](https://kubernetes.io/) bajo el Pod Security Standard restringido,
-  y un módulo de [Terraform](https://developer.hashicorp.com/terraform).
+  un **[chart de Helm](deploy/helm/pamv1)** y un módulo de [Terraform](https://developer.hashicorp.com/terraform).
+  Las releases se construyen por digest con **[SBOM](https://www.cisa.gov/sbom) y firma
+  [cosign](https://docs.sigstore.dev/) sin claves**.
 
 ## Documentación
 

@@ -1,0 +1,23 @@
+pamv1 {{ .Chart.AppVersion }} deployed as release {{ .Release.Name }}.
+
+  ALPHA — for learning purposes. Not production, not audited.
+
+Service (ClusterIP by default):
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "pamv1.fullname" . }} 8080:{{ .Values.service.httpPort }}
+  open http://localhost:8080  (Sign On with your PAM_API_KEY)
+
+Checks:
+  /healthz  liveness
+  /readyz   readiness (DB reachable)
+  /metrics  Prometheus exposition
+{{- if not .Values.ingress.enabled }}
+
+Ingress is disabled. Enable TLS termination via ingress.enabled=true and set
+ingress.host / ingress.tls.secretName, or use native HTTPS (PAM_TLS_CERT/KEY).
+{{- end }}
+{{- if .Values.secret.create }}
+
+WARNING: secret.create=true stores PAM_* values in a Kubernetes Secret rendered
+from values. For production use secret.existingSecret with an external secret
+manager (Vault / External Secrets Operator).
+{{- end }}
