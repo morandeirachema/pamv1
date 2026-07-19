@@ -126,6 +126,19 @@ func (s *Server) issueSessionTTL(ctx context.Context, p *auth.Principal, scope s
 	return token, sess, nil
 }
 
+// me returns the calling identity — name, role, break-glass flag, and the stable
+// names of the capabilities its role holds — so the portal can show only the menu
+// options the identity may use (panels still tolerate a 403 as defense in depth).
+func (s *Server) me(w http.ResponseWriter, r *http.Request) {
+	p := principalFrom(r.Context())
+	writeJSON(w, http.StatusOK, map[string]any{
+		"name":         p.Name,
+		"role":         string(p.Role),
+		"break_glass":  p.BreakGlass,
+		"capabilities": p.Role.Capabilities(),
+	})
+}
+
 // checkSecondFactor accepts a valid TOTP code or a single-use recovery code.
 func (s *Server) checkSecondFactor(ctx context.Context, username string, enr *store.MFAEnrollment, otp string) bool {
 	if secret, err := s.vault.Decrypt(ctx, enr.SecretEnc, store.MFAAAD(username)); err == nil {

@@ -143,3 +143,35 @@ Mapping to [Directive (EU) 2022/2555](https://eur-lex.europa.eu/eli/dir/2022/255
 - [x] **Postgres HA** via [CloudNativePG](https://cloudnative-pg.io/): a 3-instance `Cluster` manifest (`deploy/k8s/postgres-cnpg.yaml`, automatic failover, scram-sha-256, optional PITR)
 - [x] **Terraform module for cloud-managed Postgres** (`deploy/terraform/cloud-postgres/` — AWS RDS example: multi-AZ, encrypted, `force_ssl`)
 - [x] **SLSA build provenance** attested on release (`actions/attest-build-provenance` in `release.yml`, pushed to the registry alongside the cosign signature + SBOM)
+
+## Phase 11 — Management console ✅
+
+The AS/400 5250 green-terminal portal grows from 3 screens into a full
+management console covering every backend capability (CyberArk/Wallix-grade
+*coverage*, IBM 5250 *look*). Still one `//go:embed`'d page, vanilla JS,
+nonce-CSP, no build step — the retro aesthetic is a deliberate constraint, not a
+limitation.
+
+- [x] **Role-aware menu** — `GET /api/me` returns the caller's identity + the stable capability names its role holds; the main menu shows only the options the role may use (panels still tolerate a 403 as a backstop)
+- [x] **Targets** — subfile with delete + *work-with-grants*, `require_approval` on add; **target grants** screen (list/add/delete role- or user-scoped access)
+- [x] **Credentials** — reveal (audited), **check-out** (leased secret + expiry), rotate, reconcile, delete
+- [x] **Check-out / check-in** — active exclusive leases; check-in rotates the secret
+- [x] **Active sessions** — live monitor (auto-refresh) of proxied SSH/WinRM/RDP sessions with a kill switch
+- [x] **Access requests** — 4-eyes: approvers see pending requests and approve/deny; connect-capable users file requests
+- [x] **Users & roles** — mint one-time tokens, delete, run directory reconciliation
+- [x] **MFA self-service** — enroll (secret + otpauth), confirm, recovery codes, disable
+- [x] **Discovery** — scan hosts for reachable SSH/WinRM/RDP and optionally onboard as targets
+- [x] **Reconciliation report** — read-only drift scan across all credentials
+- [x] **Audit trail** — client-side filter + tamper-evident CSV export (SHA-256)
+- [x] **Break-glass unseal** — submit an M-of-N quorum share; on quorum an audited, auto-expiring admin session is issued
+
+## Phase 12 — Configuration subsystem & custom profiles 🚧
+
+Make identity backends, policies, and permission profiles configurable from the
+console — the CyberArk/Wallix administration surface — using a **hybrid** model
+that respects the project's IaC-first roots.
+
+- [ ] **Hybrid config model**: directory bindings (LDAP/AD, **Kerberos**), SSO (Entra/OIDC), and policies become editable settings **persisted in the DB** and applied on save (with restart-on-change where a listener must rebind); the authenticator chain is rebuilt from stored config
+- [ ] **Networking/TLS stays IaC**: a read-only effective-config + backend-health screen plus a generator that emits the env/Helm/Terraform to apply (listeners/ports/TLS cannot be safely rebound at runtime)
+- [ ] **Custom permission profiles**: named capability sets assignable to users and directory groups (a configurable RBAC engine), with the current 4 roles as built-in defaults; assignment surfaced in *Work with users & profiles*
+- [ ] Console screens to manage directory bindings, SSO, profiles, and network status (Kerberos *config* is buildable here even though live Kerberos auth needs a KDC to exercise — see the infra-bound list above)

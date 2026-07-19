@@ -342,6 +342,9 @@ func (s *Server) routes() {
 	s.mux.Handle("GET /api/auth/oidc/callback", s.rateLimit(http.HandlerFunc(s.oidcCallback)))
 	s.mux.Handle("POST /api/breakglass/unseal", s.rateLimit(http.HandlerFunc(s.breakGlassUnseal)))
 
+	// Identity of the caller (drives the portal's role-aware menu).
+	s.mux.Handle("GET /api/me", s.authenticated(s.me))
+
 	// Self-service MFA (any authenticated identity manages its own second factor).
 	s.mux.Handle("GET /api/mfa", s.authenticated(s.mfaStatus))
 	s.mux.Handle("POST /api/mfa/enroll", s.authenticated(s.mfaEnroll))

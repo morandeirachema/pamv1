@@ -95,7 +95,7 @@ All ten roadmap phases have shipped. Grouped by area:
 
 ### Portal, storage & operations
 
-- **AS/400 portal** — Sign On screen, menu-driven `Work with…` screens, numeric options (`4=Delete`, `5=Display`), F3/F5/F6/F12 keys, green phosphor and scanlines.
+- **AS/400 portal** — a full role-aware management console in green phosphor: Sign On, a numbered main menu, and menu-driven `Work with…` screens for targets & grants, credentials (reveal/check-out/rotate/reconcile), active sessions (live monitor + kill), 4-eyes access requests, users & roles, MFA, discovery, reconciliation, audit (filter + CSV export) and break-glass — numeric options (`4=Delete`, `5=Display`), F3/F5/F6/F9/F12 keys, scanlines. The menu shows only what your role permits.
 - **PostgreSQL storage** via [pgx](https://github.com/jackc/pgx) with embedded migrations; an in-memory store for tests and demos; optional **[CloudNativePG](https://cloudnative-pg.io/) HA**.
 - **Observability** — a dependency-free [Prometheus](https://prometheus.io/) `/metrics` endpoint (request counts by status, audit volume, break-glass use, rotations, active-sessions gauge), plus a health/readiness split (`/healthz` liveness, `/readyz` checks the database).
 - **IaC deployment** — [Docker](https://docs.docker.com/) (distroless, non-root), [docker-compose](https://docs.docker.com/compose/) with hardened Postgres, [Kubernetes](https://kubernetes.io/) manifests under the restricted Pod Security Standard, a **[Helm chart](deploy/helm/pamv1)**, and a [Terraform](https://developer.hashicorp.com/terraform) module. Releases are built by digest with an **[SBOM](https://www.cisa.gov/sbom), [cosign](https://docs.sigstore.dev/) keyless signature and SLSA provenance**.

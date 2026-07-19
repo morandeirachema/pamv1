@@ -101,16 +101,35 @@ touching privileged systems.
 | Key | Action |
 |---|---|
 | **Enter** | Confirm / submit the screen |
-| **F3** | Exit / sign off |
+| **F3** | Exit to the main menu / sign off |
 | **F5** | Refresh |
-| **F6** | Add (a target or credential — admin) |
+| **F6** | Add (target, credential, grant, user, access request) |
+| **F9** | Context action (export the audit CSV; reconcile the directory) |
 | **F12** | Cancel / go back |
+
+The **main menu** is your whole management surface, and it shows **only the
+options your role may use**:
+
+| # | Screen |
+|---|---|
+| 1 | Work with targets (+ access grants, require-approval) |
+| 2 | Work with vaulted credentials (reveal, check-out, rotate, reconcile) |
+| 3 | Credential check-out / check-in (exclusive leases) |
+| 4 | Work with active sessions (live monitor + kill) |
+| 5 | Work with access requests (4-eyes approve / deny / file) |
+| 6 | Rotation & reconciliation report |
+| 7 | Discovery scan (find and onboard hosts) |
+| 8 | Work with users & profiles (mint tokens, directory reconcile) |
+| 9 | Multi-factor authentication (enroll / recovery / disable — yourself) |
+| 10 | Display audit trail (filter + CSV export) |
+| 11 | Break-glass unseal (M-of-N quorum) |
+| 90 | Sign off |
 
 On list screens you type an **option number** next to a row (e.g. `5` to display,
 `4` to delete) and press Enter.
 
-Panels you're not allowed to see simply stay empty — that's normal for your role,
-not an error.
+Options your role can't use simply don't appear on the menu — that's normal for
+your role, not an error.
 
 ## 5. Connecting to a target (the main event)
 
@@ -180,6 +199,7 @@ emergency access and always deserve a look.
 
 | Date | Change |
 |---|---|
+| 2026-07-20 | Phase 11: the portal is now a full role-aware management console — menu options for sessions, check-out, access requests, users, MFA, discovery, reconciliation, audit export and break-glass, in the same 5250 style |
 | 2026-07-18 | Phase 3b: OIDC single sign-on option on Sign On |
 | 2026-07-18 | Phase 3b: recovery codes + enforce-MFA (enrollment-only first sign-in) |
 | 2026-07-18 | Phase 3b: TOTP MFA (enroll/confirm, MFA code on Sign On) |

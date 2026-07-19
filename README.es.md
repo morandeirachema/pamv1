@@ -152,8 +152,13 @@ Ya han entregado las diez fases del roadmap. Agrupado por área:
 
 ### Portal, almacenamiento y operación
 
-- **Portal AS/400** — interfaz de terminal 5250 en fósforo verde (Sign On, pantallas por menú,
-  teclas F), deliberatamente austera para que los administradores sientan el peso del sistema.
+- **Portal AS/400** — una consola de gestión completa y consciente del rol, en fósforo verde:
+  Sign On, un menú principal numerado y pantallas `Trabajar con…` para objetivos y permisos,
+  credenciales (revelar/préstamo/rotar/reconciliar), sesiones activas (monitor en vivo + corte),
+  solicitudes de acceso (cuatro ojos), usuarios y roles, MFA, descubrimiento, reconciliación,
+  auditoría (filtro + exportación CSV) y break-glass — opciones numéricas (`4=Borrar`,
+  `5=Mostrar`), teclas F3/F5/F6/F9/F12, deliberadamente austera. El menú solo muestra lo que
+  tu rol permite.
 - **Almacenamiento PostgreSQL** vía [pgx](https://github.com/jackc/pgx) con migraciones embebidas;
   almacén en memoria para pruebas y demos; **HA opcional con [CloudNativePG](https://cloudnative-pg.io/)**.
 - **Observabilidad** — endpoint [Prometheus](https://prometheus.io/) `/metrics` sin dependencias

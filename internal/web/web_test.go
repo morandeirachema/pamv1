@@ -44,3 +44,33 @@ func TestIndexNonceCSP(t *testing.T) {
 		t.Fatal("CSP nonce was reused across requests")
 	}
 }
+
+// TestIndexExposesConsole checks the served portal is the full management
+// console: the expanded main menu and the key management screens are present.
+func TestIndexExposesConsole(t *testing.T) {
+	rec := httptest.NewRecorder()
+	Index(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+	body := rec.Body.String()
+
+	// Every management area the console must surface (screen titles / menu items).
+	for _, marker := range []string{
+		"PAMV1 Main Menu",
+		"Work with Targets",
+		"Work with Target Grants",
+		"Work with Vaulted Credentials",
+		"Credential Check-out / Check-in",
+		"Work with Active Sessions",
+		"Work with Access Requests",
+		"Work with Users & Profiles",
+		"Multi-Factor Authentication",
+		"Discovery Scan",
+		"Credential Reconciliation",
+		"Display Audit Trail",
+		"Break-Glass Unseal",
+		"/api/me", // role-aware menu source
+	} {
+		if !strings.Contains(body, marker) {
+			t.Errorf("portal is missing management surface %q", marker)
+		}
+	}
+}

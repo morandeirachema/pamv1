@@ -85,6 +85,40 @@ func (r Role) Can(c Capability) bool {
 	return roleCaps[r][c]
 }
 
+// capNames maps each capability to a stable snake_case name. The portal keys its
+// role-aware menu off these, so they are part of the /api/me contract — do not
+// rename without updating the portal.
+var capNames = map[Capability]string{
+	CapReadInventory:     "read_inventory",
+	CapManageTargets:     "manage_targets",
+	CapManageCredentials: "manage_credentials",
+	CapRevealSecret:      "reveal_secret",
+	CapConnect:           "connect",
+	CapReadAudit:         "read_audit",
+	CapManageUsers:       "manage_users",
+	CapApprove:           "approve",
+}
+
+// String returns the capability's stable snake_case name.
+func (c Capability) String() string {
+	if s, ok := capNames[c]; ok {
+		return s
+	}
+	return "unknown"
+}
+
+// Capabilities returns the stable names of every capability the role is granted,
+// in capability-enum order.
+func (r Role) Capabilities() []string {
+	out := make([]string, 0, len(capNames))
+	for c := CapReadInventory; c <= CapApprove; c++ {
+		if r.Can(c) {
+			out = append(out, c.String())
+		}
+	}
+	return out
+}
+
 // CanConnectTarget reports whether the principal may connect to a target given
 // its grants. A target with no grants is open to any connect-capable principal;
 // admins may always connect; otherwise a grant must match the user or its role.

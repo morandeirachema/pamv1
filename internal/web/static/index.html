@@ -18,11 +18,12 @@
     content: ""; position: fixed; inset: 0; pointer-events: none;
     background: repeating-linear-gradient(0deg, rgba(0,0,0,.22) 0 1px, transparent 1px 3px);
   }
-  #term { width: 100%; max-width: 960px; padding: 12px 16px; white-space: pre-wrap; }
+  #term { width: 100%; max-width: 980px; padding: 12px 16px; white-space: pre-wrap; }
   a, .green { color: #2eff7b; }
   .white { color: #eaffea; text-shadow: 0 0 5px rgba(234,255,234,.35); }
   .cyan  { color: #4be0e0; text-shadow: 0 0 5px rgba(75,224,224,.35); }
   .red   { color: #ff4d4d; text-shadow: 0 0 5px rgba(255,77,77,.45); }
+  .amber { color: #ffcf55; text-shadow: 0 0 5px rgba(255,207,85,.4); }
   .blink { animation: blink 1s steps(1) infinite; }
   @keyframes blink { 50% { opacity: 0; } }
   .row { display: flex; justify-content: space-between; }
@@ -39,6 +40,7 @@
   select { border: 1px solid #123c1f; }
   input:focus { background: #0a2a12; }
   input.opt { width: 3ch; text-align: center; text-transform: uppercase; }
+  input[type=checkbox] { width: auto; }
   .fkeys { color: #4be0e0; margin-top: 8px; }
   .msg { min-height: 1.3em; color: #eaffea; }
   .msg.err { color: #ff4d4d; }
@@ -53,6 +55,7 @@
 (() => {
   const term = document.getElementById("term");
   let apiKey = sessionStorage.getItem("pam_api_key") || "";
+  let me = null; // { name, role, break_glass, capabilities:[] }
 
   // Pick up a token/error handed back by the OIDC callback in the URL fragment.
   let ssoMsg = "", ssoErr = false;
@@ -66,10 +69,15 @@
   let screen = apiKey ? "main" : "signon";
   let back = "main";
   let msg = ssoMsg, msgErr = ssoErr;
-  let targets = [], creds = [], audit = [], viewCred = null;
+  // Per-screen data.
+  let targets = [], creds = [], audit = [], sessions = [], requests = [], checkouts = [], users = [], grants = [];
+  let viewCred = null, grantsTarget = 0, newUser = null, mfaInfo = null, mfaEnroll = null, recoveryCodes = [], discovered = null, reconcileReport = null;
+  let liveTimer = null;
 
   const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   const pad = (s, n) => esc(String(s ?? "")).padEnd(n);
+  const can = (c) => !!(me && me.capabilities && me.capabilities.includes(c));
+  const fmtTime = (t) => t ? esc(String(t).replace("T", " ").slice(0, 19)) : "-";
   const now = () => { const d = new Date(), z = (x) => String(x).padStart(2, "0");
     return `${z(d.getDate())}/${z(d.getMonth() + 1)}/${String(d.getFullYear()).slice(2)}  ${z(d.getHours())}:${z(d.getMinutes())}:${z(d.getSeconds())}`; };
 
@@ -89,26 +97,62 @@
     return data;
   }
 
-  // Load each panel independently so a role without a given capability (a 403)
-  // still gets a working portal — the panels it may not see just stay empty.
-  async function load() {
-    const get = async (path) => {
-      try { return await api("GET", path); }
-      catch (e) { if (e.status === 403) return []; throw e; }
-    };
-    [targets, creds, audit] = await Promise.all([
-      get("/api/targets"), get("/api/credentials"), get("/api/audit?limit=30"),
-    ]);
-  }
+  // loadMe resolves the caller's identity + capabilities so the menu shows only
+  // the options the role may use. Panels still tolerate a 403 as a backstop.
+  async function loadMe() { me = await api("GET", "/api/me"); }
 
   const say = (t, err) => { msg = t; msgErr = !!err; };
+  function stopLive() { if (liveTimer) { clearInterval(liveTimer); liveTimer = null; } }
 
   function head(id, title) {
     return `<div class="row"><span class="white">${id}</span><span>${title}</span><span class="white">SYSTEM: PAMV1</span></div>` +
-           `<div class="row"><span></span><span class="cyan">${now()}</span></div><hr>`;
+           `<div class="row"><span>${me ? esc(me.name) + " / " + esc(me.role) + (me.break_glass ? " (BREAK-GLASS)" : "") : ""}</span><span class="cyan">${now()}</span></div><hr>`;
   }
   const fkeys = (t) => `<hr><div class="fkeys">${t}</div>` +
     `<div class="msg${msgErr ? " err" : ""}">${esc(msg)}</div>`;
+
+  // opt renders a subfile option input; optCell reads the typed option for a row.
+  const opt = (id) => `<input class="opt" name="o${esc(id)}" maxlength="1">`;
+  const optVal = (form, id) => (form["o" + id]?.value || "").trim();
+
+  // --- async openers: fetch the screen's data, then render it. Also used by F5. ---
+  async function openTargets() { try { targets = await api("GET", "/api/targets"); } catch (e) { targets = []; } go("targets"); }
+  async function openCreds() { try { [targets, creds] = await Promise.all([api("GET", "/api/targets").catch(() => []), api("GET", "/api/credentials")]); } catch (e) { creds = []; } go("creds"); }
+  async function openSessions() { try { sessions = await api("GET", "/api/sessions"); } catch (e) { sessions = []; } go("sessions"); }
+  async function openCheckouts() { try { [targets, checkouts] = await Promise.all([api("GET", "/api/targets").catch(() => []), api("GET", "/api/checkouts?active=true")]); } catch (e) { checkouts = []; } go("checkouts"); }
+  async function openUsers() { try { users = await api("GET", "/api/users"); } catch (e) { users = []; } go("users"); }
+  async function openMfa() { try { mfaInfo = await api("GET", "/api/mfa"); } catch (e) { mfaInfo = { enrolled: false, confirmed: false }; } go("mfa"); }
+  async function openAudit() { try { audit = await api("GET", "/api/audit?limit=100"); } catch (e) { audit = []; } go("audit"); }
+  async function openReconcile() { reconcileReport = null; try { reconcileReport = await api("GET", "/api/reconcile"); } catch (e) {} go("reconcile"); }
+  async function openGrants(tid) { grantsTarget = tid; try { grants = await api("GET", `/api/targets/${tid}/grants`); } catch (e) { grants = []; } go("grants"); }
+  async function openRequests() {
+    requests = [];
+    if (can("approve")) { try { requests = await api("GET", "/api/access-requests"); } catch (e) {} }
+    if (targets.length === 0) { try { targets = await api("GET", "/api/targets"); } catch (e) {} }
+    go("requests");
+  }
+
+  const targetName = (id) => { const t = targets.find((x) => x.id === id); return t ? t.name : id; };
+
+  // reconcileIdentities revokes directory users who have been disabled upstream.
+  async function reconcileIdentities() {
+    const r = await api("POST", "/api/identity/reconcile");
+    say(`IDENTITY RECONCILE: checked ${r.checked ?? "?"}, revoked ${r.revoked ?? 0}.`);
+    await openUsers();
+  }
+
+  // exportAudit downloads the tamper-evident CSV export and shows its digest.
+  async function exportAudit() {
+    const res = await fetch("/api/audit/export?format=csv", { headers: { "X-API-Key": apiKey } });
+    if (!res.ok) { say("CPF9999: EXPORT FAILED (" + res.status + ")", true); render(); return; }
+    const digest = res.headers.get("X-PAM-Export-SHA256") || "";
+    const url = URL.createObjectURL(await res.blob());
+    const a = document.createElement("a");
+    a.href = url; a.download = "pamv1-audit-export.csv"; a.click();
+    URL.revokeObjectURL(url);
+    say("AUDIT EXPORTED — SHA256 " + digest.slice(0, 16) + "…");
+    render();
+  }
 
   function render() {
     ({
@@ -152,60 +196,74 @@ ${fkeys("")}
             } else {
               apiKey = tok || user;
             }
-            await load();
+            await loadMe();
             sessionStorage.setItem("pam_api_key", apiKey);
             say("SIGN ON COMPLETE.");
             go("main");
-          } catch (e) { say("CPF1120: " + e.message, true); render(); }
+          } catch (e) { apiKey = ""; say("CPF1120: " + e.message, true); render(); }
         };
       },
 
       main() {
+        back = "main";
+        const line = (num, show, label) => show ? `${String(num).padStart(2)}. ${label}\n` : "";
+        const menu =
+          line(1, can("read_inventory"), "Work with targets") +
+          line(2, can("read_inventory"), "Work with credentials") +
+          line(3, can("reveal_secret"), "Credential check-out / check-in") +
+          line(4, can("read_audit"), "Work with active sessions") +
+          line(5, can("approve") || can("connect"), "Work with access requests") +
+          line(6, can("manage_credentials"), "Rotation & reconciliation") +
+          line(7, can("manage_targets"), "Discovery scan") +
+          line(8, can("manage_users"), "Work with users & profiles") +
+          line(9, true, "Multi-factor authentication (yourself)") +
+          line(10, can("read_audit"), "Display audit trail") +
+          line(11, true, "Break-glass unseal") +
+          "90. Sign off\n";
         term.innerHTML = `${head("PAMMAIN", "PAMV1 Main Menu")}
 Select one of the following:
 
-<div class="indent">1. Work with targets
-2. Work with credentials
-3. Display audit trail
-
-90. Sign off
-</div>
+<div class="indent">${menu}</div>
 <form id="f-cmd">Selection or command
 ===&gt; <input id="in-cmd" size="30" autofocus></form>
 ${fkeys("F3=Sign off   F5=Refresh")}`;
-        document.getElementById("f-cmd").onsubmit = (ev) => {
+        document.getElementById("f-cmd").onsubmit = async (ev) => {
           ev.preventDefault();
           const c = document.getElementById("in-cmd").value.trim();
-          if (c === "1") go("targets");
-          else if (c === "2") go("creds");
-          else if (c === "3") go("audit");
-          else if (c === "90") signoff();
+          const routes = {
+            "1": openTargets, "2": openCreds, "3": openCheckouts, "4": openSessions,
+            "5": openRequests, "6": openReconcile, "7": () => go("discovery"),
+            "8": openUsers, "9": openMfa, "10": openAudit, "11": () => go("breakglass"),
+            "90": signoff,
+          };
+          if (routes[c]) { try { await routes[c](); } catch (e) { say("CPF9999: " + e.message, true); render(); } }
           else { say("CPF0001: SELECTION " + c.toUpperCase() + " NOT VALID.", true); render(); }
         };
       },
 
       targets() {
         back = "main";
+        const canManage = can("manage_targets");
         term.innerHTML = `${head("PAMWRKTGT", "Work with Targets")}
 Type options, press Enter.
-  <span class="cyan">4=Delete   5=Work with credentials</span>
+  <span class="cyan">${canManage ? "4=Delete   5=Work with grants" : "(read-only role)"}</span>
 
 <form id="f-list"><table>
-<tr><th>Opt</th><th>ID</th><th>Name</th><th>Host</th><th>Port</th><th>OS</th><th>Proto</th></tr>
-${targets.map((t) => `<tr><td><input class="opt" name="o${esc(t.id)}" maxlength="1"></td><td>${esc(t.id)}</td><td>${pad(t.name, 18)}</td><td>${pad(t.host, 22)}</td><td>${esc(t.port)}</td><td>${pad(t.os_type, 8)}</td><td>${esc(t.protocol)}</td></tr>`).join("")}
-</table>${targets.length ? "" : `<div class="cyan indent">(No targets defined. Press F6 to add.)</div>`}
+<tr><th>Opt</th><th>ID</th><th>Name</th><th>Host</th><th>Port</th><th>OS</th><th>Proto</th><th>Approval</th></tr>
+${targets.map((t) => `<tr><td>${opt(t.id)}</td><td>${esc(t.id)}</td><td>${pad(t.name, 16)}</td><td>${pad(t.host, 20)}</td><td>${esc(t.port)}</td><td>${pad(t.os_type, 8)}</td><td>${pad(t.protocol, 6)}</td><td>${t.require_approval ? '<span class="amber">required</span>' : "-"}</td></tr>`).join("")}
+</table>${targets.length ? "" : `<div class="cyan indent">(No targets defined.${canManage ? " Press F6 to add." : ""})</div>`}
 <input type="submit" hidden></form>
-${fkeys("F3=Exit   F5=Refresh   F6=Add target   F12=Cancel")}`;
+${fkeys(`F3=Exit   F5=Refresh${canManage ? "   F6=Add target" : ""}   F12=Cancel`)}`;
         document.getElementById("f-list").onsubmit = async (ev) => {
           ev.preventDefault();
           try {
             for (const t of targets) {
-              const o = ev.target["o" + t.id]?.value.trim();
-              if (o === "4") { await api("DELETE", `/api/targets/${t.id}`); say(`TARGET ${t.name.toUpperCase()} DELETED.`); }
-              else if (o === "5") { await load(); go("creds"); return; }
+              const o = optVal(ev.target, t.id);
+              if (o === "4") { await api("DELETE", `/api/targets/${t.id}`); say(`TARGET ${String(t.name).toUpperCase()} DELETED.`); }
+              else if (o === "5") { return openGrants(t.id); }
               else if (o) { say("CPF0002: OPTION " + o.toUpperCase() + " NOT VALID.", true); }
             }
-            await load(); render();
+            await openTargets();
           } catch (e) { say("CPF9999: " + e.message, true); render(); }
         };
       },
@@ -221,14 +279,60 @@ Type choices, press Enter.
 <label>Port  . . . . . . . :  <input name="port" type="number" value="22" min="1" max="65535" size="6" required></label>
 <label>OS type . . . . . . :  <select name="os_type"><option>linux</option><option>windows</option></select>   <span class="cyan">linux, windows</span></label>
 <label>Protocol  . . . . . :  <select name="protocol"><option>ssh</option><option>winrm</option><option>rdp</option></select>   <span class="cyan">ssh, winrm, rdp</span></label>
+<label>Require approval  . :  <input name="require_approval" type="checkbox">   <span class="cyan">connections need an approved request (4-eyes)</span></label>
 <input type="submit" hidden>
 </form>
 ${fkeys("F3=Exit   F12=Cancel")}`;
         document.getElementById("f-add").onsubmit = async (ev) => {
           ev.preventDefault();
           const f = Object.fromEntries(new FormData(ev.target));
-          f.port = Number(f.port);
-          try { await api("POST", "/api/targets", f); await load(); say(`TARGET ${f.name.toUpperCase()} ADDED.`); go("targets"); }
+          const body = { name: f.name, host: f.host, port: Number(f.port), os_type: f.os_type, protocol: f.protocol, require_approval: ev.target.require_approval.checked };
+          try { await api("POST", "/api/targets", body); say(`TARGET ${String(f.name).toUpperCase()} ADDED.`); await openTargets(); }
+          catch (e) { say("CPF9898: " + e.message, true); render(); }
+        };
+      },
+
+      grants() {
+        back = "targets";
+        term.innerHTML = `${head("PAMWRKGRT", "Work with Target Grants")}
+Grants for target <span class="white">${esc(targetName(grantsTarget))}</span> (id ${esc(grantsTarget)}).
+A target with no grants is open to any connect-capable identity.
+  <span class="cyan">4=Delete</span>
+
+<form id="f-list"><table>
+<tr><th>Opt</th><th>ID</th><th>Subject type</th><th>Subject</th></tr>
+${grants.map((g) => `<tr><td>${opt(g.id)}</td><td>${esc(g.id)}</td><td>${pad(g.subject_type, 10)}</td><td>${esc(g.subject)}</td></tr>`).join("")}
+</table>${grants.length ? "" : `<div class="cyan indent">(No grants — target is open to all connect-capable identities. F6 to restrict.)</div>`}
+<input type="submit" hidden></form>
+${fkeys("F3=Exit   F5=Refresh   F6=Add grant   F12=Cancel")}`;
+        document.getElementById("f-list").onsubmit = async (ev) => {
+          ev.preventDefault();
+          try {
+            for (const g of grants) {
+              const o = optVal(ev.target, g.id);
+              if (o === "4") { await api("DELETE", `/api/targets/${grantsTarget}/grants/${g.id}`); say(`GRANT ${g.id} DELETED.`); }
+              else if (o) { say("CPF0002: OPTION " + o.toUpperCase() + " NOT VALID.", true); }
+            }
+            await openGrants(grantsTarget);
+          } catch (e) { say("CPF9999: " + e.message, true); render(); }
+        };
+      },
+
+      grantadd() {
+        back = "grants";
+        term.innerHTML = `${head("PAMADDGRT", "Add Target Grant")}
+Grant access to target <span class="white">${esc(targetName(grantsTarget))}</span>.
+
+<form id="f-add" class="indent">
+<label>Subject type  . . . :  <select name="subject_type"><option>role</option><option>user</option></select>   <span class="cyan">role, user</span></label>
+<label>Subject . . . . . . :  <input name="subject" size="24" required autofocus>   <span class="cyan">a role (admin/user/…) or a username</span></label>
+<input type="submit" hidden>
+</form>
+${fkeys("F3=Exit   F12=Cancel")}`;
+        document.getElementById("f-add").onsubmit = async (ev) => {
+          ev.preventDefault();
+          const f = Object.fromEntries(new FormData(ev.target));
+          try { await api("POST", `/api/targets/${grantsTarget}/grants`, f); say("GRANT ADDED."); await openGrants(grantsTarget); }
           catch (e) { say("CPF9898: " + e.message, true); render(); }
         };
       },
@@ -236,26 +340,31 @@ ${fkeys("F3=Exit   F12=Cancel")}`;
       creds() {
         back = "main";
         const tn = Object.fromEntries(targets.map((t) => [t.id, t.name]));
+        const canManage = can("manage_credentials"), canReveal = can("reveal_secret");
+        const optsHelp = [canReveal && "5=Display secret   6=Check-out", canManage && "7=Rotate   8=Reconcile", canManage && "4=Delete"].filter(Boolean).join("   ");
         term.innerHTML = `${head("PAMWRKCRD", "Work with Vaulted Credentials")}
 Type options, press Enter.
-  <span class="cyan">4=Delete   5=Display secret (audited)</span>
+  <span class="cyan">${optsHelp || "(read-only role)"}</span>
 
 <form id="f-list"><table>
 <tr><th>Opt</th><th>ID</th><th>Target</th><th>User</th><th>Type</th><th>Secret</th></tr>
-${creds.map((c) => `<tr><td><input class="opt" name="o${esc(c.id)}" maxlength="1"></td><td>${esc(c.id)}</td><td>${pad(tn[c.target_id] || c.target_id, 18)}</td><td>${pad(c.username, 14)}</td><td>${pad(c.secret_type, 8)}</td><td>********</td></tr>`).join("")}
-</table>${creds.length ? "" : `<div class="cyan indent">(Vault is empty. Press F6 to add.)</div>`}
+${creds.map((c) => `<tr><td>${opt(c.id)}</td><td>${esc(c.id)}</td><td>${pad(tn[c.target_id] || c.target_id, 16)}</td><td>${pad(c.username, 14)}</td><td>${pad(c.secret_type, 8)}</td><td>********</td></tr>`).join("")}
+</table>${creds.length ? "" : `<div class="cyan indent">(Vault is empty.${canManage ? " Press F6 to add." : ""})</div>`}
 <input type="submit" hidden></form>
-${fkeys("F3=Exit   F5=Refresh   F6=Add credential   F12=Cancel")}`;
+${fkeys(`F3=Exit   F5=Refresh${canManage ? "   F6=Add credential" : ""}   F12=Cancel`)}`;
         document.getElementById("f-list").onsubmit = async (ev) => {
           ev.preventDefault();
           try {
             for (const c of creds) {
-              const o = ev.target["o" + c.id]?.value.trim();
+              const o = optVal(ev.target, c.id);
               if (o === "4") { await api("DELETE", `/api/credentials/${c.id}`); say(`CREDENTIAL ${c.id} DELETED.`); }
-              else if (o === "5") { viewCred = await api("POST", `/api/credentials/${c.id}/reveal`); go("credview"); return; }
+              else if (o === "5") { viewCred = await api("POST", `/api/credentials/${c.id}/reveal`); return go("credview"); }
+              else if (o === "6") { const r = await api("POST", `/api/credentials/${c.id}/checkout`, {}); viewCred = { id: r.credential_id, target_id: r.target, username: r.username, secret_type: "check-out", secret: r.secret, expires_at: r.expires_at }; return go("credview"); }
+              else if (o === "7") { await api("POST", `/api/credentials/${c.id}/rotate`, {}); say(`CREDENTIAL ${c.id} ROTATED.`); }
+              else if (o === "8") { const r = await api("POST", `/api/credentials/${c.id}/reconcile`, {}); say(`CREDENTIAL ${c.id}: ${String(r.status || "checked").toUpperCase()}${r.detail ? " — " + r.detail : ""}.`); }
               else if (o) { say("CPF0002: OPTION " + o.toUpperCase() + " NOT VALID.", true); }
             }
-            await load(); render();
+            await openCreds();
           } catch (e) { say("CPF9999: " + e.message, true); render(); }
         };
       },
@@ -277,60 +386,366 @@ ${fkeys("F3=Exit   F12=Cancel")}`;
           ev.preventDefault();
           const f = Object.fromEntries(new FormData(ev.target));
           f.target_id = Number(f.target_id);
-          try { await api("POST", "/api/credentials", f); await load(); say(`CREDENTIAL FOR ${f.username.toUpperCase()} VAULTED.`); go("creds"); }
+          try { await api("POST", "/api/credentials", f); say(`CREDENTIAL FOR ${String(f.username).toUpperCase()} VAULTED.`); await openCreds(); }
           catch (e) { say("CPF9898: " + e.message, true); render(); }
         };
       },
 
       credview() {
-        back = "creds";
+        back = creds.length ? "creds" : "main";
         const c = viewCred || {};
         term.innerHTML = `${head("PAMDSPSEC", "Display Secret")}
 <span class="red blink">SECRET DISPLAYED — THIS ACCESS HAS BEEN WRITTEN TO THE AUDIT TRAIL.</span>
 
 <div class="indent">
 Credential ID . . . :  <span class="white">${esc(c.id)}</span>
-Target ID . . . . . :  <span class="white">${esc(c.target_id)}</span>
+Target  . . . . . . :  <span class="white">${esc(c.target_id)}</span>
 Username  . . . . . :  <span class="white">${esc(c.username)}</span>
-Secret type . . . . :  <span class="white">${esc(c.secret_type)}</span>
+Secret type . . . . :  <span class="white">${esc(c.secret_type)}</span>${c.expires_at ? `
+Checked out until . :  <span class="amber">${fmtTime(c.expires_at)}</span>` : ""}
 
 Secret  . . . . . . :  <span class="white">${esc(c.secret)}</span>
 </div>
+${c.expires_at ? '<div class="cyan indent">Return it from Check-out / check-in (menu 3); check-in rotates this secret.</div>' : ""}
 ${fkeys("F3=Exit   F12=Cancel")}`;
+      },
+
+      checkouts() {
+        back = "main";
+        const tn = Object.fromEntries(targets.map((t) => [t.id, t.name]));
+        term.innerHTML = `${head("PAMWRKCO", "Credential Check-out / Check-in")}
+Active exclusive leases. Type options, press Enter.
+  <span class="cyan">4=Check in (rotates the secret)</span>
+
+<form id="f-list"><table>
+<tr><th>Opt</th><th>Cred</th><th>Target</th><th>Holder</th><th>Reason</th><th>Expires</th></tr>
+${checkouts.map((c) => `<tr><td>${opt(c.id)}</td><td>${esc(c.credential_id)}</td><td>${pad(tn[c.target_id] || c.target_id, 16)}</td><td>${pad(c.holder, 12)}</td><td>${pad(c.reason || "-", 16)}</td><td class="amber">${fmtTime(c.expires_at)}</td></tr>`).join("")}
+</table>${checkouts.length ? "" : `<div class="cyan indent">(Nothing checked out. Check out a credential from menu 2, option 6.)</div>`}
+<input type="submit" hidden></form>
+${fkeys("F3=Exit   F5=Refresh   F12=Cancel")}`;
+        document.getElementById("f-list").onsubmit = async (ev) => {
+          ev.preventDefault();
+          try {
+            for (const c of checkouts) {
+              const o = optVal(ev.target, c.id);
+              if (o === "4") { const r = await api("POST", `/api/credentials/${c.credential_id}/checkin`, {}); say(`CHECKED IN — ${r.rotated ? "secret rotated." : "NOT rotated: " + (r.note || "")}`); }
+              else if (o) { say("CPF0002: OPTION " + o.toUpperCase() + " NOT VALID.", true); }
+            }
+            await openCheckouts();
+          } catch (e) { say("CPF9999: " + e.message, true); render(); }
+        };
+      },
+
+      sessions() {
+        back = "main";
+        const canKill = can("manage_targets");
+        term.innerHTML = `${head("PAMWRKSSN", "Work with Active Sessions")}
+Live proxied sessions (auto-refresh 5s). Type options, press Enter.
+  <span class="cyan">${canKill ? "4=End session (kill)" : "(read-only)"}</span>
+
+<form id="f-list"><table>
+<tr><th>Opt</th><th>ID</th><th>Actor</th><th>Target</th><th>Proto</th><th>Remote</th><th>Started</th></tr>
+${sessions.map((s) => `<tr><td>${opt(s.id)}</td><td>${pad(String(s.id).slice(0, 8), 9)}</td><td>${pad(s.actor, 14)}</td><td>${pad(s.target, 14)}</td><td>${pad(s.protocol, 5)}</td><td>${pad(s.remote, 20)}</td><td class="cyan">${fmtTime(s.started)}</td></tr>`).join("")}
+</table>${sessions.length ? "" : `<div class="cyan indent">(No active sessions.)</div>`}
+<input type="submit" hidden></form>
+${fkeys("F3=Exit   F5=Refresh   F12=Cancel")}`;
+        document.getElementById("f-list").onsubmit = async (ev) => {
+          ev.preventDefault();
+          try {
+            for (const s of sessions) {
+              const o = optVal(ev.target, s.id);
+              if (o === "4") { await api("DELETE", `/api/sessions/${s.id}`); say(`SESSION ${String(s.id).slice(0, 8)} ENDED.`); }
+              else if (o) { say("CPF0002: OPTION " + o.toUpperCase() + " NOT VALID.", true); }
+            }
+            await openSessions();
+          } catch (e) { say("CPF9999: " + e.message, true); render(); }
+        };
+        // Live refresh while this screen is showing.
+        stopLive();
+        liveTimer = setInterval(async () => {
+          if (screen !== "sessions") { stopLive(); return; }
+          try { sessions = await api("GET", "/api/sessions"); if (screen === "sessions") render(); } catch (e) {}
+        }, 5000);
+      },
+
+      requests() {
+        back = "main";
+        const isApprover = can("approve");
+        const tn = Object.fromEntries(targets.map((t) => [t.id, t.name]));
+        term.innerHTML = `${head("PAMWRKREQ", "Work with Access Requests")}
+${isApprover ? `Pending 4-eyes requests. Type options, press Enter.
+  <span class="cyan">5=Approve   6=Deny</span>
+
+<form id="f-list"><table>
+<tr><th>Opt</th><th>ID</th><th>Requester</th><th>Target</th><th>Reason</th><th>Status</th><th>Expires</th></tr>
+${requests.map((r) => `<tr><td>${opt(r.id)}</td><td>${esc(r.id)}</td><td>${pad(r.requester, 12)}</td><td>${pad(tn[r.target_id] || r.target_id, 14)}</td><td>${pad(r.reason || "-", 16)}</td><td class="${r.status === "pending" ? "amber" : ""}">${esc(r.status)}</td><td class="cyan">${fmtTime(r.expires_at)}</td></tr>`).join("")}
+</table>${requests.length ? "" : `<div class="cyan indent">(No pending requests.)</div>`}
+<input type="submit" hidden></form>` : `<div class="cyan">You can file an access request for a target that requires approval.</div>`}
+${fkeys(`F3=Exit   F5=Refresh   F6=File request   F12=Cancel`)}`;
+        if (isApprover) {
+          document.getElementById("f-list").onsubmit = async (ev) => {
+            ev.preventDefault();
+            try {
+              for (const r of requests) {
+                const o = optVal(ev.target, r.id);
+                if (o === "5") { await api("POST", `/api/access-requests/${r.id}/approve`, {}); say(`REQUEST ${r.id} APPROVED.`); }
+                else if (o === "6") { await api("POST", `/api/access-requests/${r.id}/deny`, {}); say(`REQUEST ${r.id} DENIED.`); }
+                else if (o) { say("CPF0002: OPTION " + o.toUpperCase() + " NOT VALID.", true); }
+              }
+              await openRequests();
+            } catch (e) { say("CPF9999: " + e.message, true); render(); }
+          };
+        }
+      },
+
+      requestadd() {
+        back = "requests";
+        term.innerHTML = `${head("PAMADDREQ", "File Access Request")}
+Request approval to connect to a target (4-eyes / maintenance window).
+
+<form id="f-add" class="indent">
+<label>Target ID . . . . . :  <input name="target_id" type="number" min="1" size="6" required autofocus>   <span class="cyan">${targets.map((t) => `${t.id}=${esc(t.name)}`).join("  ") || "no targets visible"}</span></label>
+<label>Reason  . . . . . . :  <input name="reason" size="40"></label>
+<input type="submit" hidden>
+</form>
+${fkeys("F3=Exit   F12=Cancel")}`;
+        document.getElementById("f-add").onsubmit = async (ev) => {
+          ev.preventDefault();
+          const f = Object.fromEntries(new FormData(ev.target));
+          f.target_id = Number(f.target_id);
+          try { await api("POST", "/api/access-requests", f); say("ACCESS REQUEST FILED — awaiting approval."); await openRequests(); }
+          catch (e) { say("CPF9898: " + e.message, true); render(); }
+        };
+      },
+
+      users() {
+        back = "main";
+        term.innerHTML = `${head("PAMWRKUSR", "Work with Users & Profiles")}
+Type options, press Enter.
+  <span class="cyan">4=Delete</span>
+
+<form id="f-list"><table>
+<tr><th>Opt</th><th>ID</th><th>Username</th><th>Role / profile</th><th>Created</th></tr>
+${users.map((u) => `<tr><td>${opt(u.id)}</td><td>${esc(u.id)}</td><td>${pad(u.username, 18)}</td><td>${pad(u.role, 10)}</td><td class="cyan">${fmtTime(u.created_at)}</td></tr>`).join("")}
+</table>${users.length ? "" : `<div class="cyan indent">(No users. Press F6 to mint a token.)</div>`}
+<input type="submit" hidden></form>
+<div class="cyan">Roles: admin, user, auditor, approver. (Custom profiles arrive in the next phase.)</div>
+${fkeys("F3=Exit   F5=Refresh   F6=Add user   F9=Reconcile directory   F12=Cancel")}`;
+        document.getElementById("f-list").onsubmit = async (ev) => {
+          ev.preventDefault();
+          try {
+            for (const u of users) {
+              const o = optVal(ev.target, u.id);
+              if (o === "4") { await api("DELETE", `/api/users/${u.id}`); say(`USER ${String(u.username).toUpperCase()} DELETED.`); }
+              else if (o) { say("CPF0002: OPTION " + o.toUpperCase() + " NOT VALID.", true); }
+            }
+            await openUsers();
+          } catch (e) { say("CPF9999: " + e.message, true); render(); }
+        };
+      },
+
+      useradd() {
+        back = "users";
+        term.innerHTML = `${head("PAMADDUSR", "Add User (mint token)")}
+A one-time access token is generated and shown once. Only its hash is stored.
+
+<form id="f-add" class="indent">
+<label>Username  . . . . . :  <input name="username" size="20" required autofocus></label>
+<label>Role / profile  . . :  <select name="role"><option>user</option><option>auditor</option><option>approver</option><option>admin</option></select></label>
+<input type="submit" hidden>
+</form>
+${fkeys("F3=Exit   F12=Cancel")}`;
+        document.getElementById("f-add").onsubmit = async (ev) => {
+          ev.preventDefault();
+          const f = Object.fromEntries(new FormData(ev.target));
+          try { newUser = await api("POST", "/api/users", f); go("usercreated"); }
+          catch (e) { say("CPF9898: " + e.message, true); render(); }
+        };
+      },
+
+      usercreated() {
+        back = "users";
+        const u = newUser || {};
+        term.innerHTML = `${head("PAMUSRTOK", "User Access Token")}
+<span class="red blink">COPY THIS TOKEN NOW — IT IS SHOWN ONLY ONCE.</span>
+
+<div class="indent">
+Username  . . . . . :  <span class="white">${esc(u.username)}</span>
+Role  . . . . . . . :  <span class="white">${esc(u.role)}</span>
+
+Access token  . . . :  <span class="white">${esc(u.token)}</span>
+</div>
+<div class="cyan indent">Give it to the user; they sign on with it in the "access token" field.</div>
+${fkeys("F3=Exit   F12=Cancel")}`;
+      },
+
+      mfa() {
+        back = "main";
+        const m = mfaInfo || {};
+        const status = m.enrolled ? (m.confirmed ? '<span class="green">enrolled & confirmed</span>' : '<span class="amber">enrolled, NOT confirmed</span>') : '<span class="red">not enrolled</span>';
+        term.innerHTML = `${head("PAMMFA", "Multi-Factor Authentication")}
+Manage your own TOTP second factor.
+
+<div class="indent">Status  . . . . . . :  ${status}</div>
+
+<form id="f-mfa" class="indent">
+<label>Action  . . . . . . :  <select name="act">
+  <option value="enroll">Enroll / re-enroll (get a new secret)</option>
+  <option value="verify">Confirm / test a code</option>
+  <option value="recovery">Generate recovery codes</option>
+  <option value="disable">Disable MFA</option>
+</select></label>
+<label>Code (confirm/disable) :  <input name="otp" size="8" inputmode="numeric" autocomplete="one-time-code"></label>
+<input type="submit" hidden>
+</form>
+<div class="cyan indent">Enrolling shows a secret + otpauth URI to add to your authenticator, then Confirm a code.</div>
+${fkeys("F3=Exit   F5=Refresh   F12=Cancel")}`;
+        document.getElementById("f-mfa").onsubmit = async (ev) => {
+          ev.preventDefault();
+          const act = ev.target.act.value, otp = ev.target.otp.value.trim();
+          try {
+            if (act === "enroll") { mfaEnroll = await api("POST", "/api/mfa/enroll", otp ? { otp } : {}); return go("mfaview"); }
+            if (act === "verify") { await api("POST", "/api/mfa/verify", { otp }); say("CODE CONFIRMED."); return openMfa(); }
+            if (act === "recovery") { const r = await api("POST", "/api/mfa/recovery-codes", {}); recoveryCodes = r.recovery_codes || []; return go("mfarecovery"); }
+            if (act === "disable") { await api("DELETE", "/api/mfa", { otp }); say("MFA DISABLED."); return openMfa(); }
+          } catch (e) { say("CPF9898: " + e.message, true); render(); }
+        };
+      },
+
+      mfaview() {
+        back = "mfa";
+        const m = mfaEnroll || {};
+        term.innerHTML = `${head("PAMMFAENR", "MFA Enrollment")}
+Add this to your authenticator app, then Confirm a code (menu 9 → Confirm).
+
+<div class="indent">
+Secret  . . . . . . :  <span class="white">${esc(m.secret)}</span>
+otpauth URI . . . . :  <span class="white">${esc(m.otpauth_uri)}</span>
+</div>
+${fkeys("F3=Exit   F12=Cancel")}`;
+      },
+
+      mfarecovery() {
+        back = "mfa";
+        term.innerHTML = `${head("PAMMFAREC", "MFA Recovery Codes")}
+<span class="red blink">STORE THESE NOW — each works once, shown only this time.</span>
+
+<div class="indent white">${recoveryCodes.map(esc).join("\n")}</div>
+${fkeys("F3=Exit   F12=Cancel")}`;
+      },
+
+      discovery() {
+        back = "main";
+        term.innerHTML = `${head("PAMDISC", "Discovery Scan")}
+Probe hosts for reachable SSH / WinRM / RDP ports (no credentials used).
+
+<form id="f-scan" class="indent">
+<label>Hosts . . . . . . . :  <input name="hosts" size="40" required autofocus placeholder="10.0.0.5 10.0.0.6 host.example">   <span class="cyan">space/comma separated</span></label>
+<label>Ports . . . . . . . :  <input name="ports" size="24" placeholder="(default 22,3389,5985,5986)">   <span class="cyan">optional</span></label>
+<label>Onboard as targets  :  <input name="create" type="checkbox">   <span class="cyan">create new targets for hits</span></label>
+<input type="submit" hidden>
+</form>
+${discovered ? `<hr><div class="white">Candidates: ${discovered.candidates ? discovered.candidates.length : 0}   Created: ${discovered.created ? discovered.created.length : 0}</div>
+<table><tr><th>Host</th><th>Port</th><th>OS</th><th>Proto</th></tr>
+${(discovered.candidates || []).map((c) => `<tr><td>${pad(c.host, 20)}</td><td>${esc(c.port)}</td><td>${pad(c.os_type, 8)}</td><td>${esc(c.protocol)}</td></tr>`).join("")}</table>` : ""}
+${fkeys("F3=Exit   F12=Cancel")}`;
+        document.getElementById("f-scan").onsubmit = async (ev) => {
+          ev.preventDefault();
+          const hosts = ev.target.hosts.value.split(/[\s,]+/).filter(Boolean);
+          const ports = ev.target.ports.value.split(/[\s,]+/).filter(Boolean).map(Number).filter((n) => n > 0);
+          try {
+            discovered = await api("POST", "/api/discovery/scan", { hosts, ports, create: ev.target.create.checked });
+            say(`SCAN COMPLETE — ${discovered.candidates ? discovered.candidates.length : 0} candidate(s), ${discovered.created ? discovered.created.length : 0} onboarded.`);
+            render();
+          } catch (e) { say("CPF9898: " + e.message, true); render(); }
+        };
+      },
+
+      reconcile() {
+        back = "main";
+        const rep = reconcileReport;
+        term.innerHTML = `${head("PAMRECON", "Credential Reconciliation")}
+Read-only drift scan: does each vaulted secret still authenticate to its target?
+${rep ? `<div class="white">Checked: ${esc(rep.checked)}   Out of sync: <span class="${rep.out_of_sync ? "red" : "green"}">${esc(rep.out_of_sync)}</span></div>
+<table><tr><th>Cred</th><th>Target</th><th>User</th><th>Status</th><th>Detail</th></tr>
+${(rep.results || []).map((r) => `<tr><td>${esc(r.credential_id)}</td><td>${pad(r.target, 14)}</td><td>${pad(r.username, 12)}</td><td class="${r.status === "out_of_sync" ? "red" : r.status === "in_sync" ? "green" : "amber"}">${esc(r.status)}</td><td class="detail">${esc(r.detail || "")}</td></tr>`).join("")}</table>` : `<div class="cyan">Loading…</div>`}
+<div class="cyan">Remediate drift by rotating the credential (menu 2, option 7).</div>
+${fkeys("F3=Exit   F5=Refresh   F12=Cancel")}`;
       },
 
       audit() {
         back = "main";
         term.innerHTML = `${head("PAMDSPAUD", "Display Audit Trail")}
-<table>
+<input id="in-filter" size="30" placeholder="filter (actor/action/detail)"> <span class="cyan">type to filter</span>
+<table id="aud">
 <tr><th>Timestamp</th><th>Actor</th><th>Action</th><th>Detail</th></tr>
-${audit.map((e) => { const bg = e.actor === "break-glass";
-  return `<tr${bg ? ` class="red"` : ""}><td class="cyan">${esc(e.ts.replace("T", " ").slice(0, 19))}</td><td>${bg ? `<span class="red blink">BREAK-GLASS</span>` : esc(e.actor)}</td><td>${esc(e.action)}</td><td class="detail">${esc(e.detail)}</td></tr>`; }).join("")}
+${auditRows(audit)}
 </table>${audit.length ? "" : `<div class="cyan indent">(Audit trail is empty.)</div>`}
-${fkeys("F3=Exit   F5=Refresh   F12=Cancel")}`;
+${fkeys("F3=Exit   F5=Refresh   F9=Export CSV   F12=Cancel")}`;
+        const fin = document.getElementById("in-filter");
+        fin.oninput = () => {
+          const q = fin.value.toLowerCase();
+          const rows = audit.filter((e) => (e.actor + " " + e.action + " " + e.detail).toLowerCase().includes(q));
+          document.getElementById("aud").innerHTML = `<tr><th>Timestamp</th><th>Actor</th><th>Action</th><th>Detail</th></tr>` + auditRows(rows);
+        };
+      },
+
+      breakglass() {
+        back = "main";
+        term.innerHTML = `${head("PAMBGLAS", "Break-Glass Unseal")}
+<span class="red">Emergency quorum unseal.</span> Each holder submits their hex share; when
+the M-of-N threshold is met an audited, auto-expiring admin session is issued.
+
+<form id="f-bg" class="indent">
+<label>Your share (hex)  . :  <input name="share" size="48" required autofocus autocomplete="off"></label>
+<input type="submit" hidden>
+</form>
+${fkeys("F3=Exit   F12=Cancel")}`;
+        document.getElementById("f-bg").onsubmit = async (ev) => {
+          ev.preventDefault();
+          try {
+            const r = await api("POST", "/api/breakglass/unseal", { share: ev.target.share.value.trim() });
+            if (r.token) { apiKey = r.token; sessionStorage.setItem("pam_api_key", apiKey); await loadMe(); say("BREAK-GLASS QUORUM MET — emergency admin session active."); return go("main"); }
+            say(`SHARE ACCEPTED — ${r.collected}/${r.needed} collected.`);
+            render();
+          } catch (e) { say("CPF9898: " + e.message, true); render(); }
+        };
       },
     })[screen]();
   }
 
-  function go(s) { if (s !== "credview") viewCred = null; screen = s; render(); msg = ""; msgErr = false; }
-  function signoff() { apiKey = ""; sessionStorage.removeItem("pam_api_key"); say("SIGN OFF COMPLETE."); go("signon"); }
+  function auditRows(list) {
+    return list.map((e) => { const bg = e.actor === "break-glass";
+      return `<tr${bg ? ` class="red"` : ""}><td class="cyan">${fmtTime(e.ts)}</td><td>${bg ? `<span class="red blink">BREAK-GLASS</span>` : esc(e.actor)}</td><td>${esc(e.action)}</td><td class="detail">${esc(e.detail)}</td></tr>`; }).join("");
+  }
+
+  function go(s) {
+    if (s !== "credview") viewCred = null;
+    if (s !== "usercreated") newUser = null;
+    stopLive();
+    screen = s; render(); msg = ""; msgErr = false;
+  }
+  function signoff() { stopLive(); apiKey = ""; me = null; sessionStorage.removeItem("pam_api_key"); say("SIGN OFF COMPLETE."); go("signon"); }
+
+  const refreshers = { targets: openTargets, creds: openCreds, sessions: openSessions, checkouts: openCheckouts, users: openUsers, mfa: openMfa, audit: openAudit, reconcile: openReconcile, requests: openRequests, grants: () => openGrants(grantsTarget) };
+  const adders = { targets: () => go("targetadd"), creds: () => go("credadd"), grants: () => go("grantadd"), users: () => go("useradd"), requests: () => go("requestadd") };
 
   window.addEventListener("keydown", async (ev) => {
     const k = ev.key;
-    if (!["F3", "F5", "F6", "F12"].includes(k)) return;
+    if (!["F3", "F5", "F6", "F9", "F12"].includes(k)) return;
     ev.preventDefault();
     if (screen === "signon") return;
     try {
       if (k === "F3") { screen === "main" ? signoff() : go("main"); }
-      else if (k === "F5") { await load(); say("DISPLAY REFRESHED."); render(); }
-      else if (k === "F6" && screen === "targets") go("targetadd");
-      else if (k === "F6" && screen === "creds") go("credadd");
-      else if (k === "F12") go(back);
+      else if (k === "F5") { const r = refreshers[screen]; if (r) await r(); else render(); }
+      else if (k === "F6") { const a = adders[screen]; if (a) a(); }
+      else if (k === "F9") { if (screen === "audit") await exportAudit(); else if (screen === "users") await reconcileIdentities(); }
+      else if (k === "F12") { go(back); }
     } catch (e) { say("CPF9999: " + e.message, true); render(); }
   });
 
-  setInterval(() => { const el = term.querySelector(".row .cyan"); if (el) el.textContent = now(); }, 1000);
-  if (apiKey) { load().then(render).catch(() => { screen = "signon"; render(); }); } else render();
+  setInterval(() => { const el = term.querySelector(".row .cyan"); if (el && screen !== "audit") el.textContent = now(); }, 1000);
+  if (apiKey) { loadMe().then(render).catch(() => { apiKey = ""; me = null; screen = "signon"; render(); }); } else render();
 })();
 </script>
 </body>
