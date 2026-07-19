@@ -21,6 +21,7 @@ import (
 	"github.com/morandeirachema/pamv1/internal/vault"
 	"github.com/morandeirachema/pamv1/internal/web"
 	"github.com/morandeirachema/pamv1/internal/winrm"
+	"golang.org/x/crypto/ssh"
 )
 
 type ctxKey int
@@ -112,6 +113,10 @@ type Options struct {
 	// DiscoveryDial overrides the TCP dialer used by the discovery scanner
 	// (tests inject a dialer; nil uses the default net.Dialer).
 	DiscoveryDial func(ctx context.Context, network, addr string) (net.Conn, error)
+	// SSHHostKeyCallback pins the host key for the default SSH rotation/reconcile
+	// connector (nil trusts any upstream key). Ignored if Rotators/Verifiers are
+	// supplied explicitly.
+	SSHHostKeyCallback ssh.HostKeyCallback
 }
 
 type Server struct {
@@ -187,17 +192,18 @@ func New(st store.Store, v *vault.Vault, resolver *auth.Resolver, authn auth.Aut
 	if checkoutTTL <= 0 {
 		checkoutTTL = 30 * time.Minute
 	}
+	sshConn := rotate.SSHConnector{HostKeyCallback: opts.SSHHostKeyCallback}
 	rotators := opts.Rotators
 	if rotators == nil {
 		rotators = map[string]rotate.Rotator{
-			"ssh":   rotate.SSHConnector{},
+			"ssh":   sshConn,
 			"winrm": rotate.WinRMConnector{Runner: runner},
 		}
 	}
 	verifiers := opts.Verifiers
 	if verifiers == nil {
 		verifiers = map[string]rotate.Verifier{
-			"ssh":   rotate.SSHConnector{},
+			"ssh":   sshConn,
 			"winrm": rotate.WinRMConnector{Runner: runner},
 		}
 	}

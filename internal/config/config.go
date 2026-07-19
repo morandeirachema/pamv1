@@ -22,6 +22,9 @@ type Config struct {
 	SSHAddr string
 	// SSHHostKeyPath persists the proxy host key; empty = ephemeral key.
 	SSHHostKeyPath string
+	// SSHKnownHosts pins upstream target host keys (an OpenSSH known_hosts file).
+	// Empty = trust any upstream key (insecure; logged loudly).
+	SSHKnownHosts string
 	// RecordingDir is where session recordings are written.
 	RecordingDir string
 
@@ -139,6 +142,7 @@ func Load() (*Config, error) {
 		BreakGlassKeyHash:   os.Getenv("PAM_BREAK_GLASS_KEY_HASH"),
 		SSHAddr:             getenv("PAM_SSH_ADDR", ":2222"),
 		SSHHostKeyPath:      os.Getenv("PAM_SSH_HOST_KEY"),
+		SSHKnownHosts:       os.Getenv("PAM_SSH_KNOWN_HOSTS"),
 		RecordingDir:        getenv("PAM_RECORDING_DIR", "recordings"),
 		LogLevel:            getenv("PAM_LOG_LEVEL", "info"),
 		LogFormat:           getenv("PAM_LOG_FORMAT", "json"),

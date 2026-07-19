@@ -42,7 +42,7 @@ The flagship: users connect *through* pamv1, never holding the credential.
 - [x] Per-user access tokens (stored as SHA-256 only), minted by an admin via `POST /api/users`
 - [x] Enforcement in the REST API (per-route capability) and the SSH proxy (`CapConnect`); every denial audited (`authz.denied` / `session.denied`)
 - [x] Audit now attributes real usernames; portal tolerates per-role 403s
-- [ ] `approver`'s approval endpoints (access-request workflow) — arrives with the OT/approval phase
+- [x] `approver`'s approval endpoints (access-request workflow) — **shipped in Phase 8** (`/api/access-requests`, 4-eyes)
 
 ### 3b — Active Directory connector 🚧
 
@@ -53,8 +53,9 @@ The flagship: users connect *through* pamv1, never holding the credential.
 - [x] **Microsoft Entra ID (Azure AD)** login: OAuth2 (ROPC) against the tenant, Entra app roles / groups → the four roles; composable with LDAP via a chain authenticator; sovereign-cloud authority host
 - [x] **Enforce-MFA policy** (`PAM_MFA_REQUIRED`) with enrollment-only sessions, and **single-use recovery codes**
 - [x] **OIDC Authorization Code flow + PKCE + JWKS signature validation** (`internal/oidc`): browser SSO (`/api/auth/oidc/{start,callback}`), IdP-side MFA/Conditional Access, ID-token verified (RS256, iss/aud/nonce/exp), discovery
-- [ ] Optional Kerberos bind
-- [ ] OIDC pending-state shared store for multi-replica HA
+- [ ] Optional Kerberos bind (needs a KDC to test)
+- [ ] Entra ROPC **id_token JWKS signature validation** (the browser OIDC path already validates; the ROPC path reads claims unverified) — *in progress*
+- [x] OIDC pending-state shared store for multi-replica HA — **shipped in Phase 10** (`store.PutOIDCState`/`TakeOIDCState`, migration `0004`)
 - [x] Local emergency admin kept for AD-down scenarios (bootstrap key + break-glass)
 
 ## Phase 4 — Windows targets 🚧
@@ -76,6 +77,7 @@ The flagship: users connect *through* pamv1, never holding the credential.
 - [x] **Versioned migrations** (embedded, `schema_migrations` table, ordered `migrations/*.sql` applied in a transaction) replacing the ad-hoc startup schema
 - [x] **Native HTTPS** (`PAM_TLS_CERT`/`PAM_TLS_KEY`, TLS 1.2+), **security headers** (nosniff, frame-deny, referrer, HSTS), **rate limiting** on auth endpoints (`PAM_AUTH_RATE_LIMIT`)
 - [x] **Backup/restore runbook** with encrypted backups ([docs](docs/BACKUP-AND-RESTORE.md))
+- [x] **Upstream SSH host-key pinning** (`PAM_SSH_KNOWN_HOSTS`, [known_hosts](https://pkg.go.dev/golang.org/x/crypto/ssh/knownhosts)): the JIT proxy and the rotation connector verify target host keys instead of trusting any; unconfigured falls back to trust-any with a loud warning
 - [x] **AWS KMS KEK** (`aws-kms` provider): the data key is wrapped/unwrapped by KMS (`PAM_KEK_AWS_KEY_ID`/`PAM_KEK_AWS_REGION`); the CMK never leaves KMS
 - [x] _(optional extension)_ **PKCS#11 HSM KEK provider** — `vault/pkcs11.go` behind the `pkcs11` build tag (cgo), `Dockerfile.pkcs11`, `PAM_KEK_PKCS11_*`; the AES wrapping key stays in the HSM. Verified against SoftHSM2 in CI; the default static image is unchanged (a stub returns "not built in")
 

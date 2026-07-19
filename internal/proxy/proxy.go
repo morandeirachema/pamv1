@@ -42,6 +42,9 @@ type Config struct {
 	// RequireApproval gates every session behind an approved access request
 	// (global OT policy); per-target Target.RequireApproval also applies.
 	RequireApproval bool
+	// UpstreamHostKey verifies the target's SSH host key (e.g. a known_hosts
+	// callback). nil trusts any upstream key — insecure, and logged loudly.
+	UpstreamHostKey ssh.HostKeyCallback
 }
 
 type Proxy struct {
@@ -55,6 +58,7 @@ type Proxy struct {
 	dialTimeout  time.Duration
 	sessions     *session.Registry
 	requireApprv bool
+	upstreamHKCB ssh.HostKeyCallback
 	chain        *recordChain
 
 	mu sync.Mutex
@@ -84,7 +88,12 @@ func New(st store.Store, v *vault.Vault, resolver *auth.Resolver, cfg Config) (*
 		dialTimeout:  cfg.DialTimeout,
 		sessions:     cfg.Sessions,
 		requireApprv: cfg.RequireApproval,
+		upstreamHKCB: cfg.UpstreamHostKey,
 		chain:        newRecordChain(cfg.RecordingDir),
+	}
+	if p.upstreamHKCB == nil {
+		p.log.Warn("upstream SSH host keys are NOT verified (set PAM_SSH_KNOWN_HOSTS to pin them)")
+		p.upstreamHKCB = ssh.InsecureIgnoreHostKey()
 	}
 	p.sshCfg = &ssh.ServerConfig{PasswordCallback: p.authenticate}
 	p.sshCfg.AddHostKey(cfg.HostKey)
@@ -341,10 +350,9 @@ func (p *Proxy) dialUpstream(target *store.Target, cred *store.Credential, secre
 		auth = ssh.Password(secret)
 	}
 	cfg := &ssh.ClientConfig{
-		User: cred.Username,
-		Auth: []ssh.AuthMethod{auth},
-		// TODO(phase5): pin upstream host keys (known_hosts) instead of trusting blindly.
-		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+		User:            cred.Username,
+		Auth:            []ssh.AuthMethod{auth},
+		HostKeyCallback: p.upstreamHKCB,
 		Timeout:         p.dialTimeout,
 	}
 	return ssh.Dial("tcp", fmt.Sprintf("%s:%d", target.Host, target.Port), cfg)

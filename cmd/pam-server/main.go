@@ -40,6 +40,8 @@ import (
 	"github.com/morandeirachema/pamv1/internal/store/pgstore"
 	"github.com/morandeirachema/pamv1/internal/vault"
 	"github.com/morandeirachema/pamv1/internal/winrm"
+	"golang.org/x/crypto/ssh"
+	"golang.org/x/crypto/ssh/knownhosts"
 )
 
 func main() {
@@ -308,8 +310,21 @@ func run() error {
 		log.Info("alerting enabled", "webhook", cfg.AlertWebhook)
 	}
 
+	// Upstream SSH host-key verification (shared by the proxy and the rotation
+	// connector). Empty PAM_SSH_KNOWN_HOSTS = trust any key (insecure, logged).
+	var upstreamHostKey ssh.HostKeyCallback
+	if cfg.SSHKnownHosts != "" {
+		cb, herr := knownhosts.New(cfg.SSHKnownHosts)
+		if herr != nil {
+			return fmt.Errorf("ssh known_hosts %q: %w", cfg.SSHKnownHosts, herr)
+		}
+		upstreamHostKey = cb
+		log.Info("upstream SSH host keys pinned", "known_hosts", cfg.SSHKnownHosts)
+	}
+
 	handler, err := api.New(st, v, resolver, authn, api.Options{
 		Sessions:            sessions,
+		SSHHostKeyCallback:  upstreamHostKey,
 		MFARequired:         cfg.MFARequired,
 		RecordingDir:        cfg.RecordingDir,
 		WinRM:               winrm.Client{HTTPS: cfg.WinRMHTTPS, Insecure: cfg.WinRMInsecure, NTLM: cfg.WinRMNTLM, Timeout: 30 * time.Second},
@@ -353,6 +368,7 @@ func run() error {
 			RecordingDir:    cfg.RecordingDir,
 			Sessions:        sessions,
 			RequireApproval: cfg.RequireApproval,
+			UpstreamHostKey: upstreamHostKey,
 		})
 		if err != nil {
 			return err

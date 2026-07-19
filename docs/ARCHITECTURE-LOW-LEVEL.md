@@ -253,8 +253,10 @@ SSH gateway. See §3 for the wire-level flow.
   `protocol=ssh`), pick the credential (matching `creduser` or first), and
   **decrypt the secret** — this is the JIT moment; plaintext lives only here.
 - **Upstream** (`dialUpstream`): `ssh.Dial` to `host:port` as the credential
-  user, `ssh.Password` or `ssh.PublicKeys` (for `secret_type=ssh_key`).
-  `HostKeyCallback` is `InsecureIgnoreHostKey` today → TODO known_hosts (Phase 5).
+  user, `ssh.Password` or `ssh.PublicKeys` (for `secret_type=ssh_key`). The
+  `HostKeyCallback` verifies the target's host key against `PAM_SSH_KNOWN_HOSTS`
+  (`knownhosts`); when unset it falls back to trust-any with a **startup warning**
+  (`proxy.Config.UpstreamHostKey`; the rotation connector shares the callback).
 - **Session** (`handleSession`): for each `session` channel, open an upstream
   session channel and bidirectionally forward: channel requests via
   `pumpRequests` (pty-req, shell, exec, window-change, exit-status), stdin,
@@ -320,6 +322,7 @@ the client channel closes.
 | `PAM_LISTEN_ADDR` | `:8080` | http server |
 | `PAM_SSH_ADDR` | `:2222`; `off` disables | proxy |
 | `PAM_SSH_HOST_KEY` | "" (ephemeral) | proxy host key |
+| `PAM_SSH_KNOWN_HOSTS` | "" (trust-any + warn) | pin upstream target host keys (OpenSSH known_hosts) |
 | `PAM_RECORDING_DIR` | `recordings` | proxy recordings |
 | `PAM_LOG_LEVEL` | `info` | logging (debug/info/warn/error) |
 | `PAM_LOG_FORMAT` | `json` | logging (json/text) |
@@ -433,6 +436,7 @@ secrets. Format `json` (SIEM) or `text` (humans); collect from stdout.
 
 | Date | Change |
 |---|---|
+| 2026-07-19 | Hardening: upstream SSH host-key pinning (`PAM_SSH_KNOWN_HOSTS`, `proxy.Config.UpstreamHostKey` + rotation connector) — no longer trusts any target key |
 | 2026-07-19 | PKCS#11 HSM KEK provider (`vault/pkcs11.go`, build tag `pkcs11`; stub in the default build), `Dockerfile.pkcs11`, CI job against SoftHSM2, `PAM_KEK_PKCS11_*` |
 | 2026-07-19 | HA: OIDC PKCE login state moved to the store (`store.PutOIDCState`/`TakeOIDCState`, migration `0004`) so the auth-code callback works on any replica; removed the in-memory `oidcPending` |
 | 2026-07-19 | Phase 7 follow-ons: credential checkout/check-in leases (`store.Checkout`, migration `0003`, auto-rotate on return) + discovery (`internal/discovery`, `POST /api/discovery/scan`); `docs/REQUIREMENTS.md` (run specs) |

@@ -165,6 +165,7 @@ All configuration is environment variables (12-factor). Full descriptions in
 | `PAM_LISTEN_ADDR` | | `:8080` | HTTP portal/API bind. |
 | `PAM_SSH_ADDR` | | `:2222` | SSH proxy bind; `off` disables the proxy. |
 | `PAM_SSH_HOST_KEY` | | (ephemeral) | Path to persist the proxy SSH host key. |
+| `PAM_SSH_KNOWN_HOSTS` | | (trust-any + warn) | OpenSSH known_hosts file pinning **upstream target** host keys. |
 | `PAM_RECORDING_DIR` | | `recordings` | Where session recordings are written. |
 | `PAM_LOG_LEVEL` | | `info` | `debug` \| `info` \| `warn` \| `error`. |
 | `PAM_LOG_FORMAT` | | `json` | `json` (for SIEM) \| `text` (for humans). |
