@@ -21,11 +21,26 @@ services:
       # in PAM_DATABASE_URL; add pgAudit via an image that bundles the extension.
     volumes:
       - pgdata:/var/lib/postgresql/data
+    # No cap_drop / no-new-privileges here: the postgres entrypoint starts as root
+    # and drops to the postgres user (needs setuid), which those would break.
+    mem_limit: 1g
+    pids_limit: 512
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U pam -d pam"]
       interval: 5s
       timeout: 3s
       retries: 10
+
+  # Named volumes are created root-owned, but pam runs as UID 65532 with a
+  # read-only root filesystem, so it must be able to write the SSH host key and
+  # session recordings under /data. Fix the ownership once before pam starts.
+  pam-init:
+    image: busybox:stable
+    command: ["sh", "-c", "chown -R 65532:65532 /data"]
+    user: "0:0"
+    volumes:
+      - pamdata:/data
+    restart: "no"
 
   pam:
     build: .
@@ -33,7 +48,12 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      pam-init:
+        condition: service_completed_successfully
     environment:
+      # Local demo only: the db has no TLS, and its port is not published to the
+      # host, so traffic stays on the internal bridge. Production must point this
+      # at a TLS Postgres with sslmode=verify-full.
       PAM_DATABASE_URL: postgres://pam:${POSTGRES_PASSWORD}@db:5432/pam?sslmode=disable
       PAM_MASTER_KEY: ${PAM_MASTER_KEY:?set PAM_MASTER_KEY in .env}
       PAM_API_KEY: ${PAM_API_KEY:?set PAM_API_KEY in .env}
@@ -45,6 +65,21 @@ services:
       - "127.0.0.1:2222:2222"   # SSH session proxy
     volumes:
       - pamdata:/data
+    read_only: true             # only /data (volume) and /tmp (tmpfs) are writable
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL                     # the binary needs no Linux capabilities
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 512m
+    pids_limit: 512
+    healthcheck:
+      test: ["CMD", "/pam-server", "-healthcheck"]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
 
 volumes:
   pgdata:
