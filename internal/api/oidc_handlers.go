@@ -1,6 +1,7 @@
 package api
 
 import (
+	"crypto/subtle"
 	"net/http"
 	"net/url"
 	"time"
@@ -13,6 +14,11 @@ import (
 // persisted in the store (keyed by the opaque state) so the callback can land on
 // any replica (HA).
 const oidcStateTTL = 10 * time.Minute
+
+// oidcStateCookie binds an in-flight login to the browser that started it: the
+// callback's state must match this cookie, so an attacker cannot complete their
+// own flow in a victim's browser (login CSRF / session fixation).
+const oidcStateCookie = "pam_oidc_state"
 
 // oidcStart begins the Authorization Code + PKCE flow and redirects to the IdP.
 func (s *Server) oidcStart(w http.ResponseWriter, r *http.Request) {
@@ -31,6 +37,11 @@ func (s *Server) oidcStart(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "oidc init failed")
 		return
 	}
+	http.SetCookie(w, &http.Cookie{
+		Name: oidcStateCookie, Value: state, Path: "/api/auth/oidc/",
+		MaxAge: int(oidcStateTTL.Seconds()), HttpOnly: true,
+		Secure: r.TLS != nil, SameSite: http.SameSiteLaxMode,
+	})
 	http.Redirect(w, r, s.oidc.AuthCodeURL(state, nonce, challenge), http.StatusFound)
 }
 
@@ -48,6 +59,16 @@ func (s *Server) oidcCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	code, state := q.Get("code"), q.Get("state")
+	// Bind to the initiating browser: the state cookie set at /start must match
+	// the state the IdP echoed back. Checked before consuming the single-use
+	// server state so a foreign request can't burn a legitimate one.
+	sc, cerr := r.Cookie(oidcStateCookie)
+	http.SetCookie(w, &http.Cookie{Name: oidcStateCookie, Value: "", Path: "/api/auth/oidc/", MaxAge: -1, HttpOnly: true, Secure: r.TLS != nil, SameSite: http.SameSiteLaxMode})
+	if state == "" || cerr != nil || subtle.ConstantTimeCompare([]byte(sc.Value), []byte(state)) != 1 {
+		s.log.Warn("oidc callback: state cookie mismatch", "remote", r.RemoteAddr)
+		s.redirectPortal(w, r, "pam_error=invalid_state")
+		return
+	}
 	verifier, nonce, ok, err := s.store.TakeOIDCState(r.Context(), state, time.Now())
 	if err != nil {
 		s.log.Error("oidc state lookup failed", "err", err)

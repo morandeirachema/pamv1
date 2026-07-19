@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"math/big"
 	"net/http"
+	"net/http/cookiejar"
 	"net/http/httptest"
 	"net/url"
 	"sync"
@@ -89,6 +90,9 @@ func oidcServer(t *testing.T) (*httptest.Server, *tokenBox, *rsa.PrivateKey) {
 func noRedirect(srv *httptest.Server) *http.Client {
 	c := srv.Client()
 	c.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	// A cookie jar so the state cookie set at /start is carried to /callback,
+	// modelling one browser completing its own flow.
+	c.Jar, _ = cookiejar.New(nil)
 	return c
 }
 
@@ -158,6 +162,32 @@ func TestOIDCCallbackBadState(t *testing.T) {
 	frag, _ := url.Parse(resp.Header.Get("Location"))
 	if v, _ := url.ParseQuery(frag.Fragment); v.Get("pam_error") != "invalid_state" {
 		t.Fatalf("bad state should redirect with pam_error=invalid_state, got %s", resp.Header.Get("Location"))
+	}
+}
+
+// TestOIDCCallbackCrossBrowserRejected proves a valid state completed in a
+// different browser (no matching state cookie) is rejected — login CSRF defense.
+func TestOIDCCallbackCrossBrowserRejected(t *testing.T) {
+	srv, _, _ := oidcServer(t)
+	starter := noRedirect(srv) // browser A: starts the flow, holds the cookie
+	resp, err := starter.Get(srv.URL + "/api/auth/oidc/start")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	authURL, _ := url.Parse(resp.Header.Get("Location"))
+	state := authURL.Query().Get("state")
+
+	// browser B (a fresh jar, no state cookie) lands on the callback with A's state.
+	victim := noRedirect(srv)
+	resp, err = victim.Get(srv.URL + "/api/auth/oidc/callback?code=abc&state=" + url.QueryEscape(state))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	frag, _ := url.Parse(resp.Header.Get("Location"))
+	if v, _ := url.ParseQuery(frag.Fragment); v.Get("pam_error") != "invalid_state" {
+		t.Fatalf("cross-browser callback should be invalid_state, got %s", resp.Header.Get("Location"))
 	}
 }
 
