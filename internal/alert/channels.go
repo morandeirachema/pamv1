@@ -1,0 +1,104 @@
+package alert
+
+import (
+	"context"
+	"fmt"
+	"net"
+	"net/smtp"
+	"strings"
+	"time"
+
+	"github.com/morandeirachema/pamv1/internal/logging"
+)
+
+// Multi fans an alert out to several notifiers (e.g. webhook + syslog + email).
+type Multi []Notifier
+
+// Notify delivers e to every underlying notifier.
+func (m Multi) Notify(ctx context.Context, e Event) {
+	for _, n := range m {
+		n.Notify(ctx, e)
+	}
+}
+
+// stamp formats an event time as RFC3339, or "-" when unset (the caller stamps
+// Time; alert code avoids calling time.Now itself).
+func stamp(t time.Time) string {
+	if t.IsZero() {
+		return "-"
+	}
+	return t.UTC().Format(time.RFC3339)
+}
+
+// Syslog sends alerts as RFC 5424 messages to a syslog server over UDP or TCP,
+// best-effort and non-blocking.
+type Syslog struct {
+	network string
+	addr    string
+	tag     string
+	dial    func(network, addr string) (net.Conn, error)
+}
+
+// NewSyslog returns a Syslog notifier for the given transport ("udp"/"tcp") and
+// address (host:port); tag defaults to "pamv1".
+func NewSyslog(network, addr, tag string) *Syslog {
+	if tag == "" {
+		tag = "pamv1"
+	}
+	return &Syslog{network: network, addr: addr, tag: tag, dial: net.Dial}
+}
+
+// Notify formats the event as a syslog line (authpriv.alert priority) and sends
+// it from a background goroutine; delivery errors are logged, not returned.
+func (s *Syslog) Notify(_ context.Context, e Event) {
+	// PRI = facility(authpriv=10)*8 + severity(alert=1) = 81.
+	msg := fmt.Sprintf("<81>1 %s - %s - %s - actor=%s detail=%q remote=%s",
+		stamp(e.Time), s.tag, e.Type, e.Actor, e.Detail, e.Remote)
+	go func() {
+		conn, err := s.dial(s.network, s.addr)
+		if err != nil {
+			logging.Component("alert").Warn("syslog alert failed", "type", e.Type, "err", err)
+			return
+		}
+		defer conn.Close()
+		_, _ = conn.Write([]byte(msg))
+	}()
+}
+
+// Email sends alerts via SMTP, best-effort and non-blocking.
+type Email struct {
+	addr string // SMTP host:port
+	from string
+	to   []string
+	auth smtp.Auth
+	send func(addr string, a smtp.Auth, from string, to []string, msg []byte) error
+}
+
+// NewEmail returns an Email notifier. When username is non-empty, PLAIN auth is
+// used (host derived from addr); otherwise the relay is used unauthenticated.
+func NewEmail(addr, from string, to []string, username, password string) *Email {
+	var a smtp.Auth
+	if username != "" {
+		host := addr
+		if h, _, err := net.SplitHostPort(addr); err == nil {
+			host = h
+		}
+		a = smtp.PlainAuth("", username, password, host)
+	}
+	return &Email{addr: addr, from: from, to: to, auth: a, send: smtp.SendMail}
+}
+
+// Notify formats a plain-text email and sends it from a background goroutine;
+// delivery errors are logged, not returned.
+func (m *Email) Notify(_ context.Context, e Event) {
+	subject := fmt.Sprintf("[pamv1] %s by %s", e.Type, e.Actor)
+	body := fmt.Sprintf("Type: %s\r\nActor: %s\r\nDetail: %s\r\nRemote: %s\r\nTime: %s\r\n",
+		e.Type, e.Actor, e.Detail, e.Remote, stamp(e.Time))
+	msg := []byte(fmt.Sprintf("From: %s\r\nTo: %s\r\nSubject: %s\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n%s",
+		m.from, strings.Join(m.to, ", "), subject, body))
+	go func() {
+		if err := m.send(m.addr, m.auth, m.from, m.to, msg); err != nil {
+			logging.Component("alert").Warn("email alert failed", "type", e.Type, "err", err)
+		}
+	}()
+}

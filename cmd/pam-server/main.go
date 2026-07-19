@@ -314,14 +314,7 @@ func run() error {
 
 	sessions := session.NewRegistry()
 
-	var alerter alert.Notifier = alert.Noop{}
-	switch {
-	case cfg.AirGap:
-		log.Info("air-gap mode: outbound alerting disabled")
-	case cfg.AlertWebhook != "":
-		alerter = alert.NewWebhook(cfg.AlertWebhook)
-		log.Info("alerting enabled", "webhook", cfg.AlertWebhook)
-	}
+	alerter := buildAlerter(cfg, log)
 
 	// Upstream SSH host-key verification (shared by the proxy and the rotation
 	// connector). Empty PAM_SSH_KNOWN_HOSTS = trust any key (insecure, logged).
@@ -434,4 +427,53 @@ func run() error {
 		defer cancel()
 		return srv.Shutdown(shutCtx)
 	}
+}
+
+// buildAlerter assembles the configured real-time alert channels (webhook,
+// syslog, email) into one Notifier, fanning out when several are set. Air-gap
+// mode disables all outbound alerting.
+func buildAlerter(cfg *config.Config, log *slog.Logger) alert.Notifier {
+	if cfg.AirGap {
+		log.Info("air-gap mode: outbound alerting disabled")
+		return alert.Noop{}
+	}
+	var ns []alert.Notifier
+	if cfg.AlertWebhook != "" {
+		ns = append(ns, alert.NewWebhook(cfg.AlertWebhook))
+		log.Info("alert channel enabled", "kind", "webhook")
+	}
+	if cfg.AlertSyslog != "" {
+		network, addr := "udp", cfg.AlertSyslog
+		for _, p := range []string{"udp", "tcp"} {
+			if rest, ok := strings.CutPrefix(addr, p+"://"); ok {
+				network, addr = p, rest
+			}
+		}
+		ns = append(ns, alert.NewSyslog(network, addr, "pamv1"))
+		log.Info("alert channel enabled", "kind", "syslog", "addr", addr)
+	}
+	if cfg.AlertEmailSMTP != "" && cfg.AlertEmailFrom != "" && cfg.AlertEmailTo != "" {
+		to := splitAndTrim(cfg.AlertEmailTo)
+		ns = append(ns, alert.NewEmail(cfg.AlertEmailSMTP, cfg.AlertEmailFrom, to, cfg.AlertEmailUser, cfg.AlertEmailPass))
+		log.Info("alert channel enabled", "kind", "email", "recipients", len(to))
+	}
+	switch len(ns) {
+	case 0:
+		return alert.Noop{}
+	case 1:
+		return ns[0]
+	default:
+		return alert.Multi(ns)
+	}
+}
+
+// splitAndTrim splits a comma-separated list, dropping empty/whitespace entries.
+func splitAndTrim(csv string) []string {
+	var out []string
+	for _, p := range strings.Split(csv, ",") {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }

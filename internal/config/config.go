@@ -46,8 +46,16 @@ type Config struct {
 	BreakGlassThreshold int
 	BreakGlassShares    int
 	BreakGlassTTL       time.Duration
-	// AlertWebhook receives real-time break-glass alerts (JSON POST).
-	AlertWebhook string
+	// AlertWebhook receives real-time break-glass alerts (JSON POST). AlertSyslog
+	// ("udp://host:port" or "tcp://…") and the AlertEmail* fields add syslog and
+	// SMTP alert channels; any combination fans out.
+	AlertWebhook   string
+	AlertSyslog    string
+	AlertEmailSMTP string
+	AlertEmailFrom string
+	AlertEmailTo   string // comma-separated
+	AlertEmailUser string
+	AlertEmailPass string
 
 	// MFARequired makes password login require a confirmed TOTP second factor.
 	MFARequired bool
@@ -165,6 +173,12 @@ func Load() (*Config, error) {
 		BreakGlassShares:    getenvInt("PAM_BREAK_GLASS_SHARES", 5),
 		BreakGlassTTL:       time.Duration(getenvInt("PAM_BREAK_GLASS_TTL_MIN", 15)) * time.Minute,
 		AlertWebhook:        os.Getenv("PAM_ALERT_WEBHOOK"),
+		AlertSyslog:         os.Getenv("PAM_ALERT_SYSLOG"),
+		AlertEmailSMTP:      os.Getenv("PAM_ALERT_EMAIL_SMTP"),
+		AlertEmailFrom:      os.Getenv("PAM_ALERT_EMAIL_FROM"),
+		AlertEmailTo:        os.Getenv("PAM_ALERT_EMAIL_TO"),
+		AlertEmailUser:      os.Getenv("PAM_ALERT_EMAIL_USER"),
+		AlertEmailPass:      os.Getenv("PAM_ALERT_EMAIL_PASS"),
 		MFARequired:         os.Getenv("PAM_MFA_REQUIRED") == "true",
 		RotateInterval:      time.Duration(getenvInt("PAM_ROTATE_INTERVAL_MIN", 0)) * time.Minute,
 		RotateMaxAge:        time.Duration(getenvInt("PAM_ROTATE_MAX_AGE_HOURS", 0)) * time.Hour,
