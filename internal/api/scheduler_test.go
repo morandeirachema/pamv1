@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -179,5 +180,33 @@ func TestRotateCredentialByIDAuditsStart(t *testing.T) {
 	}
 	if !done {
 		t.Error("expected credential.rotate on success")
+	}
+}
+
+// TestSweepExpiredCheckoutRotates proves the worker invalidates the secret of an
+// expired checkout that was never checked back in.
+func TestSweepExpiredCheckoutRotates(t *testing.T) {
+	fc := &schedFake{}
+	srv, cred := newSchedTestServer(t, fc)
+	ctx := context.Background()
+
+	// An expired, unreturned checkout (created in the past so it isn't auto-closed).
+	co := &store.Checkout{CredentialID: cred.ID, TargetID: cred.TargetID, Holder: "alice", ExpiresAt: time.Now().Add(-time.Hour)}
+	if err := srv.store.CreateCheckout(ctx, co, time.Now().Add(-2*time.Hour)); err != nil {
+		t.Fatalf("CreateCheckout: %v", err)
+	}
+
+	if n := srv.sweepExpiredCheckouts(ctx, time.Now()); n != 1 {
+		t.Fatalf("swept %d, want 1", n)
+	}
+	got, err := srv.store.GetCredential(ctx, cred.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.RotatedAt == nil {
+		t.Fatal("expired checkout should have triggered a rotation")
+	}
+	if _, err := srv.store.GetActiveCheckout(ctx, cred.ID, time.Now()); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("swept checkout should be returned, got %v", err)
 	}
 }

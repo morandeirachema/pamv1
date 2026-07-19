@@ -54,6 +54,52 @@ func (s *Server) RotateCredentialByID(ctx context.Context, credentialID int64) {
 	s.audit(ctx, "credential.rotate", fmt.Sprintf("credential:%d target:%s reason:post-session", cred.ID, target.Name))
 }
 
+// sweepExpiredCheckouts rotates the credential behind every expired-but-unreturned
+// checkout and marks the lease returned, so a secret revealed at checkout stops
+// working even when the holder never checks it back in. Returns the count rotated.
+func (s *Server) sweepExpiredCheckouts(ctx context.Context, now time.Time) int {
+	cos, err := s.store.ListCheckouts(ctx, false, now)
+	if err != nil {
+		s.log.Error("lifecycle: list checkouts", "err", err)
+		return 0
+	}
+	rotated := 0
+	for i := range cos {
+		co := cos[i]
+		if co.ReturnedAt != nil || !co.ExpiresAt.Before(now) {
+			continue // already returned, or still active
+		}
+		func() {
+			defer func() {
+				if p := recover(); p != nil {
+					s.log.Error("lifecycle: panic sweeping checkout", "checkout", co.ID, "panic", p)
+				}
+			}()
+			// Close the lease first (idempotent); skip if a concurrent check-in won.
+			if err := s.store.CheckinCheckout(ctx, co.ID, now); err != nil {
+				return
+			}
+			cred, err := s.store.GetCredential(ctx, co.CredentialID)
+			if err != nil {
+				return
+			}
+			target, err := s.store.GetTarget(ctx, cred.TargetID)
+			if err != nil {
+				return
+			}
+			if _, rerr := s.rotateCredential(ctx, cred, target); rerr != nil {
+				s.audit(ctx, "credential.checkin_rotate_failed",
+					fmt.Sprintf("credential:%d reason:checkout-expired error:%v", cred.ID, rerr))
+				return
+			}
+			s.audit(ctx, "credential.rotate",
+				fmt.Sprintf("credential:%d target:%s reason:checkout-expired", cred.ID, target.Name))
+			rotated++
+		}()
+	}
+	return rotated
+}
+
 // RunLifecycleWorker runs the credential-lifecycle worker until ctx is cancelled:
 // on each tick it reconciles every credential (detecting drift) and rotates any
 // password credential older than pol.MaxAge. It is safe to call in a goroutine.
@@ -80,6 +126,10 @@ func (s *Server) RunLifecycleWorker(ctx context.Context, pol RotationPolicy) {
 // explicitly so the aging decision is testable.
 func (s *Server) runLifecycleOnce(ctx context.Context, maxAge time.Duration, now time.Time) lifecycleReport {
 	var rep lifecycleReport
+	// Invalidate any secret still outstanding on an expired checkout that was
+	// never returned, so "the password the holder saw stops working" holds even
+	// without an explicit check-in.
+	rep.Rotated += s.sweepExpiredCheckouts(ctx, now)
 	creds, err := s.store.ListCredentials(ctx, 0)
 	if err != nil {
 		s.log.Error("lifecycle: list credentials", "err", err)
