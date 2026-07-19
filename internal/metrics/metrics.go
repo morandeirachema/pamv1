@@ -79,11 +79,15 @@ func (m *Metrics) WritePrometheus(w io.Writer) {
 		reqs[s] = v
 	}
 	auditTotal, breakglass, authFailures, rotations := m.auditTotal, m.breakglass, m.authFailures, m.rotations
-	active := 0
-	if m.activeSessions != nil {
-		active = m.activeSessions()
-	}
+	activeFn := m.activeSessions
 	m.mu.Unlock()
+
+	// Invoke the callback OUTSIDE m.mu: it takes the session registry's lock, so
+	// holding m.mu here would impose a metrics→registry lock order.
+	active := 0
+	if activeFn != nil {
+		active = activeFn()
+	}
 
 	fmt.Fprintln(w, "# HELP pam_http_requests_total Total HTTP requests handled, by status code.")
 	fmt.Fprintln(w, "# TYPE pam_http_requests_total counter")

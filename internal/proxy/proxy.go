@@ -959,6 +959,8 @@ func protocolSet(ps []string) map[string]bool {
 	return m
 }
 
+// rejectAll rejects every channel the client opens with reason and msg, used to
+// refuse a connection after authentication once a policy gate fails.
 func rejectAll(chans <-chan ssh.NewChannel, reason ssh.RejectionReason, msg string) {
 	for nc := range chans {
 		nc.Reject(reason, msg)

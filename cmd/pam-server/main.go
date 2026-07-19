@@ -67,7 +67,11 @@ func main() {
 		if err != nil {
 			fatal(err)
 		}
-		sum := sha256.Sum256([]byte(strings.TrimSpace(string(data))))
+		key := strings.TrimSpace(string(data))
+		if key == "" {
+			fatal(fmt.Errorf("no key on stdin (would hash the empty string, yielding an unusable break-glass hash)"))
+		}
+		sum := sha256.Sum256([]byte(key))
 		fmt.Println(hex.EncodeToString(sum[:]))
 	case *rotateKEK:
 		if err := runRotateKEK(); err != nil {
@@ -374,6 +378,10 @@ func run() error {
 		})
 	}
 
+	// errc receives the first fatal listener error (HTTP or SSH proxy); either
+	// aborts startup loudly instead of running half a control plane.
+	errc := make(chan error, 1)
+
 	// proxyDone closes when the SSH proxy has fully drained; shutdown waits on it
 	// so in-flight sessions' closing audit events and recordings are flushed
 	// before the process (and the store) exits. Closed immediately when the proxy
@@ -422,8 +430,14 @@ func run() error {
 		}
 		go func() {
 			defer close(proxyDone)
-			if err := px.ListenAndServe(ctx, cfg.SSHAddr); err != nil {
+			if err := px.ListenAndServe(ctx, cfg.SSHAddr); err != nil && ctx.Err() == nil {
+				// A bind/listener failure (not graceful shutdown) is fatal: the PAM
+				// must not run without its session broker.
 				log.Error("ssh proxy stopped", "err", err)
+				select {
+				case errc <- fmt.Errorf("ssh proxy: %w", err):
+				default:
+				}
 			}
 		}()
 	}
@@ -441,7 +455,6 @@ func run() error {
 	if tlsEnabled {
 		srv.TLSConfig = &tls.Config{MinVersion: tls.VersionTLS12}
 	}
-	errc := make(chan error, 1)
 	go func() {
 		if tlsEnabled {
 			errc <- srv.ListenAndServeTLS(cfg.TLSCert, cfg.TLSKey)
@@ -452,22 +465,33 @@ func run() error {
 	log.Info("pam-server listening", "addr", cfg.ListenAddr, "tls", tlsEnabled,
 		"breakglass", cfg.BreakGlassKeyHash != "", "log_level", cfg.LogLevel)
 
+	// drainProxy cancels the run context (so the proxy Serve returns) and waits,
+	// bounded, for it to finish flushing session audit/recordings before the
+	// deferred st.Close() runs — on either exit path.
+	drainProxy := func() {
+		stop() // cancel ctx so the proxy drains
+		select {
+		case <-proxyDone:
+		case <-time.After(10 * time.Second):
+			log.Warn("ssh proxy drain timed out")
+		}
+	}
+
 	select {
 	case err := <-errc:
+		// A listener failed. Shut the HTTP server and drain the proxy before
+		// returning, so the store isn't closed under live sessions.
+		shutCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_ = srv.Shutdown(shutCtx)
+		drainProxy()
 		return err
 	case <-ctx.Done():
 		log.Info("shutting down")
 		shutCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		err := srv.Shutdown(shutCtx)
-		// Wait for the SSH proxy to finish draining active sessions. The drain is
-		// bounded (Serve force-closes connections on ctx cancel), so this blocks
-		// only briefly; a timeout guards against a wedged session holding exit.
-		select {
-		case <-proxyDone:
-		case <-time.After(10 * time.Second):
-			log.Warn("ssh proxy drain timed out")
-		}
+		drainProxy()
 		return err
 	}
 }

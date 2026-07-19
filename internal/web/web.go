@@ -9,6 +9,7 @@ import (
 //go:embed static/index.html
 var indexHTML []byte
 
+// Index serves the embedded single-page 5250-style portal with a strict CSP.
 func Index(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Content-Security-Policy",

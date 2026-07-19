@@ -11,6 +11,13 @@ import (
 	"github.com/morandeirachema/pamv1/internal/logging"
 )
 
+// oneLine replaces CR and LF with spaces so an untrusted field (an actor name
+// from a directory claim) cannot inject extra lines into a syslog record or SMTP
+// header.
+func oneLine(s string) string {
+	return strings.NewReplacer("\r", " ", "\n", " ").Replace(s)
+}
+
 // Multi fans an alert out to several notifiers (e.g. webhook + syslog + email).
 type Multi []Notifier
 
@@ -51,9 +58,11 @@ func NewSyslog(network, addr, tag string) *Syslog {
 // Notify formats the event as a syslog line (authpriv.alert priority) and sends
 // it from a background goroutine; delivery errors are logged, not returned.
 func (s *Syslog) Notify(_ context.Context, e Event) {
-	// PRI = facility(authpriv=10)*8 + severity(alert=1) = 81.
+	// PRI = facility(authpriv=10)*8 + severity(alert=1) = 81. Strip CR/LF from
+	// actor/type/remote (which can come from LDAP/OIDC claims) so a crafted name
+	// cannot forge extra syslog records.
 	msg := fmt.Sprintf("<81>1 %s - %s - %s - actor=%s detail=%q remote=%s",
-		stamp(e.Time), s.tag, e.Type, e.Actor, e.Detail, e.Remote)
+		stamp(e.Time), s.tag, oneLine(e.Type), oneLine(e.Actor), e.Detail, oneLine(e.Remote))
 	go func() {
 		conn, err := s.dial(s.network, s.addr)
 		if err != nil {
@@ -91,7 +100,9 @@ func NewEmail(addr, from string, to []string, username, password string) *Email 
 // Notify formats a plain-text email and sends it from a background goroutine;
 // delivery errors are logged, not returned.
 func (m *Email) Notify(_ context.Context, e Event) {
-	subject := fmt.Sprintf("[pamv1] %s by %s", e.Type, e.Actor)
+	// Strip CR/LF so an actor/type from a directory claim cannot inject SMTP
+	// headers via the Subject line.
+	subject := fmt.Sprintf("[pamv1] %s by %s", oneLine(e.Type), oneLine(e.Actor))
 	body := fmt.Sprintf("Type: %s\r\nActor: %s\r\nDetail: %s\r\nRemote: %s\r\nTime: %s\r\n",
 		e.Type, e.Actor, e.Detail, e.Remote, stamp(e.Time))
 	msg := []byte(fmt.Sprintf("From: %s\r\nTo: %s\r\nSubject: %s\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n%s",

@@ -48,9 +48,6 @@ func NewWebhook(url string) *Webhook {
 // background goroutine, so it never blocks the caller; delivery errors are
 // logged but not returned.
 func (w *Webhook) Notify(_ context.Context, e Event) {
-	if e.Time.IsZero() {
-		// caller should stamp Time; leave as-is otherwise (avoids time.Now here).
-	}
 	body, err := json.Marshal(e)
 	if err != nil {
 		return

@@ -51,7 +51,9 @@ func readInstruction(r *bufio.Reader) (Instruction, error) {
 			return Instruction{}, err
 		}
 		n, err := strconv.Atoi(strings.TrimRight(lenStr, "."))
-		if err != nil || n < 0 {
+		// Cap the element length: guacd instructions are KB-scale, so a corrupt or
+		// hostile "999999999999." reply must not drive a multi-GB allocation.
+		if err != nil || n < 0 || n > 1<<20 {
 			return Instruction{}, fmt.Errorf("guacd: bad length %q", lenStr)
 		}
 		val := make([]rune, n)
@@ -119,15 +121,21 @@ func Connect(ctx context.Context, addr string, params Params) (*Conn, error) {
 	if err != nil {
 		return nil, fmt.Errorf("guacd: dial: %w", err)
 	}
-	if dl, ok := ctx.Deadline(); ok {
-		nc.SetDeadline(dl)
+	// Bound the handshake even when ctx has no deadline (the RDP tunnel passes a
+	// request context that carries none): a guacd that accepts the dial but never
+	// replies would otherwise block the handler goroutine forever.
+	hsDeadline := time.Now().Add(30 * time.Second)
+	if dl, ok := ctx.Deadline(); ok && dl.Before(hsDeadline) {
+		hsDeadline = dl
 	}
+	nc.SetDeadline(hsDeadline)
 	c := &Conn{Conn: nc, r: bufio.NewReader(nc)}
 	id, err := c.handshake(params)
 	if err != nil {
 		nc.Close()
 		return nil, err
 	}
+	nc.SetDeadline(time.Time{}) // clear for the (long-lived) tunnel phase
 	c.ID = id
 	nc.SetDeadline(time.Time{}) // clear handshake deadline for the interactive phase
 	return c, nil
