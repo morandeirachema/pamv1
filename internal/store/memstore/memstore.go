@@ -251,15 +251,26 @@ func (m *Memstore) activeCheckoutLocked(credentialID int64, now time.Time) (stor
 }
 
 // CreateCheckout leases a credential; ErrNotFound if the credential is missing,
-// ErrConflict if it already has an active checkout as of now.
+// ErrConflict if it already has an active (unexpired, unreturned) checkout as of
+// now. An expired-but-unreturned lease is auto-closed rather than blocking the new
+// checkout, mirroring pgstore's expire-then-insert so at most one unreturned lease
+// per credential exists in either store.
 func (m *Memstore) CreateCheckout(_ context.Context, co *store.Checkout, now time.Time) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if _, ok := m.creds[co.CredentialID]; !ok {
 		return store.ErrNotFound
 	}
-	if _, active := m.activeCheckoutLocked(co.CredentialID, now); active {
-		return store.ErrConflict
+	for id, existing := range m.checkouts {
+		if existing.CredentialID != co.CredentialID || existing.ReturnedAt != nil {
+			continue
+		}
+		if now.Before(existing.ExpiresAt) {
+			return store.ErrConflict // an active lease still holds the credential
+		}
+		t := now.UTC() // expired: close it so it neither blocks nor lingers unreturned
+		existing.ReturnedAt = &t
+		m.checkouts[id] = existing
 	}
 	co.ID = m.id()
 	co.CheckedOutAt = now.UTC()

@@ -1,13 +1,16 @@
 package api_test
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"testing"
+	"time"
 
 	"github.com/morandeirachema/pamv1/internal/api"
 	"github.com/morandeirachema/pamv1/internal/rotate"
+	"github.com/morandeirachema/pamv1/internal/store"
 )
 
 // TestCredentialCheckoutLifecycle covers exclusive checkout, conflict on a double
@@ -64,6 +67,44 @@ func TestCredentialCheckoutLifecycle(t *testing.T) {
 	}
 	if jsonMap(t, data)["secret"].(string) != fc.newSecret() {
 		t.Fatalf("re-checkout returned a stale secret")
+	}
+}
+
+// TestCheckoutInvalidatesExpiredLease proves that when a prior lease expired
+// without a check-in, a new checkout rotates the credential before issuing the
+// new lease — so the expired holder's secret stops working and the new holder is
+// handed the fresh one, closing the window where a re-checkout that races ahead
+// of the periodic sweep would otherwise reuse the expired holder's secret.
+func TestCheckoutInvalidatesExpiredLease(t *testing.T) {
+	fc := &fakeConnector{}
+	srv, st := newTestServerOpts(t, nil, api.Options{
+		Rotators:  map[string]rotate.Rotator{"ssh": fc},
+		Verifiers: map[string]rotate.Verifier{"ssh": fc},
+	})
+	credID := seedTargetCred(t, srv, "ssh", "", "original-secret")
+
+	cred, err := st.GetCredential(context.Background(), credID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A lease held by someone else that expired an hour ago and was never returned.
+	past := time.Now().Add(-time.Hour)
+	if err := st.CreateCheckout(context.Background(), &store.Checkout{
+		CredentialID: credID, TargetID: cred.TargetID, Holder: "ghost", ExpiresAt: past,
+	}, past); err != nil {
+		t.Fatal(err)
+	}
+
+	// The new checkout must rotate away the ghost's secret before issuing a lease.
+	status, data := do(t, srv, http.MethodPost, fmt.Sprintf("/api/credentials/%d/checkout", credID), testAPIKey, nil)
+	if status != http.StatusCreated {
+		t.Fatalf("checkout over an expired lease: %d %s", status, data)
+	}
+	if fc.newSecret() == "" || fc.newSecret() == "original-secret" {
+		t.Fatalf("expired lease was not rotated before re-checkout: %q", fc.newSecret())
+	}
+	if jsonMap(t, data)["secret"].(string) != fc.newSecret() {
+		t.Fatalf("re-checkout returned the expired holder's stale secret")
 	}
 }
 

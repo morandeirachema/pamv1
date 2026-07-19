@@ -54,6 +54,35 @@ func (s *Server) RotateCredentialByID(ctx context.Context, credentialID int64) {
 	s.audit(ctx, "credential.rotate", fmt.Sprintf("credential:%d target:%s reason:post-session", cred.ID, target.Name))
 }
 
+// invalidateCheckout closes an expired-but-unreturned lease and rotates the
+// credential behind it, so the secret its holder saw stops working. Closing the
+// lease first (idempotent) acts as a claim: if a concurrent sweep or check-in
+// already returned it, CheckinCheckout errors and we skip, so the credential is
+// never rotated twice for the same expiry. Returns (true, nil) when it rotated,
+// (false, nil) when the claim was lost or the credential/target vanished, and
+// (false, err) when the rotation itself failed (already audited).
+func (s *Server) invalidateCheckout(ctx context.Context, co store.Checkout, now time.Time) (bool, error) {
+	if err := s.store.CheckinCheckout(ctx, co.ID, now); err != nil {
+		return false, nil // a concurrent sweep or check-in already closed this lease
+	}
+	cred, err := s.store.GetCredential(ctx, co.CredentialID)
+	if err != nil {
+		return false, nil
+	}
+	target, err := s.store.GetTarget(ctx, cred.TargetID)
+	if err != nil {
+		return false, nil
+	}
+	if _, rerr := s.rotateCredential(ctx, cred, target); rerr != nil {
+		s.audit(ctx, "credential.checkin_rotate_failed",
+			fmt.Sprintf("credential:%d reason:checkout-expired error:%v", cred.ID, rerr))
+		return false, rerr
+	}
+	s.audit(ctx, "credential.rotate",
+		fmt.Sprintf("credential:%d target:%s reason:checkout-expired", cred.ID, target.Name))
+	return true, nil
+}
+
 // sweepExpiredCheckouts rotates the credential behind every expired-but-unreturned
 // checkout and marks the lease returned, so a secret revealed at checkout stops
 // working even when the holder never checks it back in. Returns the count rotated.
@@ -75,29 +104,32 @@ func (s *Server) sweepExpiredCheckouts(ctx context.Context, now time.Time) int {
 					s.log.Error("lifecycle: panic sweeping checkout", "checkout", co.ID, "panic", p)
 				}
 			}()
-			// Close the lease first (idempotent); skip if a concurrent check-in won.
-			if err := s.store.CheckinCheckout(ctx, co.ID, now); err != nil {
-				return
+			if ok, _ := s.invalidateCheckout(ctx, co, now); ok {
+				rotated++
 			}
-			cred, err := s.store.GetCredential(ctx, co.CredentialID)
-			if err != nil {
-				return
-			}
-			target, err := s.store.GetTarget(ctx, cred.TargetID)
-			if err != nil {
-				return
-			}
-			if _, rerr := s.rotateCredential(ctx, cred, target); rerr != nil {
-				s.audit(ctx, "credential.checkin_rotate_failed",
-					fmt.Sprintf("credential:%d reason:checkout-expired error:%v", cred.ID, rerr))
-				return
-			}
-			s.audit(ctx, "credential.rotate",
-				fmt.Sprintf("credential:%d target:%s reason:checkout-expired", cred.ID, target.Name))
-			rotated++
 		}()
 	}
 	return rotated
+}
+
+// invalidateExpiredCheckoutFor rotates and closes an expired-but-unreturned lease
+// on credentialID (if any) before the credential is handed to a new holder, so a
+// re-checkout that races ahead of the periodic sweep can never reuse an expired
+// holder's still-valid secret. Returns whether it rotated; an error means an
+// expired lease existed but could not be invalidated (the caller must not proceed).
+func (s *Server) invalidateExpiredCheckoutFor(ctx context.Context, credentialID int64, now time.Time) (bool, error) {
+	cos, err := s.store.ListCheckouts(ctx, false, now)
+	if err != nil {
+		return false, err
+	}
+	for i := range cos {
+		co := cos[i]
+		if co.CredentialID != credentialID || co.ReturnedAt != nil || !co.ExpiresAt.Before(now) {
+			continue
+		}
+		return s.invalidateCheckout(ctx, co, now)
+	}
+	return false, nil
 }
 
 // RunLifecycleWorker runs the credential-lifecycle worker until ctx is cancelled:

@@ -142,6 +142,26 @@ func (s *Server) checkoutCredential(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	now := time.Now()
+	// If a previous lease on this credential expired without a check-in, rotate the
+	// secret its holder saw before issuing a new lease. The store auto-closes an
+	// expired lease on the next checkout, so without this a re-checkout that beats
+	// the periodic sweep would hand out (and then skip rotating) the prior holder's
+	// still-valid secret.
+	if rotated, ierr := s.invalidateExpiredCheckoutFor(r.Context(), cred.ID, now); ierr != nil {
+		s.audit(r.Context(), "credential.checkout_denied",
+			fmt.Sprintf("credential:%d reason:expired-lease-not-invalidated", cred.ID))
+		writeError(w, http.StatusServiceUnavailable, "a previous lease on this credential could not be invalidated; try again")
+		return
+	} else if rotated {
+		// Rotation replaced the vaulted secret; re-fetch so the new holder is handed
+		// the fresh secret, not the one the expired holder saw.
+		fresh, gerr := s.store.GetCredential(r.Context(), cred.ID)
+		if gerr != nil {
+			storeError(w, gerr)
+			return
+		}
+		cred = fresh
+	}
 	co := store.Checkout{
 		CredentialID: cred.ID, TargetID: target.ID, Holder: actorFrom(r.Context()),
 		Reason: in.Reason, ExpiresAt: now.Add(s.checkoutTTL).UTC(),
