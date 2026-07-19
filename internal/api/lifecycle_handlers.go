@@ -53,9 +53,6 @@ func (s *Server) rotateCredentialHandler(w http.ResponseWriter, r *http.Request)
 // rotateCredential performs the rotation and vault update. Shared by the manual
 // endpoint and reconciliation remediation.
 func (s *Server) rotateCredential(ctx context.Context, cred *store.Credential, target *store.Target) (time.Time, error) {
-	if cred.SecretType != "password" {
-		return time.Time{}, fmt.Errorf("%w: only password credentials can be rotated (got %q)", ErrUnsupported, cred.SecretType)
-	}
 	rotator, ok := s.rotators[target.Protocol]
 	if !ok {
 		return time.Time{}, fmt.Errorf("%w: no rotator for protocol %q", ErrUnsupported, target.Protocol)
@@ -64,13 +61,35 @@ func (s *Server) rotateCredential(ctx context.Context, cred *store.Credential, t
 	if err != nil {
 		return time.Time{}, fmt.Errorf("vault decrypt failed")
 	}
-	newSecret, err := rotate.GeneratePassword(24)
-	if err != nil {
-		return time.Time{}, fmt.Errorf("password generation failed")
+
+	// Generate the new secret and apply it on the target. Passwords use the
+	// Rotator; ssh_key credentials install a fresh keypair via a KeyRotator.
+	var newSecret string
+	switch cred.SecretType {
+	case "password":
+		newSecret, err = rotate.GeneratePassword(24)
+		if err != nil {
+			return time.Time{}, fmt.Errorf("password generation failed")
+		}
+		if err := rotator.Rotate(ctx, *target, cred.Username, oldSecret, newSecret); err != nil {
+			return time.Time{}, err
+		}
+	case "ssh_key":
+		kr, ok := rotator.(rotate.KeyRotator)
+		if !ok {
+			return time.Time{}, fmt.Errorf("%w: key rotation not supported for protocol %q", ErrUnsupported, target.Protocol)
+		}
+		newSecret, err = rotate.GenerateSSHKey()
+		if err != nil {
+			return time.Time{}, fmt.Errorf("ssh key generation failed")
+		}
+		if err := kr.RotateKey(ctx, *target, cred.Username, oldSecret, newSecret); err != nil {
+			return time.Time{}, err
+		}
+	default:
+		return time.Time{}, fmt.Errorf("%w: unknown secret type %q", ErrUnsupported, cred.SecretType)
 	}
-	if err := rotator.Rotate(ctx, *target, cred.Username, oldSecret, newSecret); err != nil {
-		return time.Time{}, err
-	}
+
 	enc, err := s.vault.Encrypt(ctx, newSecret, store.CredentialAAD(target.ID))
 	if err != nil {
 		// The target now has a password the vault does not hold — loud failure.

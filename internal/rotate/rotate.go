@@ -12,7 +12,9 @@ package rotate
 
 import (
 	"context"
+	"crypto/ed25519"
 	"crypto/rand"
+	"encoding/pem"
 	"fmt"
 	"math/big"
 	"strings"
@@ -102,6 +104,20 @@ func shuffle(b []byte) error {
 	return nil
 }
 
+// GenerateSSHKey returns a fresh ed25519 private key in OpenSSH PEM format,
+// suitable for vaulting as a new ssh_key credential.
+func GenerateSSHKey() (string, error) {
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		return "", err
+	}
+	block, err := ssh.MarshalPrivateKey(priv, "")
+	if err != nil {
+		return "", err
+	}
+	return string(pem.EncodeToMemory(block)), nil
+}
+
 // --- SSH connector (Linux/Unix targets) ---
 
 // SSHConnector rotates and verifies password credentials over SSH. Rotation
@@ -127,20 +143,26 @@ func (c SSHConnector) timeout() time.Duration {
 	return c.Timeout
 }
 
-// dial opens an SSH client to the target as username using password auth,
-// applying the configured host-key callback (InsecureIgnoreHostKey by default).
-func (c SSHConnector) dial(target store.Target, username, secret string) (*ssh.Client, error) {
+// dialAuth opens an SSH client to the target as username with the given auth
+// method, applying the configured host-key callback (InsecureIgnoreHostKey by
+// default).
+func (c SSHConnector) dialAuth(target store.Target, username string, auth ssh.AuthMethod) (*ssh.Client, error) {
 	cb := c.HostKeyCallback
 	if cb == nil {
 		cb = ssh.InsecureIgnoreHostKey()
 	}
 	cfg := &ssh.ClientConfig{
 		User:            username,
-		Auth:            []ssh.AuthMethod{ssh.Password(secret)},
+		Auth:            []ssh.AuthMethod{auth},
 		HostKeyCallback: cb,
 		Timeout:         c.timeout(),
 	}
 	return ssh.Dial("tcp", fmt.Sprintf("%s:%d", target.Host, target.Port), cfg)
+}
+
+// dial opens an SSH client to the target as username using password auth.
+func (c SSHConnector) dial(target store.Target, username, secret string) (*ssh.Client, error) {
+	return c.dialAuth(target, username, ssh.Password(secret))
 }
 
 // Verify dials the target and completes an SSH handshake with secret; success
@@ -179,6 +201,49 @@ func (c SSHConnector) Rotate(_ context.Context, target store.Target, username, o
 	sess.Stdin = strings.NewReader(username + ":" + newSecret + "\n")
 	if out, err := sess.CombinedOutput(cmd); err != nil {
 		return fmt.Errorf("rotate command failed: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+// KeyRotator rotates an SSH **key** credential: it authenticates with the old
+// private key and installs a freshly generated public key, so the old key stops
+// working. Only the SSH connector implements it.
+type KeyRotator interface {
+	RotateKey(ctx context.Context, target store.Target, username, oldPrivPEM, newPrivPEM string) error
+}
+
+// RotateKey connects with the old private key and replaces the account's
+// authorized_keys with the public key derived from newPrivPEM (the new private
+// key is what the vault will store). The old key no longer authenticates.
+func (c SSHConnector) RotateKey(_ context.Context, target store.Target, username, oldPrivPEM, newPrivPEM string) error {
+	oldSigner, err := ssh.ParsePrivateKey([]byte(oldPrivPEM))
+	if err != nil {
+		return fmt.Errorf("parse current ssh key: %w", err)
+	}
+	newSigner, err := ssh.ParsePrivateKey([]byte(newPrivPEM))
+	if err != nil {
+		return fmt.Errorf("parse new ssh key: %w", err)
+	}
+	authLine := ssh.MarshalAuthorizedKey(newSigner.PublicKey()) // "ssh-ed25519 AAAA...\n"
+
+	client, err := c.dialAuth(target, username, ssh.PublicKeys(oldSigner))
+	if err != nil {
+		return fmt.Errorf("ssh auth failed: %w", err)
+	}
+	defer client.Close()
+
+	sess, err := client.NewSession()
+	if err != nil {
+		return fmt.Errorf("ssh session: %w", err)
+	}
+	defer sess.Close()
+
+	// Write the new key from stdin (no shell interpolation of key material) and
+	// replace authorized_keys with exactly it.
+	sess.Stdin = strings.NewReader(string(authLine))
+	const cmd = "mkdir -p ~/.ssh && chmod 700 ~/.ssh && cat > ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys"
+	if out, err := sess.CombinedOutput(cmd); err != nil {
+		return fmt.Errorf("install authorized_keys failed: %w: %s", err, strings.TrimSpace(string(out)))
 	}
 	return nil
 }

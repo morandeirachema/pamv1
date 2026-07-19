@@ -1,6 +1,7 @@
 package rotate
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
@@ -92,6 +93,38 @@ func TestSSHConnectorVerifyAndRotate(t *testing.T) {
 
 // TestSSHConnectorRejectsUnsafeUsername checks Rotate refuses a username
 // containing ':' (or newlines) that could corrupt the chpasswd payload.
+// TestSSHConnectorRotateKey proves ssh_key rotation: authenticate with the old
+// key, install the freshly generated public key, and confirm exactly that key is
+// written to authorized_keys.
+func TestSSHConnectorRotateKey(t *testing.T) {
+	oldPriv, err := GenerateSSHKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldSigner, err := ssh.ParsePrivateKey([]byte(oldPriv))
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := startSSHServerPubkey(t, "svc-pam", oldSigner.PublicKey())
+	target := store.Target{Host: srv.host, Port: srv.port, Protocol: "ssh"}
+
+	newPriv, err := GenerateSSHKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := (SSHConnector{}).RotateKey(context.Background(), target, "svc-pam", oldPriv, newPriv); err != nil {
+		t.Fatalf("RotateKey: %v", err)
+	}
+	newSigner, err := ssh.ParsePrivateKey([]byte(newPriv))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := string(ssh.MarshalAuthorizedKey(newSigner.PublicKey()))
+	if got := srv.lastStdin(); got != want {
+		t.Fatalf("installed authorized_keys = %q, want %q", got, want)
+	}
+}
+
 func TestSSHConnectorRejectsUnsafeUsername(t *testing.T) {
 	conn := SSHConnector{}
 	err := conn.Rotate(context.Background(), store.Target{Host: "127.0.0.1", Port: 1}, "bad:user", "old", "new")
@@ -168,19 +201,11 @@ func (s *sshServer) lastStdin() string {
 
 // startSSHServer starts an in-process SSH server that accepts only
 // (wantUser, wantPass) and records exec stdin for later inspection.
-func startSSHServer(t *testing.T, wantUser, wantPass string) *sshServer {
+// startSSHServerCfg listens on an ephemeral port and serves connections with cfg.
+func startSSHServerCfg(t *testing.T, cfg *ssh.ServerConfig) *sshServer {
 	t.Helper()
 	srv := &sshServer{}
-	cfg := &ssh.ServerConfig{
-		PasswordCallback: func(c ssh.ConnMetadata, pass []byte) (*ssh.Permissions, error) {
-			if c.User() == wantUser && string(pass) == wantPass {
-				return &ssh.Permissions{}, nil
-			}
-			return nil, io.EOF
-		},
-	}
 	cfg.AddHostKey(mustSigner(t))
-
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -199,6 +224,32 @@ func startSSHServer(t *testing.T, wantUser, wantPass string) *sshServer {
 	srv.host = h
 	srv.port, _ = strconv.Atoi(p)
 	return srv
+}
+
+// startSSHServer starts a mock upstream accepting one password credential.
+func startSSHServer(t *testing.T, wantUser, wantPass string) *sshServer {
+	t.Helper()
+	return startSSHServerCfg(t, &ssh.ServerConfig{
+		PasswordCallback: func(c ssh.ConnMetadata, pass []byte) (*ssh.Permissions, error) {
+			if c.User() == wantUser && string(pass) == wantPass {
+				return &ssh.Permissions{}, nil
+			}
+			return nil, io.EOF
+		},
+	})
+}
+
+// startSSHServerPubkey starts a mock upstream accepting one public key.
+func startSSHServerPubkey(t *testing.T, wantUser string, wantKey ssh.PublicKey) *sshServer {
+	t.Helper()
+	return startSSHServerCfg(t, &ssh.ServerConfig{
+		PublicKeyCallback: func(c ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permissions, error) {
+			if c.User() == wantUser && bytes.Equal(key.Marshal(), wantKey.Marshal()) {
+				return &ssh.Permissions{}, nil
+			}
+			return nil, io.EOF
+		},
+	})
 }
 
 // serve handles one connection, capturing the stdin of exec requests and

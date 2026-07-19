@@ -265,9 +265,11 @@ PAM_ROTATE_MAX_AGE_HOURS=168     # rotate secrets older than 7 days (0 = report 
 ```
 
 Every action is audited (`credential.rotate`, `credential.reconcile`,
-`credential.remediate`; the worker acts as `system-scheduler`). Only `password`
-credentials are rotated; `ssh_key` rotation and the AD/LDAPS password-change and
-identity-reconciliation connectors are on the roadmap.
+`credential.remediate`; the worker acts as `system-scheduler`). **Password**
+credentials rotate over SSH (`chpasswd`) / WinRM (`net user`); **`ssh_key`**
+credentials rotate over SSH by generating a fresh keypair and replacing the
+account's `authorized_keys` (the old key stops working). The AD/LDAPS
+password-change and identity-reconciliation connectors are on the roadmap.
 
 **Checkout / check-in (exclusive lease).** For accounts a person or app must use
 the password directly, check it out: you get the secret exclusively for a lease
