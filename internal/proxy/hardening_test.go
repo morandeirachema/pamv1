@@ -87,6 +87,71 @@ func TestCredentialDecryptedOnlyAfterAuthz(t *testing.T) {
 	}
 }
 
+// TestNonProxyableProtocolDeniedBeforeDecrypt proves that a target whose
+// protocol the gateway cannot broker (e.g. rdp over the SSH proxy) is denied
+// before the credential is decrypted, even when the protocol allowlist is
+// permissive — plaintext must never materialize for a session that is denied.
+func TestNonProxyableProtocolDeniedBeforeDecrypt(t *testing.T) {
+	ctx := context.Background()
+	st := memstore.New()
+	v := mustVault(t)
+	target := &store.Target{Name: "win-rdp", Host: "127.0.0.1", Port: 3389, OSType: "windows", Protocol: "rdp"}
+	if err := st.CreateTarget(ctx, target); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.CreateCredential(ctx, &store.Credential{
+		TargetID: target.ID, Username: upstreamUser, SecretType: "password",
+		SecretEnc: "v1:not-a-real-token", // decrypting this would emit credential.decrypt_failed
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	resolver, err := auth.NewResolver(st, proxyAPIKey, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// No AllowedProtocols restriction: the allowlist gate passes, so the
+	// proxyability gate is the one that must deny (and must do so before decrypt).
+	px, err := proxy.New(st, v, resolver, proxy.Config{
+		HostKey:      mustSigner(t),
+		RecordingDir: t.TempDir(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := serveProxy(t, px)
+
+	client, err := dialProxy(t, addr, "win-rdp", proxyAPIKey)
+	if err != nil {
+		t.Fatalf("dial proxy: %v", err)
+	}
+	if sess, e := client.NewSession(); e == nil {
+		sess.Close()
+		t.Fatal("session opened for a non-proxyable protocol")
+	}
+	client.Close()
+
+	events, err := st.ListAudit(ctx, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var proxyableDenied, decryptAttempted bool
+	for _, e := range events {
+		if strings.Contains(e.Detail, "protocol-not-proxyable") {
+			proxyableDenied = true
+		}
+		if e.Action == "credential.decrypt_failed" {
+			decryptAttempted = true
+		}
+	}
+	if !proxyableDenied {
+		t.Error("expected the proxyability gate to deny the session")
+	}
+	if decryptAttempted {
+		t.Error("credential was decrypted for a non-proxyable session — decryption must run only after the protocol is known to be brokerable")
+	}
+}
+
 // startStderrUpstream is an in-process SSH target that, on exec/shell, writes a
 // marker to the channel's STDERR (not stdout) and exits 0. It accepts only
 // (wantUser, wantPass).

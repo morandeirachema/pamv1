@@ -418,6 +418,16 @@ func (p *Proxy) handleConn(ctx context.Context, nConn net.Conn) {
 		}
 	}
 
+	// Refuse protocols this gateway cannot broker (ssh always; winrm only with a
+	// runner configured) before decrypting, so plaintext never materializes for a
+	// session that is about to be denied. serveWinRM re-checks defensively.
+	if target.Protocol != "ssh" && !(target.Protocol == "winrm" && p.winrm != nil) {
+		p.log.Warn("session denied: protocol not proxyable", "actor", actor, "target", target.Name, "protocol", target.Protocol)
+		p.audit(ctx, actor, "session.denied", "target:"+target.Name+" reason:protocol-not-proxyable")
+		rejectAll(chans, ssh.Prohibited, "pamv1: this target's protocol is not available through the proxy")
+		return
+	}
+
 	// Every authorization gate has passed — decrypt the secret just-in-time.
 	// Plaintext exists only from here on, never for a session that was denied.
 	secret, err := p.decryptSecret(ctx, target, cred)
@@ -687,11 +697,20 @@ func (p *Proxy) handleSession(ctx context.Context, nc ssh.NewChannel, upstream *
 
 	// Target stderr -> operator, also tee'd into the recording so the audited
 	// hash covers stderr, not just stdout (Recording.Write is concurrency-safe).
+	// The copy is joined before rec.Close() below: stdout hitting EOF (which ends
+	// io.Copy(out, upChan)) does not mean stderr has drained, and a late write
+	// into an already-closed Recording would vanish from the audited hash. The
+	// upstream channel closing EOFs Stderr() too, so this never outlives stdout.
 	var errOut io.Writer = clientChan.Stderr()
 	if rec != nil {
 		errOut = io.MultiWriter(clientChan.Stderr(), rec)
 	}
-	go io.Copy(errOut, upChan.Stderr())
+	var errCopyDone sync.WaitGroup
+	errCopyDone.Add(1)
+	go func() {
+		defer errCopyDone.Done()
+		io.Copy(errOut, upChan.Stderr())
+	}()
 	if observe {
 		// Read-only: drop operator keystrokes; never touch the upstream channel.
 		go io.Copy(io.Discard, clientChan)
@@ -719,6 +738,10 @@ func (p *Proxy) handleSession(ctx context.Context, nc ssh.NewChannel, upstream *
 	// flushes to clientChan before the deferred clientChan.Close() runs.
 	close(clientReqDone)
 	clientReqPump.Wait()
+
+	// Flush upstream stderr into the recording before hashing and closing it, so
+	// the audited sha256 covers every stderr byte the session produced.
+	errCopyDone.Wait()
 
 	if rec != nil {
 		path, sum, n := rec.Close()
