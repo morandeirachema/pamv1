@@ -662,6 +662,9 @@ evidence). Replay with [asciinema](https://asciinema.org/): `asciinema play <fil
   Helm chart can render a `ServiceMonitor` (`metrics.serviceMonitor.enabled`).
 - `GET /healthz` — liveness (process up). `GET /readyz` — readiness (returns 503
   until the database is reachable); point your load balancer at `/readyz`.
+- `pam-server -healthcheck` probes `/healthz` on `PAM_LISTEN_ADDR` and exits
+  non-zero when unhealthy. The container images use it as their `HEALTHCHECK`
+  because the distroless base has no shell or curl.
 
 ---
 
@@ -677,6 +680,7 @@ evidence). Replay with [asciinema](https://asciinema.org/): `asciinema play <fil
 - **Protect `PAM_MASTER_KEY`** (local KEK). It wraps the entire vault. Back it up out-of-band; a DB dump without it is useless (that's the point). With a KMS KEK there is no local key to protect.
 - **Rotate** the bootstrap `PAM_API_KEY` and any per-user tokens periodically; delete users who no longer need access.
 - **Least privilege on the network:** see the [ports & flow matrix](PORTS-AND-FLOWS.md) for the firewall/NetworkPolicy baseline. The database must be unreachable from operator and target zones.
+- **Upgrades that cross the vault format are breaking (pre-1.0).** The current token format is `v2:` with a per-credential AAD; there is no in-place migration from earlier ciphertext (older AAD, or the pre-GCM PKCS#11 wrap). A deployment that carries vaulted secrets across such a change must re-enter its credentials. Fresh installs are unaffected.
 - Planned hardening (Postgres TLS enforcement, migrations, vault key rotation, native HTTPS, rate limiting) is [Phase 5](../ROADMAP.md#phase-5--hardening-database-vault-transport-).
 
 ## 11. Troubleshooting
