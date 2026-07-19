@@ -6,7 +6,10 @@
 # google_sql_database_instance / azurerm_postgresql_flexible_server as needed.
 #
 #   terraform -chdir=deploy/terraform/cloud-postgres init
-#   terraform -chdir=deploy/terraform/cloud-postgres apply -var db_password=...
+#   terraform -chdir=deploy/terraform/cloud-postgres apply
+#
+# The master password is generated and stored by RDS in AWS Secrets Manager
+# (manage_master_user_password), so none is passed on the command line.
 
 terraform {
   required_providers {
@@ -25,11 +28,15 @@ resource "aws_db_instance" "pamv1" {
 
   db_name  = "pam"
   username = "pam"
-  password = var.db_password
+  # RDS generates and rotates the master password into AWS Secrets Manager, so it
+  # never lands in Terraform state, CLI history, or a tfvars file. pam-server
+  # reads it from that managed secret (see outputs.tf).
+  manage_master_user_password = true
 
   allocated_storage       = var.allocated_storage
   storage_encrypted       = true
-  multi_az                = true # HA: standby in another AZ with automatic failover
+  publicly_accessible     = false # never expose the vault's database to the internet
+  multi_az                = true  # HA: standby in another AZ with automatic failover
   backup_retention_period = 30
   deletion_protection     = true
 

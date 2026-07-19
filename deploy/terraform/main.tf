@@ -9,9 +9,22 @@ terraform {
   required_providers {
     kubernetes = {
       source  = "hashicorp/kubernetes"
-      version = ">= 2.30"
+      version = ">= 2.30, < 3.0" # bounded so a provider major bump can't land unreviewed
     }
   }
+
+  # State holds the applied PAM_MASTER_KEY and PAM_API_KEY in cleartext, so it
+  # MUST live in an encrypted, access-controlled remote backend — never the
+  # default local terraform.tfstate. Configure one before apply, e.g.:
+  #
+  # backend "s3" {
+  #   bucket       = "my-tf-state"
+  #   key          = "pamv1/terraform.tfstate"
+  #   region       = "eu-west-1"
+  #   encrypt      = true
+  #   kms_key_id   = "arn:aws:kms:...:key/..."
+  #   use_lockfile = true
+  # }
 }
 
 provider "kubernetes" {
@@ -61,6 +74,9 @@ resource "kubernetes_deployment" "pam" {
         automount_service_account_token = false
         security_context {
           run_as_non_root = true
+          run_as_user     = 65532 # distroless nonroot UID, numeric so runAsNonRoot is verifiable
+          run_as_group    = 65532
+          fs_group        = 65532 # make the /data volume writable (SSH host key + recordings)
           seccomp_profile {
             type = "RuntimeDefault"
           }
@@ -145,7 +161,7 @@ resource "kubernetes_service" "pam" {
     selector = { "app.kubernetes.io/name" = "pamv1" }
     port {
       name        = "http"
-      port        = 80
+      port        = 8080
       target_port = "http"
     }
     port {

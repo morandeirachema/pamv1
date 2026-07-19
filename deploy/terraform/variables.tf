@@ -27,15 +27,23 @@ variable "replicas" {
 }
 
 variable "master_key" {
-  description = "Vault master key (PAM_MASTER_KEY)"
+  description = "Vault master key (PAM_MASTER_KEY), from ./pam-server -genkey"
   type        = string
   sensitive   = true
+  validation {
+    condition     = length(var.master_key) > 0
+    error_message = "master_key must be set (generate one with ./pam-server -genkey)."
+  }
 }
 
 variable "api_key" {
   description = "Admin API key (PAM_API_KEY)"
   type        = string
   sensitive   = true
+  validation {
+    condition     = length(var.api_key) > 0
+    error_message = "api_key must be set (the bootstrap admin key presented as X-API-Key)."
+  }
 }
 
 variable "break_glass_key_hash" {

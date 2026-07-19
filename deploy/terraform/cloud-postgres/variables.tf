@@ -4,12 +4,6 @@ variable "name" {
   default     = "pamv1-pg"
 }
 
-variable "db_password" {
-  description = "Password for the pamv1 'pam' database user."
-  type        = string
-  sensitive   = true
-}
-
 variable "instance_class" {
   description = "RDS instance class."
   type        = string
