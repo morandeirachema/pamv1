@@ -276,7 +276,12 @@ func VerifyRS256(ctx context.Context, hc *http.Client, jwksURL, token, wantAudie
 	if err := decodeSegment(parts[1], &std); err != nil {
 		return err
 	}
-	if std.Exp != 0 && time.Now().After(time.Unix(std.Exp, 0).Add(60*time.Second)) {
+	// Require an expiry and enforce it: a token with no exp must not be treated as
+	// never-expiring (fail closed).
+	if std.Exp == 0 {
+		return errors.New("oidc: token has no expiry")
+	}
+	if time.Now().After(time.Unix(std.Exp, 0).Add(60 * time.Second)) {
 		return errors.New("oidc: token expired")
 	}
 	if wantAudience != "" && !audienceContains(std.Aud, wantAudience) {

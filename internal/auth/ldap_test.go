@@ -170,6 +170,13 @@ func TestNewLDAPAuthenticatorValidation(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("valid config: %v", err)
 	}
+	// A plaintext ldap:// URL must be rejected — it would send bind passwords in
+	// the clear.
+	if _, err := NewLDAPAuthenticator(LDAPConfig{
+		URL: "ldap://x", BaseDN: "DC=x", GroupRoleMap: map[string]Role{"g": RoleUser},
+	}); err == nil {
+		t.Fatal("plaintext ldap:// URL should be rejected")
+	}
 }
 
 // TestUserStatus proves enabled/disabled/missing directory accounts are reported

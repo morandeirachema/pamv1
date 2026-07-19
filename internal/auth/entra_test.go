@@ -75,6 +75,9 @@ func newEntraKeys(t *testing.T, wantUser, wantPass string, claims map[string]any
 	const kid = "test-kid"
 	claims["aud"] = "client"
 	claims["exp"] = time.Now().Add(time.Hour).Unix()
+	if _, ok := claims["tid"]; !ok {
+		claims["tid"] = "tenant" // matches the configured TenantID below
+	}
 	idToken := signRS256(t, signKey, kid, claims)
 	srv := entraTestServer(t, wantUser, wantPass, idToken, kid, &advertiseKey.PublicKey)
 	a, err := NewEntraAuthenticator(EntraConfig{
@@ -157,6 +160,19 @@ func TestEntraRejectsBadSignature(t *testing.T) {
 	a := newEntraKeys(t, "mallory", "pw", map[string]any{"roles": []string{"pam.admin"}}, signKey, otherKey)
 	if _, err := a.Authenticate(context.Background(), "mallory", "pw"); !errors.Is(err, ErrUnauthorized) {
 		t.Fatalf("forged token: got %v, want ErrUnauthorized", err)
+	}
+}
+
+// TestEntraRejectsCrossTenantToken proves a validly-signed token minted in a
+// different tenant (Entra signs with keys shared across tenants) is rejected
+// because its tid does not match the configured tenant.
+func TestEntraRejectsCrossTenantToken(t *testing.T) {
+	a := newEntra(t, "mallory", "pw", map[string]any{
+		"roles": []string{"pam.admin"},
+		"tid":   "attacker-tenant", // a real, correctly-signed token from another tenant
+	})
+	if _, err := a.Authenticate(context.Background(), "mallory", "pw"); !errors.Is(err, ErrUnauthorized) {
+		t.Fatalf("cross-tenant token: got %v, want ErrUnauthorized", err)
 	}
 }
 

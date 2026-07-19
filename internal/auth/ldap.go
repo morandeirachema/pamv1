@@ -63,6 +63,10 @@ func NewLDAPAuthenticator(cfg LDAPConfig) (*LDAPAuthenticator, error) {
 	switch {
 	case cfg.URL == "":
 		return nil, errors.New("ldap: PAM_LDAP_URL is required")
+	case !strings.HasPrefix(strings.ToLower(cfg.URL), "ldaps://"):
+		// Bind passwords (service account and per-user) travel over this URL — a
+		// plaintext ldap:// would expose them. Require LDAP over TLS.
+		return nil, errors.New("ldap: PAM_LDAP_URL must use ldaps:// (LDAP over TLS)")
 	case cfg.BaseDN == "":
 		return nil, errors.New("ldap: PAM_LDAP_BASE_DN is required")
 	case len(cfg.GroupRoleMap) == 0:

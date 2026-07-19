@@ -35,8 +35,8 @@ type EntraConfig struct {
 // EntraAuthenticator authenticates users against Entra ID using the OAuth2
 // resource-owner-password (ROPC) grant, which fits pamv1's username+password
 // login. It requests an id_token (openid scope) and **validates its RS256
-// signature against the tenant JWKS** (issuer host + audience + expiry) before
-// trusting the role/group claims.
+// signature against the tenant JWKS** (plus tenant/tid, audience and expiry)
+// before trusting the role/group claims.
 //
 // NOTE: ROPC does not exercise Entra Conditional Access or IdP-side MFA — use
 // pamv1's own TOTP MFA on top, and prefer the OIDC auth-code flow for production.
@@ -78,11 +78,16 @@ func NewEntraAuthenticator(cfg EntraConfig) (*EntraAuthenticator, error) {
 	return &EntraAuthenticator{cfg: cfg, hc: &http.Client{Timeout: 10 * time.Second}, endpoint: endpoint, jwksURL: jwksURL}, nil
 }
 
+// entraClaims are the id_token claims pamv1 trusts after signature validation.
+// Tid (the token's tenant) is checked against the configured tenant — Entra signs
+// with keys shared across all tenants, so audience+signature alone would accept a
+// token minted in an attacker-controlled tenant.
 type entraClaims struct {
 	Roles             []string `json:"roles"`
 	Groups            []string `json:"groups"`
 	PreferredUsername string   `json:"preferred_username"`
 	UPN               string   `json:"upn"`
+	Tid               string   `json:"tid"`
 }
 
 // Authenticate performs the ROPC token request, parses the access token's app
@@ -129,6 +134,12 @@ func (a *EntraAuthenticator) Authenticate(ctx context.Context, username, passwor
 	var claims entraClaims
 	if err := oidc.VerifyRS256(ctx, a.hc, a.jwksURL, tok.IDToken, a.cfg.ClientID, &claims); err != nil {
 		return nil, fmt.Errorf("%w: id_token validation failed: %v", ErrUnauthorized, err)
+	}
+	// Pin the tenant: Entra's signing keys are shared across tenants, so a valid
+	// signature + audience does not prove the token came from OUR tenant. Requires
+	// PAM_ENTRA_TENANT_ID to be the tenant (directory) GUID.
+	if claims.Tid == "" || claims.Tid != a.cfg.TenantID {
+		return nil, fmt.Errorf("%w: id_token tenant %q is not the configured tenant", ErrUnauthorized, claims.Tid)
 	}
 	role, ok := a.roleFor(claims.Roles, claims.Groups)
 	if !ok {
