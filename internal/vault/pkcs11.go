@@ -5,10 +5,11 @@
 // runtime (incompatible with the default CGO_ENABLED=0 static/distroless image).
 //
 // The wrapping key is an AES key that lives *inside* the HSM (found by its
-// CKA_LABEL); data keys are wrapped/unwrapped with CKM_AES_CBC_PAD so the KEK
-// never leaves the token. Integrity of the whole vault token is provided by the
-// inner AES-256-GCM layer (a tampered wrapped-DEK yields a wrong DEK, which fails
-// the inner GCM Open), so the KEK layer only needs confidentiality.
+// CKA_LABEL); data keys are wrapped/unwrapped with **CKM_AES_GCM** so the KEK
+// never leaves the token AND the wrap is authenticated: a tampered wrapped-DEK
+// fails the HSM's GCM tag check rather than decrypting to a wrong DEK, which
+// avoids the padding-oracle exposure an unauthenticated CBC-PAD wrap would have
+// (the inner AES-256-GCM layer still binds the whole token to its AAD).
 package vault
 
 import (
@@ -22,7 +23,10 @@ import (
 	"github.com/miekg/pkcs11"
 )
 
-const pkcs11IVSize = 16 // AES block size (CBC IV)
+const (
+	pkcs11GCMNonceSize = 12  // AES-GCM nonce
+	pkcs11GCMTagBits   = 128 // AES-GCM tag length
+)
 
 // PKCS11KEK wraps data keys with an AES key held in a PKCS#11 token.
 type PKCS11KEK struct {
@@ -75,16 +79,20 @@ func NewPKCS11KEK(module, pin, keyLabel, tokenLabel string) (KEK, error) {
 	return &PKCS11KEK{ctx: ctx, session: session, key: key, keyLabel: keyLabel}, nil
 }
 
-// Wrap encrypts the data key inside the HSM with CKM_AES_CBC_PAD under a fresh
-// random IV, returning iv||ciphertext. Session ops are serialized by mu.
+// Wrap encrypts the data key inside the HSM with CKM_AES_GCM under a fresh random
+// nonce, returning nonce||ciphertext||tag. The actual nonce is read back from the
+// mechanism params after the operation, so tokens that generate their own IV
+// (e.g. CloudHSM) are handled too. Session ops are serialized by mu.
 func (k *PKCS11KEK) Wrap(_ context.Context, dek []byte) ([]byte, error) {
-	iv := make([]byte, pkcs11IVSize)
-	if _, err := rand.Read(iv); err != nil {
+	nonce := make([]byte, pkcs11GCMNonceSize)
+	if _, err := rand.Read(nonce); err != nil {
 		return nil, err
 	}
-	mech := []*pkcs11.Mechanism{pkcs11.NewMechanism(pkcs11.CKM_AES_CBC_PAD, iv)}
+	gcm := pkcs11.NewGCMParams(nonce, nil, pkcs11GCMTagBits)
+	mech := []*pkcs11.Mechanism{pkcs11.NewMechanism(pkcs11.CKM_AES_GCM, gcm)}
 	k.mu.Lock()
 	defer k.mu.Unlock()
+	defer gcm.Free()
 	if err := k.ctx.EncryptInit(k.session, mech, k.key); err != nil {
 		return nil, fmt.Errorf("vault: pkcs11 wrap init: %w", err)
 	}
@@ -92,19 +100,26 @@ func (k *PKCS11KEK) Wrap(_ context.Context, dek []byte) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("vault: pkcs11 wrap: %w", err)
 	}
-	return append(append(make([]byte, 0, len(iv)+len(ct)), iv...), ct...), nil
+	usedNonce := gcm.IV() // the token may have generated its own
+	if len(usedNonce) == 0 {
+		usedNonce = nonce
+	}
+	return append(append(make([]byte, 0, len(usedNonce)+len(ct)), usedNonce...), ct...), nil
 }
 
-// Unwrap splits the leading IV from the ciphertext and decrypts it in the HSM,
-// returning ErrInvalidToken on any failure.
+// Unwrap splits the leading nonce from the ciphertext+tag and GCM-decrypts it in
+// the HSM. A tampered blob fails the GCM tag check; any failure returns
+// ErrInvalidToken.
 func (k *PKCS11KEK) Unwrap(_ context.Context, wrapped []byte) ([]byte, error) {
-	if len(wrapped) <= pkcs11IVSize {
+	if len(wrapped) <= pkcs11GCMNonceSize {
 		return nil, ErrInvalidToken
 	}
-	iv, ct := wrapped[:pkcs11IVSize], wrapped[pkcs11IVSize:]
-	mech := []*pkcs11.Mechanism{pkcs11.NewMechanism(pkcs11.CKM_AES_CBC_PAD, iv)}
+	nonce, ct := wrapped[:pkcs11GCMNonceSize], wrapped[pkcs11GCMNonceSize:]
+	gcm := pkcs11.NewGCMParams(nonce, nil, pkcs11GCMTagBits)
+	mech := []*pkcs11.Mechanism{pkcs11.NewMechanism(pkcs11.CKM_AES_GCM, gcm)}
 	k.mu.Lock()
 	defer k.mu.Unlock()
+	defer gcm.Free()
 	if err := k.ctx.DecryptInit(k.session, mech, k.key); err != nil {
 		return nil, ErrInvalidToken
 	}

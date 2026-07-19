@@ -61,6 +61,14 @@ func TestPKCS11RoundTrip(t *testing.T) {
 		t.Fatalf("round-trip mismatch: %x != %x", got, dek)
 	}
 
+	// Authenticated wrap: a tampered blob must fail the HSM's GCM tag check, not
+	// decrypt to a wrong DEK (which is what CBC-PAD would have done).
+	tampered := append([]byte(nil), wrapped...)
+	tampered[len(tampered)-1] ^= 0xFF
+	if _, err := kek.Unwrap(context.Background(), tampered); err == nil {
+		t.Fatal("unwrap of a tampered blob should fail (GCM tag)")
+	}
+
 	// End-to-end: a full vault Encrypt/Decrypt with the HSM-backed KEK.
 	v := NewWithKEK(kek)
 	tok, err := v.Encrypt(context.Background(), "s3cr3t", "target:1")
