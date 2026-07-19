@@ -154,9 +154,11 @@ All configuration is environment variables (12-factor). Full descriptions in
 
 | Variable | Required | Default | Purpose |
 |---|---|---|---|
-| `PAM_KEK_PROVIDER` | | `local` | Vault key backend: `local` (dev/test) or `vault-transit` (production). |
+| `PAM_KEK_PROVIDER` | | `local` | Vault key backend: `local` (dev/test), `vault-transit`, `aws-kms`, or `pkcs11` (HSM). |
 | `PAM_MASTER_KEY` | local only | — | Local KEK key (`-genkey`). **Back it up securely.** Dev/test only. |
 | `PAM_KEK_TRANSIT_ADDR` / `_TOKEN` / `_KEY` | transit only | — | HashiCorp Vault Transit KEK (production). |
+| `PAM_KEK_AWS_KEY_ID` / `_AWS_REGION` | aws-kms only | — | AWS KMS KEK (production). |
+| `PAM_KEK_PKCS11_MODULE` / `_PIN` / `_KEY_LABEL` / `_TOKEN_LABEL` | pkcs11 only | — | On-prem HSM KEK — needs the `pkcs11`-tagged build (`Dockerfile.pkcs11`). |
 | `PAM_API_KEY` | ✅ | — | Bootstrap admin key (X-API-Key / SSH password). |
 | `PAM_DATABASE_URL` | ✅ | — | `postgres://…` (use `sslmode=verify-full`) or `memory` for demo. |
 | `PAM_BREAK_GLASS_KEY_HASH` | | (off) | Hex SHA-256 of the sealed emergency key. |
@@ -524,6 +526,30 @@ export PAM_DATABASE_URL=postgres://…
 Then set `PAM_MASTER_KEY` to the new key and restart. With a KMS-backed KEK
 (`vault-transit`), rotate the key inside the KMS instead.
 
+### On-prem HSM (PKCS#11 KEK)
+
+For a hardware security module, the AES wrapping key lives *inside* the HSM and
+data keys are wrapped/unwrapped there — the KEK never leaves the token. This
+provider needs cgo and the vendor PKCS#11 module, so it is **not** in the default
+static image; build with the tag (`go build -tags pkcs11`) or use
+`Dockerfile.pkcs11`. Example with [SoftHSM2](https://www.opendnssec.org/softhsm/)
+(swap in your vendor module for a real HSM):
+
+```bash
+softhsm2-util --init-token --free --label pamv1 --pin 1234 --so-pin 5678
+# create an AES-256 wrapping key labelled pamv1-kek (pkcs11-tool, or your HSM's tooling)
+
+export PAM_KEK_PROVIDER=pkcs11
+export PAM_KEK_PKCS11_MODULE=/usr/lib/softhsm/libsofthsm2.so
+export PAM_KEK_PKCS11_PIN=1234
+export PAM_KEK_PKCS11_KEY_LABEL=pamv1-kek
+export PAM_KEK_PKCS11_TOKEN_LABEL=pamv1
+```
+
+Mount the vendor module read-only into the container. Integrity of the vault token
+is still provided by the inner AES-256-GCM layer, so the HSM only handles the
+confidentiality of the data keys.
+
 ---
 
 ## 9. Logs & audit
@@ -638,6 +664,7 @@ evidence). Replay with [asciinema](https://asciinema.org/): `asciinema play <fil
 
 | Date | Change |
 |---|---|
+| 2026-07-19 | PKCS#11 HSM KEK provider (`pkcs11` build tag, `Dockerfile.pkcs11`, `PAM_KEK_PKCS11_*`); verified against SoftHSM2 |
 | 2026-07-19 | Phase 7 follow-ons: credential checkout/check-in leases (auto-rotate on return), discovery scan; system requirements ([REQUIREMENTS.md](REQUIREMENTS.md)) |
 | 2026-07-19 | Phase 10: scale & ops — Prometheus `/metrics`, `/readyz` readiness, Helm chart (`deploy/helm/pamv1`), SBOM + cosign-signed release workflow |
 | 2026-07-19 | Phase 9: NIS2 pack — tamper-evident audit export (`GET /api/audit/export`, JSON/CSV + SHA-256) for Art. 23; see [NIS2-COMPLIANCE.md](NIS2-COMPLIANCE.md) |

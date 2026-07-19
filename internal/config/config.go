@@ -85,6 +85,11 @@ type Config struct {
 	// AWS* configure the AWS KMS KEK (production).
 	AWSKMSKeyID string
 	AWSRegion   string
+	// PKCS11* configure the on-prem HSM KEK (only in builds tagged "pkcs11").
+	PKCS11Module     string
+	PKCS11Pin        string
+	PKCS11KeyLabel   string
+	PKCS11TokenLabel string
 
 	// LDAP* configure Active Directory / LDAP login. Empty LDAPURL disables it.
 	LDAPURL                string
@@ -163,6 +168,10 @@ func Load() (*Config, error) {
 		TransitKey:          os.Getenv("PAM_KEK_TRANSIT_KEY"),
 		AWSKMSKeyID:         os.Getenv("PAM_KEK_AWS_KEY_ID"),
 		AWSRegion:           os.Getenv("PAM_KEK_AWS_REGION"),
+		PKCS11Module:        os.Getenv("PAM_KEK_PKCS11_MODULE"),
+		PKCS11Pin:           os.Getenv("PAM_KEK_PKCS11_PIN"),
+		PKCS11KeyLabel:      os.Getenv("PAM_KEK_PKCS11_KEY_LABEL"),
+		PKCS11TokenLabel:    os.Getenv("PAM_KEK_PKCS11_TOKEN_LABEL"),
 
 		LDAPURL:                os.Getenv("PAM_LDAP_URL"),
 		LDAPBindDN:             os.Getenv("PAM_LDAP_BIND_DN"),

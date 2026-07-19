@@ -94,9 +94,9 @@ Los componentes con línea discontinua (objetivos Windows) llegan en la [Fase 4]
   con hash SHA-256 escrito en la auditoría (evidencia anti-manipulación).
 - **Vault endurecido (cifrado en sobre)** — cada secreto se sella con una clave de datos
   [AES-256-GCM](https://pkg.go.dev/crypto/cipher) por secreto, envuelta por una **KEK
-  intercambiable**: una clave `local` para desarrollo/pruebas, o **[HashiCorp Vault Transit](https://developer.hashicorp.com/vault/docs/secrets/transit)**
-  en producción para que la clave raíz nunca salga del KMS. El AAD liga cada token a su
-  objetivo; tokens versionados `v2:`.
+  intercambiable**: una clave `local` para desarrollo/pruebas, o en producción **[HashiCorp Vault Transit](https://developer.hashicorp.com/vault/docs/secrets/transit)**,
+  **AWS KMS** o un **HSM on-prem vía [PKCS#11](https://en.wikipedia.org/wiki/PKCS_11)** (build con tag `pkcs11`)
+  — la clave raíz nunca sale del KMS/HSM. El AAD liga cada token a su objetivo; tokens versionados `v2:`.
 - **Ciclo de vida de credenciales (rotación · reconciliación · checkout · descubrimiento)** —
   `POST /api/credentials/{id}/rotate` genera un secreto fuerte, lo aplica **en el objetivo** (SSH
   `chpasswd` / WinRM `net user`) y lo re-cifra — la nueva contraseña nunca se muestra. `/reconcile`

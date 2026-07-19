@@ -9,7 +9,7 @@
 | Component | Requirement |
 |---|---|
 | Build toolchain | Go **1.26+** (only to build from source) |
-| Container image | `gcr.io/distroless/static-debian12:nonroot` — runs as non-root UID **65532**, read-only root FS, no shell |
+| Container image | `gcr.io/distroless/static-debian12:nonroot` — runs as non-root UID **65532**, read-only root FS, no shell. (HSM/PKCS#11 KEK uses `Dockerfile.pkcs11`: cgo + glibc `distroless/base`, still non-root.) |
 | Database | **PostgreSQL 14+** (compose ships **17**); TLS strongly recommended (`sslmode=verify-full`) |
 | Ports | **8080** portal + REST API (HTTP or native HTTPS) · **2222** SSH session proxy |
 | Docker | Engine **24+**, Compose **v2** |

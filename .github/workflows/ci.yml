@@ -25,6 +25,34 @@ jobs:
       - name: test
         run: go test -race ./...
 
+  # The PKCS#11 HSM KEK provider is behind the "pkcs11" build tag (cgo). Verify
+  # it against SoftHSM2 — a software PKCS#11 token — so the HSM path is tested
+  # without real hardware. The default `test` job never builds this code.
+  pkcs11:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+      - name: install SoftHSM2
+        run: sudo apt-get update && sudo apt-get install -y softhsm2
+      - name: init token
+        run: |
+          export SOFTHSM2_CONF="$PWD/.softhsm2.conf"
+          mkdir -p "$PWD/tokens"
+          printf 'directories.tokendir = %s/tokens\nobjectstore.backend = file\nlog.level = ERROR\n' "$PWD" > "$SOFTHSM2_CONF"
+          softhsm2-util --init-token --free --label pamv1-test --pin 1234 --so-pin 5678
+      - name: test (pkcs11 tag, cgo)
+        run: |
+          export SOFTHSM2_CONF="$PWD/.softhsm2.conf"
+          MODULE=/usr/lib/softhsm/libsofthsm2.so
+          [ -f "$MODULE" ] || MODULE=/usr/lib/x86_64-linux-gnu/softhsm/libsofthsm2.so
+          export PAM_TEST_PKCS11_MODULE="$MODULE"
+          export PAM_TEST_PKCS11_PIN=1234
+          export PAM_TEST_PKCS11_TOKEN=pamv1-test
+          CGO_ENABLED=1 go test -tags pkcs11 ./internal/vault/ -run PKCS11 -v
+
   docker:
     runs-on: ubuntu-latest
     steps:

@@ -82,6 +82,12 @@ type KEKOptions struct {
 
 	AWSRegion   string // aws-kms provider
 	AWSKMSKeyID string
+
+	// pkcs11 provider (on-prem HSM; only in builds tagged "pkcs11").
+	PKCS11Module     string // path to the vendor PKCS#11 module (.so)
+	PKCS11Pin        string // user PIN
+	PKCS11KeyLabel   string // CKA_LABEL of the AES wrapping key in the HSM
+	PKCS11TokenLabel string // token label (optional; first token if empty)
 }
 
 // NewKEK builds a KEK from options. "local" uses PAM_MASTER_KEY (dev/test);
@@ -95,7 +101,11 @@ func NewKEK(o KEKOptions) (KEK, error) {
 		return NewTransitKEK(o.TransitAddr, o.TransitToken, o.TransitKey)
 	case "aws-kms":
 		return NewAWSKMSKEK(context.Background(), o.AWSRegion, o.AWSKMSKeyID)
+	case "pkcs11":
+		// Real implementation lives in pkcs11.go (build tag "pkcs11"); the
+		// default build returns a helpful "not built in" error from the stub.
+		return NewPKCS11KEK(o.PKCS11Module, o.PKCS11Pin, o.PKCS11KeyLabel, o.PKCS11TokenLabel)
 	default:
-		return nil, fmt.Errorf("vault: unknown KEK provider %q (want local|vault-transit|aws-kms)", o.Provider)
+		return nil, fmt.Errorf("vault: unknown KEK provider %q (want local|vault-transit|aws-kms|pkcs11)", o.Provider)
 	}
 }

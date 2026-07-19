@@ -10,6 +10,7 @@ require (
 	github.com/go-ldap/ldap/v3 v3.4.14
 	github.com/jackc/pgx/v5 v5.10.0
 	github.com/masterzen/winrm v0.0.0-20260407182533-5570be7f80cf
+	github.com/miekg/pkcs11 v1.1.2
 	golang.org/x/crypto v0.54.0
 )
 

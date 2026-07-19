@@ -255,6 +255,11 @@ func run() error {
 		TransitKey:   cfg.TransitKey,
 		AWSRegion:    cfg.AWSRegion,
 		AWSKMSKeyID:  cfg.AWSKMSKeyID,
+
+		PKCS11Module:     cfg.PKCS11Module,
+		PKCS11Pin:        cfg.PKCS11Pin,
+		PKCS11KeyLabel:   cfg.PKCS11KeyLabel,
+		PKCS11TokenLabel: cfg.PKCS11TokenLabel,
 	})
 	if err != nil {
 		return err

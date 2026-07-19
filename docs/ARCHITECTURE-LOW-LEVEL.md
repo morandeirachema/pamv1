@@ -56,10 +56,15 @@ The **KEK is pluggable** (`KEK` interface, `NewKEK(KEKOptions)`):
   the data key. **Production / vendor-aligned.**
 - `AWSKMSKEK` — AWS KMS (`awskms.go`): the data key is Encrypt/Decrypt'd by KMS,
   so the CMK never leaves KMS. **Production.** The `kmsAPI` client is an interface
-  (tests inject a fake). PKCS#11 HSM is the next provider on the same interface.
+  (tests inject a fake).
+- `PKCS11KEK` — on-prem **HSM** via a PKCS#11 module (`pkcs11.go`, build tag
+  `pkcs11`): an AES key inside the token wraps/unwraps the data key
+  (`CKM_AES_CBC_PAD`); the KEK never leaves the HSM. Needs cgo + a dynamic loader,
+  so it is **excluded from the default static/distroless build** — a `pkcs11_stub.go`
+  (`!pkcs11`) returns a clear "not built in" error. Verified against SoftHSM2 in CI.
 
 `GenerateMasterKey()` → 32 random bytes, urlsafe-base64 (seeds the local KEK).
-Selected by `PAM_KEK_PROVIDER` (`local` | `vault-transit`).
+Selected by `PAM_KEK_PROVIDER` (`local` | `vault-transit` | `aws-kms` | `pkcs11`).
 
 ### 2.2 `store`
 
@@ -324,10 +329,11 @@ the client channel closes.
 | `PAM_BREAK_GLASS_THRESHOLD` / `_SHARES` | `0` / `5` | quorum M / N (M≥2 enables unseal) |
 | `PAM_BREAK_GLASS_TTL_MIN` | `15` | break-glass session lifetime (minutes) |
 | `PAM_ALERT_WEBHOOK` | — | JSON POST target for break-glass alerts |
-| `PAM_KEK_PROVIDER` | `local` | vault KEK: `local` (dev/test) or `vault-transit` |
+| `PAM_KEK_PROVIDER` | `local` | vault KEK: `local` \| `vault-transit` \| `aws-kms` \| `pkcs11` |
 | `PAM_MASTER_KEY` | — (local only) | local KEK key (base64, dev/test) |
 | `PAM_KEK_TRANSIT_ADDR` / `_TOKEN` / `_KEY` | — | HashiCorp Vault Transit KEK (production) |
 | `PAM_KEK_AWS_KEY_ID` / `_AWS_REGION` | — | AWS KMS KEK (`aws-kms` provider) |
+| `PAM_KEK_PKCS11_MODULE` / `_PIN` / `_KEY_LABEL` / `_TOKEN_LABEL` | — | on-prem HSM KEK (`pkcs11` provider; **only in the `pkcs11`-tagged build**) |
 | `PAM_LDAP_URL` | — (disabled) | AD/LDAP login; `ldaps://…` enables `/api/login` |
 | `PAM_LDAP_BIND_DN` / `_BIND_PASSWORD` | — | service account for user search |
 | `PAM_LDAP_BASE_DN` / `_USER_FILTER` | — / `(sAMAccountName=%s)` | search base + filter |
@@ -403,7 +409,7 @@ secrets. Format `json` (SIEM) or `text` (humans); collect from stdout.
 
 ## 7. Testing
 
-- `vault`: envelope roundtrip, AAD binding, tamper detection, version rejection, distinct tokens; local KEK wrap/unwrap + tamper; KEK factory; **Transit KMS** wrap/unwrap and full envelope over a mock Vault Transit server.
+- `vault`: envelope roundtrip, AAD binding, tamper detection, version rejection, distinct tokens; local KEK wrap/unwrap + tamper; KEK factory; **Transit KMS** wrap/unwrap and full envelope over a mock Vault Transit server; **PKCS#11 HSM** wrap/unwrap + full envelope against SoftHSM2 (tag `pkcs11`, CI).
 - `auth`: role→capability matrix, role parsing, resolver (bootstrap/break-glass/token/**session**/unknown); **LDAP** authenticate (success, highest-privilege-wins, wrong password, no mapped group, unknown user) against a fake `ldapConn`.
 - `mfa`: RFC 6238 test vector, validate roundtrip + skew + wrong/short code, otpauth URI, secret randomness, recovery-code generation.
 - `api` (WinRM): JIT injection (fake runner receives the vaulted secret), non-Windows target rejected, `CapConnect` required, transcript recorded + audited.
@@ -427,6 +433,7 @@ secrets. Format `json` (SIEM) or `text` (humans); collect from stdout.
 
 | Date | Change |
 |---|---|
+| 2026-07-19 | PKCS#11 HSM KEK provider (`vault/pkcs11.go`, build tag `pkcs11`; stub in the default build), `Dockerfile.pkcs11`, CI job against SoftHSM2, `PAM_KEK_PKCS11_*` |
 | 2026-07-19 | HA: OIDC PKCE login state moved to the store (`store.PutOIDCState`/`TakeOIDCState`, migration `0004`) so the auth-code callback works on any replica; removed the in-memory `oidcPending` |
 | 2026-07-19 | Phase 7 follow-ons: credential checkout/check-in leases (`store.Checkout`, migration `0003`, auto-rotate on return) + discovery (`internal/discovery`, `POST /api/discovery/scan`); `docs/REQUIREMENTS.md` (run specs) |
 | 2026-07-19 | Phase 10: scale & ops — `internal/metrics` + `GET /metrics` (Prometheus), `GET /readyz` (`store.Ping`), `deploy/helm/pamv1` chart, `release.yml` (SBOM + cosign signing) |
