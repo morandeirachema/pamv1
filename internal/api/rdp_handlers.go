@@ -82,6 +82,7 @@ func (s *Server) rdpTunnel(w http.ResponseWriter, r *http.Request) {
 	cred := creds[0]
 	secret, err := s.vault.Decrypt(r.Context(), cred.SecretEnc, store.CredentialAAD(target.ID))
 	if err != nil {
+		s.audit(withPrincipal(r.Context(), principal), "credential.decrypt_failed", fmt.Sprintf("credential:%d target:%s op:rdp", cred.ID, target.Name))
 		writeError(w, http.StatusInternalServerError, "decryption failed")
 		return
 	}

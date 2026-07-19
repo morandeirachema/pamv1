@@ -383,7 +383,7 @@ secrets. Format `json` (SIEM) or `text` (humans); collect from stdout.
 `credential.delete` · `credential.reveal_denied` · `grant.create` · `grant.delete` ·
 `winrm.denied` · `session.kill` · `breakglass.unseal` · `user.create` · `user.delete` · `login` · `logout` ·
 `credential.rotate` · `credential.rotate_failed` · `credential.reconcile` · `credential.reconcile_scan` · `credential.remediate` ·
-`credential.checkout` · `credential.checkin` · `credential.checkout_denied` · `credential.checkin_rotate_failed` · `discovery.scan` ·
+`credential.checkout` · `credential.checkin` · `credential.checkout_denied` · `credential.checkin_rotate_failed` · `credential.decrypt_failed` · `discovery.scan` ·
 `access.request` · `access.approve` · `access.deny` · `access.denied` · `access.decision_denied` · `audit.export` ·
 `mfa.enroll` · `mfa.confirm` · `mfa.disable` · `mfa.recovery_generated` ·
 `mfa.recovery_used` · `winrm.run` · `winrm.error` · `rdp.connect` · `rdp.end` ·

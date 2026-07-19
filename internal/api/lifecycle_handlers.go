@@ -129,6 +129,7 @@ func (s *Server) checkoutCredential(w http.ResponseWriter, r *http.Request) {
 	}
 	secret, err := s.vault.Decrypt(r.Context(), cred.SecretEnc, store.CredentialAAD(target.ID))
 	if err != nil {
+		s.audit(r.Context(), "credential.decrypt_failed", fmt.Sprintf("credential:%d target:%s op:checkout", cred.ID, target.Name))
 		writeError(w, http.StatusInternalServerError, "decryption failed")
 		return
 	}

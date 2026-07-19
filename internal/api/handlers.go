@@ -281,6 +281,7 @@ func (s *Server) revealCredential(w http.ResponseWriter, r *http.Request) {
 	}
 	secret, err := s.vault.Decrypt(r.Context(), c.SecretEnc, store.CredentialAAD(c.TargetID))
 	if err != nil {
+		s.audit(r.Context(), "credential.decrypt_failed", fmt.Sprintf("credential:%d target:%d op:reveal", c.ID, c.TargetID))
 		writeError(w, http.StatusInternalServerError, "decryption failed")
 		return
 	}
@@ -369,6 +370,7 @@ func (s *Server) runWinRM(w http.ResponseWriter, r *http.Request) {
 	// Just-in-time: the secret exists only for this call.
 	secret, err := s.vault.Decrypt(r.Context(), cred.SecretEnc, store.CredentialAAD(target.ID))
 	if err != nil {
+		s.audit(r.Context(), "credential.decrypt_failed", fmt.Sprintf("credential:%d target:%s op:winrm", cred.ID, target.Name))
 		writeError(w, http.StatusInternalServerError, "decryption failed")
 		return
 	}
