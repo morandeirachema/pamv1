@@ -589,8 +589,15 @@ func (s *Server) issueSessionTTL(ctx context.Context, p *auth.Principal, scope s
 // checkSecondFactor accepts a valid TOTP code or a single-use recovery code.
 func (s *Server) checkSecondFactor(ctx context.Context, username string, enr *store.MFAEnrollment, otp string) bool {
 	if secret, err := s.vault.Decrypt(ctx, enr.SecretEnc, store.MFAAAD(username)); err == nil {
-		if mfa.Validate(secret, otp, time.Now()) {
-			return true
+		if step, ok := mfa.ValidateStep(secret, otp, time.Now()); ok {
+			// Anti-replay: accept a valid code only if its time-step has not been
+			// used yet. A store error shouldn't block login, so accept + log.
+			consumed, cerr := s.store.ConsumeTOTPStep(ctx, username, step)
+			if cerr != nil {
+				s.log.Warn("totp replay check failed; accepting code", "user", username, "err", cerr)
+				return true
+			}
+			return consumed
 		}
 	}
 	code := strings.ToLower(strings.TrimSpace(otp))

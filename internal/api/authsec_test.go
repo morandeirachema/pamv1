@@ -46,6 +46,23 @@ func TestMFAChangeRequiresCurrentFactor(t *testing.T) {
 	}
 }
 
+// TestTOTPCodeCannotBeReplayed proves a valid TOTP accepted once is rejected on
+// a second login within the same skew window (anti-replay).
+func TestTOTPCodeCannotBeReplayed(t *testing.T) {
+	srv, _ := newTestServerAuthn(t, fakeAuthenticator{username: "ad-alice", password: "pw", role: auth.RoleUser})
+	_, data := do(t, srv, http.MethodPost, "/api/login", "", map[string]any{"username": "ad-alice", "password": "pw"})
+	sessTok, _ := jsonMap(t, data)["token"].(string)
+	secret := enrollMFA(t, srv, sessTok)
+
+	code, _ := mfa.Code(secret, time.Now())
+	if status, _ := do(t, srv, http.MethodPost, "/api/login", "", map[string]any{"username": "ad-alice", "password": "pw", "otp": code}); status != http.StatusCreated {
+		t.Fatalf("first login with OTP = %d, want 201", status)
+	}
+	if status, _ := do(t, srv, http.MethodPost, "/api/login", "", map[string]any{"username": "ad-alice", "password": "pw", "otp": code}); status == http.StatusCreated {
+		t.Fatal("a replayed TOTP code should be rejected")
+	}
+}
+
 // TestFailedLoginAudited proves a bad password and a bad OTP each append a
 // login.failed audit event attributed to the attempted username.
 func TestFailedLoginAudited(t *testing.T) {

@@ -574,24 +574,24 @@ func (s *PGStore) DeleteSession(ctx context.Context, tokenHashHex string) error 
 // UpsertMFAEnrollment creates or replaces a user's TOTP enrollment, populating CreatedAt.
 func (s *PGStore) UpsertMFAEnrollment(ctx context.Context, e *store.MFAEnrollment) error {
 	return s.pool.QueryRow(ctx,
-		`INSERT INTO mfa_enrollments (username, secret_enc, confirmed)
-		 VALUES ($1, $2, $3)
-		 ON CONFLICT (username) DO UPDATE SET secret_enc = EXCLUDED.secret_enc, confirmed = EXCLUDED.confirmed
+		`INSERT INTO mfa_enrollments (username, secret_enc, confirmed, last_totp_step)
+		 VALUES ($1, $2, $3, $4)
+		 ON CONFLICT (username) DO UPDATE SET secret_enc = EXCLUDED.secret_enc, confirmed = EXCLUDED.confirmed, last_totp_step = EXCLUDED.last_totp_step
 		 RETURNING created_at`,
-		e.Username, e.SecretEnc, e.Confirmed,
+		e.Username, e.SecretEnc, e.Confirmed, e.LastTOTPStep,
 	).Scan(&e.CreatedAt)
 }
 
 // GetMFAEnrollment returns a user's TOTP enrollment, or ErrNotFound.
 func (s *PGStore) GetMFAEnrollment(ctx context.Context, username string) (*store.MFAEnrollment, error) {
 	rows, err := s.pool.Query(ctx,
-		`SELECT username, secret_enc, confirmed, created_at FROM mfa_enrollments WHERE username = $1`, username)
+		`SELECT username, secret_enc, confirmed, created_at, last_totp_step FROM mfa_enrollments WHERE username = $1`, username)
 	if err != nil {
 		return nil, err
 	}
 	e, err := pgx.CollectExactlyOneRow(rows, func(row pgx.CollectableRow) (store.MFAEnrollment, error) {
 		var m store.MFAEnrollment
-		err := row.Scan(&m.Username, &m.SecretEnc, &m.Confirmed, &m.CreatedAt)
+		err := row.Scan(&m.Username, &m.SecretEnc, &m.Confirmed, &m.CreatedAt, &m.LastTOTPStep)
 		return m, err
 	})
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -601,6 +601,19 @@ func (s *PGStore) GetMFAEnrollment(ctx context.Context, username string) (*store
 		return nil, err
 	}
 	return &e, nil
+}
+
+// ConsumeTOTPStep atomically advances the user's last-used TOTP step: the UPDATE
+// affects a row only when step is newer than the stored one, so a replayed code
+// (step <= stored) is rejected without a read-modify-write race.
+func (s *PGStore) ConsumeTOTPStep(ctx context.Context, username string, step int64) (bool, error) {
+	tag, err := s.pool.Exec(ctx,
+		`UPDATE mfa_enrollments SET last_totp_step = $2 WHERE username = $1 AND $2 > last_totp_step`,
+		username, step)
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() > 0, nil
 }
 
 // ListMFAEnrollments returns all enrollments ordered by username.

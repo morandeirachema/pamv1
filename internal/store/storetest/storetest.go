@@ -221,6 +221,19 @@ func RunStoreContract(t *testing.T, st store.Store) {
 	if es, err := st.ListMFAEnrollments(ctx); err != nil || len(es) != 1 {
 		t.Fatalf("ListMFAEnrollments: %d err %v", len(es), err)
 	}
+	// TOTP anti-replay: a step is accepted once, then rejected; a newer step wins.
+	if ok, err := st.ConsumeTOTPStep(ctx, "u1", 100); err != nil || !ok {
+		t.Fatalf("ConsumeTOTPStep(100) = %v, %v; want true", ok, err)
+	}
+	if ok, err := st.ConsumeTOTPStep(ctx, "u1", 100); err != nil || ok {
+		t.Fatalf("ConsumeTOTPStep(100) replay = %v, %v; want false", ok, err)
+	}
+	if ok, err := st.ConsumeTOTPStep(ctx, "u1", 101); err != nil || !ok {
+		t.Fatalf("ConsumeTOTPStep(101) = %v, %v; want true", ok, err)
+	}
+	if e, err := st.GetMFAEnrollment(ctx, "u1"); err != nil || e.LastTOTPStep != 101 {
+		t.Fatalf("GetMFAEnrollment last step = %d err %v; want 101", e.LastTOTPStep, err)
+	}
 	if err := st.ReplaceMFARecoveryCodes(ctx, "u1", []string{"h1", "h2"}); err != nil {
 		t.Fatalf("ReplaceMFARecoveryCodes: %v", err)
 	}

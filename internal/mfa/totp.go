@@ -74,18 +74,27 @@ func Code(secret string, t time.Time) (string, error) {
 // Validate reports whether code is a valid TOTP for secret at time t, allowing
 // ±skew time steps. The comparison is constant-time.
 func Validate(secret, code string, t time.Time) bool {
+	_, ok := ValidateStep(secret, code, t)
+	return ok
+}
+
+// ValidateStep is like Validate but also returns the matched time-step counter,
+// so callers can record it and reject a later reuse of the same code within the
+// skew window (anti-replay). The comparison is constant-time.
+func ValidateStep(secret, code string, t time.Time) (int64, bool) {
 	key, err := decodeSecret(secret)
 	if err != nil || len(code) != digits {
-		return false
+		return 0, false
 	}
 	base := t.Unix() / int64(period.Seconds())
 	for d := -skew; d <= skew; d++ {
-		want := hotp(key, uint64(base+int64(d)))
+		step := base + int64(d)
+		want := hotp(key, uint64(step))
 		if subtle.ConstantTimeCompare([]byte(want), []byte(code)) == 1 {
-			return true
+			return step, true
 		}
 	}
-	return false
+	return 0, false
 }
 
 // GenerateRecoveryCodes returns n single-use backup codes formatted as

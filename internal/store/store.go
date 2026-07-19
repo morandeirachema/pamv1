@@ -138,6 +138,9 @@ type MFAEnrollment struct {
 	SecretEnc string    `json:"-"`
 	Confirmed bool      `json:"confirmed"`
 	CreatedAt time.Time `json:"created_at"`
+	// LastTOTPStep is the highest TOTP time-step counter accepted for this user,
+	// used to reject a code replayed within the skew window.
+	LastTOTPStep int64 `json:"-"`
 }
 
 type Store interface {
@@ -231,6 +234,10 @@ type Store interface {
 	ListMFAEnrollments(ctx context.Context) ([]MFAEnrollment, error)
 	// DeleteMFAEnrollment removes a user's enrollment (and recovery codes), or ErrNotFound.
 	DeleteMFAEnrollment(ctx context.Context, username string) error
+	// ConsumeTOTPStep atomically records step as the user's last-used TOTP
+	// time-step, returning true if step is newer than the last recorded one
+	// (accept) and false if it was already used (a replay to reject).
+	ConsumeTOTPStep(ctx context.Context, username string, step int64) (bool, error)
 
 	// ReplaceMFARecoveryCodes stores a fresh set of recovery-code hashes for a
 	// user, discarding any previous set.

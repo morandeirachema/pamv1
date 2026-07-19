@@ -548,6 +548,23 @@ func (m *Memstore) GetMFAEnrollment(_ context.Context, username string) (*store.
 	return &e, nil
 }
 
+// ConsumeTOTPStep records step as the user's last-used TOTP step, returning true
+// only if it is newer than the stored one (else it is a replay).
+func (m *Memstore) ConsumeTOTPStep(_ context.Context, username string, step int64) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	e, ok := m.mfa[username]
+	if !ok {
+		return false, nil
+	}
+	if step > e.LastTOTPStep {
+		e.LastTOTPStep = step
+		m.mfa[username] = e
+		return true, nil
+	}
+	return false, nil
+}
+
 // ListMFAEnrollments returns all enrollments ordered by username.
 func (m *Memstore) ListMFAEnrollments(_ context.Context) ([]store.MFAEnrollment, error) {
 	m.mu.Lock()
