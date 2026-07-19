@@ -40,6 +40,21 @@ func Open(ctx context.Context, url string) (*PGStore, error) {
 	// arguments — those could carry ciphertext or token hashes).
 	cfg.ConnConfig.Tracer = queryTracer{log: log}
 
+	// HA resilience: after a CloudNativePG (or managed-Postgres) failover the
+	// read-write endpoint re-points to a new primary, so recycle connections and
+	// health-check idle ones — otherwise the pool would keep handing out
+	// connections stapled to the demoted/dead primary. Callers only override
+	// these by putting pool_* params in the URL (ParseConfig already applied them).
+	if cfg.MaxConnLifetime == 0 {
+		cfg.MaxConnLifetime = 30 * time.Minute
+	}
+	if cfg.MaxConnIdleTime == 0 {
+		cfg.MaxConnIdleTime = 5 * time.Minute
+	}
+	if cfg.HealthCheckPeriod == 0 {
+		cfg.HealthCheckPeriod = time.Minute
+	}
+
 	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
 		return nil, err
