@@ -50,6 +50,21 @@ func loadMigrations() ([]migration, error) {
 // startup and on a database created by the pre-migrations idempotent schema
 // (0001 uses IF NOT EXISTS).
 func migrate(ctx context.Context, pool *pgxpool.Pool) error {
+	// Serialize migrations across replicas (the HA scenario 0004 exists for):
+	// hold a session-level advisory lock on a dedicated connection so two
+	// instances booting together apply migrations one at a time instead of
+	// racing to insert the same schema_migrations row.
+	conn, err := pool.Acquire(ctx)
+	if err != nil {
+		return fmt.Errorf("acquire migration connection: %w", err)
+	}
+	defer conn.Release()
+	const migrationLockKey = int64(0x70616d5f6d6967) // "pam_mig"
+	if _, err := conn.Exec(ctx, `SELECT pg_advisory_lock($1)`, migrationLockKey); err != nil {
+		return fmt.Errorf("acquire migration lock: %w", err)
+	}
+	defer conn.Exec(context.Background(), `SELECT pg_advisory_unlock($1)`, migrationLockKey)
+
 	if _, err := pool.Exec(ctx,
 		`CREATE TABLE IF NOT EXISTS schema_migrations (
 			version    TEXT PRIMARY KEY,

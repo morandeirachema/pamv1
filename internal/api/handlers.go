@@ -882,6 +882,11 @@ func (s *Server) listAudit(w http.ResponseWriter, r *http.Request) {
 			limit = n
 		}
 	}
+	// Clamp here so the response size is bounded and identical on both stores
+	// (memstore would otherwise return everything for limit<=0).
+	if limit <= 0 || limit > 500 {
+		limit = 100
+	}
 	events, err := s.store.ListAudit(r.Context(), limit)
 	if err != nil {
 		storeError(w, err)

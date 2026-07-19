@@ -139,6 +139,24 @@ func RunStoreContract(t *testing.T, st store.Store) {
 	if act, err := st.ListCheckouts(ctx, true, now); err != nil || len(act) != 1 {
 		t.Fatalf("ListCheckouts(active): %d err %v", len(act), err)
 	}
+	// An expired-but-unreturned lease must not block a new checkout, and it is no
+	// longer the active one.
+	carol, err := st.GetActiveCheckout(ctx, cred.ID, now)
+	if err != nil {
+		t.Fatalf("GetActiveCheckout(carol): %v", err)
+	}
+	if err := st.CheckinCheckout(ctx, carol.ID, now); err != nil {
+		t.Fatalf("checkin carol: %v", err)
+	}
+	if err := st.CreateCheckout(ctx, &store.Checkout{CredentialID: cred.ID, TargetID: tgt.ID, Holder: "stale", ExpiresAt: now.Add(-time.Hour)}, now); err != nil {
+		t.Fatalf("create expired lease: %v", err)
+	}
+	if err := st.CreateCheckout(ctx, &store.Checkout{CredentialID: cred.ID, TargetID: tgt.ID, Holder: "fresh", ExpiresAt: future}, now); err != nil {
+		t.Fatalf("checkout over an expired lease should succeed, got %v", err)
+	}
+	if active, err := st.GetActiveCheckout(ctx, cred.ID, now); err != nil || active.Holder != "fresh" {
+		t.Fatalf("active checkout after expiry = %+v err %v, want holder fresh", active, err)
+	}
 
 	// --- audit + export ---
 	if err := st.AppendAudit(ctx, &store.AuditEvent{Actor: "tester", Action: "unit.test", Detail: "hello"}); err != nil {
@@ -158,6 +176,9 @@ func RunStoreContract(t *testing.T, st store.Store) {
 	}
 	if err := st.CreateUser(ctx, &store.User{Username: "u1", Role: "user", TokenHash: "x"}); !errors.Is(err, store.ErrConflict) {
 		t.Fatalf("duplicate username: want ErrConflict, got %v", err)
+	}
+	if err := st.CreateUser(ctx, &store.User{Username: "u2", Role: "user", TokenHash: "tokhash1"}); !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("duplicate token hash: want ErrConflict, got %v", err)
 	}
 	if by, err := st.GetUserByTokenHash(ctx, "tokhash1"); err != nil || by.Username != "u1" {
 		t.Fatalf("GetUserByTokenHash: %+v err %v", by, err)

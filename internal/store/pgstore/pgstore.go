@@ -369,22 +369,26 @@ func (s *PGStore) CreateCheckout(ctx context.Context, co *store.Checkout, now ti
 	}
 	defer tx.Rollback(ctx)
 
-	var active bool
-	if err := tx.QueryRow(ctx,
-		`SELECT EXISTS(SELECT 1 FROM checkouts
-		 WHERE credential_id = $1 AND returned_at IS NULL AND expires_at > $2)`,
-		co.CredentialID, now.UTC()).Scan(&active); err != nil {
+	// Auto-close expired-but-unreturned leases so an expired lease does not block
+	// a new checkout (and does not collide with the partial unique index below).
+	if _, err := tx.Exec(ctx,
+		`UPDATE checkouts SET returned_at = $2
+		 WHERE credential_id = $1 AND returned_at IS NULL AND expires_at <= $2`,
+		co.CredentialID, now.UTC()); err != nil {
 		return err
 	}
-	if active {
-		return store.ErrConflict
-	}
+	// Exclusivity is enforced atomically by the checkouts_one_active_idx partial
+	// unique index: a concurrent second insert fails with a unique violation
+	// rather than both check-then-inserts racing to success.
 	err = tx.QueryRow(ctx,
 		`INSERT INTO checkouts (credential_id, target_id, holder, reason, expires_at)
 		 VALUES ($1, $2, $3, $4, $5) RETURNING id, checked_out_at`,
 		co.CredentialID, co.TargetID, co.Holder, co.Reason, co.ExpiresAt,
 	).Scan(&co.ID, &co.CheckedOutAt)
-	if pgCode(err) == pgForeignKeyViolation {
+	switch pgCode(err) {
+	case pgUniqueViolation:
+		return store.ErrConflict
+	case pgForeignKeyViolation:
 		return store.ErrNotFound
 	}
 	if err != nil {
@@ -528,11 +532,15 @@ func (s *PGStore) DeleteUser(ctx context.Context, id int64) error {
 
 // CreateSession inserts a session, populating its ID and CreatedAt.
 func (s *PGStore) CreateSession(ctx context.Context, sess *store.Session) error {
-	return s.pool.QueryRow(ctx,
+	err := s.pool.QueryRow(ctx,
 		`INSERT INTO sessions (username, role, scope, token_hash, expires_at)
 		 VALUES ($1, $2, $3, $4, $5) RETURNING id, created_at`,
 		sess.Username, sess.Role, sess.Scope, sess.TokenHash, sess.ExpiresAt,
 	).Scan(&sess.ID, &sess.CreatedAt)
+	if pgCode(err) == pgUniqueViolation {
+		return store.ErrConflict
+	}
+	return err
 }
 
 // GetSessionByTokenHash returns a non-expired session matching the token hash,
@@ -612,14 +620,24 @@ func (s *PGStore) ListMFAEnrollments(ctx context.Context) ([]store.MFAEnrollment
 // DeleteMFAEnrollment removes a user's enrollment and their recovery codes;
 // ErrNotFound if the enrollment is absent.
 func (s *PGStore) DeleteMFAEnrollment(ctx context.Context, username string) error {
-	tag, err := s.pool.Exec(ctx, `DELETE FROM mfa_enrollments WHERE username = $1`, username)
-	if err == nil && tag.RowsAffected() == 0 {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	// Delete recovery codes and the enrollment atomically, so a failure between
+	// them can't leave orphaned recovery-code hashes for a user with no enrollment.
+	if _, err := tx.Exec(ctx, `DELETE FROM mfa_recovery_codes WHERE username = $1`, username); err != nil {
+		return err
+	}
+	tag, err := tx.Exec(ctx, `DELETE FROM mfa_enrollments WHERE username = $1`, username)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
 		return store.ErrNotFound
 	}
-	if err == nil {
-		_, err = s.pool.Exec(ctx, `DELETE FROM mfa_recovery_codes WHERE username = $1`, username)
-	}
-	return err
+	return tx.Commit(ctx)
 }
 
 // ReplaceMFARecoveryCodes stores a fresh set of recovery-code hashes for a user

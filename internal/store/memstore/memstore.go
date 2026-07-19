@@ -110,6 +110,13 @@ func (m *Memstore) DeleteTarget(_ context.Context, id int64) error {
 			delete(m.accessReq, aid)
 		}
 	}
+	// pgstore FKs cascade checkouts on target delete — match it so an orphaned
+	// active lease can't survive only in the demo store.
+	for coid, co := range m.checkouts {
+		if co.TargetID == id {
+			delete(m.checkouts, coid)
+		}
+	}
 	return nil
 }
 
@@ -376,6 +383,12 @@ func (m *Memstore) DeleteCredential(_ context.Context, id int64) error {
 		return store.ErrNotFound
 	}
 	delete(m.creds, id)
+	// pgstore FKs cascade checkouts on credential delete — match it.
+	for coid, co := range m.checkouts {
+		if co.CredentialID == id {
+			delete(m.checkouts, coid)
+		}
+	}
 	return nil
 }
 
@@ -426,7 +439,9 @@ func (m *Memstore) CreateUser(_ context.Context, u *store.User) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for _, existing := range m.users {
-		if existing.Username == u.Username {
+		// pgstore has UNIQUE constraints on both columns; match it so identity
+		// resolution (GetUserByTokenHash) can't become ambiguous in the demo store.
+		if existing.Username == u.Username || existing.TokenHash == u.TokenHash {
 			return store.ErrConflict
 		}
 	}
