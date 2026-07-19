@@ -36,6 +36,7 @@ func GenerateSecret() (string, error) {
 	return b32.EncodeToString(buf), nil
 }
 
+// decodeSecret decodes a base32 TOTP secret, tolerating lower case and surrounding whitespace.
 func decodeSecret(secret string) ([]byte, error) {
 	return b32.DecodeString(strings.ToUpper(strings.TrimSpace(secret)))
 }

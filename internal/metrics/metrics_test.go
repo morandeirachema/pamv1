@@ -5,6 +5,7 @@ import (
 	"testing"
 )
 
+// TestWritePrometheus checks the exposition output for each recorded metric.
 func TestWritePrometheus(t *testing.T) {
 	m := New()
 	m.HTTPRequest(200)
@@ -36,6 +37,7 @@ func TestWritePrometheus(t *testing.T) {
 	}
 }
 
+// TestActiveSessionsDefaultsZero checks the gauge reads 0 when no source is set.
 func TestActiveSessionsDefaultsZero(t *testing.T) {
 	m := New()
 	var sb strings.Builder

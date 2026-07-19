@@ -17,6 +17,7 @@ type fakeLDAP struct {
 	notFound  bool
 }
 
+// Bind succeeds when dn/password match a seeded entry, else returns an error.
 func (f *fakeLDAP) Bind(dn, password string) error {
 	if pw, ok := f.binds[dn]; ok && pw == password {
 		return nil
@@ -24,6 +25,8 @@ func (f *fakeLDAP) Bind(dn, password string) error {
 	return errors.New("ldap: invalid credentials")
 }
 
+// Search returns the configured error, an empty result (notFound), or a single
+// entry carrying the fixture's DN and memberOf values.
 func (f *fakeLDAP) Search(_ *ldap.SearchRequest) (*ldap.SearchResult, error) {
 	if f.searchErr != nil {
 		return nil, f.searchErr
@@ -40,8 +43,10 @@ func (f *fakeLDAP) Search(_ *ldap.SearchRequest) (*ldap.SearchResult, error) {
 	return &ldap.SearchResult{Entries: []*ldap.Entry{entry}}, nil
 }
 
+// Close is a no-op for the fake connection.
 func (f *fakeLDAP) Close() error { return nil }
 
+// newLDAPAuth builds an LDAPAuthenticator whose dialer returns the given fake conn.
 func newLDAPAuth(t *testing.T, conn *fakeLDAP) *LDAPAuthenticator {
 	t.Helper()
 	a, err := NewLDAPAuthenticator(LDAPConfig{
@@ -62,6 +67,7 @@ func newLDAPAuth(t *testing.T, conn *fakeLDAP) *LDAPAuthenticator {
 	return a
 }
 
+// TestLDAPAuthenticateSuccess proves a valid user binds and gets its mapped role.
 func TestLDAPAuthenticateSuccess(t *testing.T) {
 	conn := &fakeLDAP{
 		binds: map[string]string{
@@ -81,6 +87,7 @@ func TestLDAPAuthenticateSuccess(t *testing.T) {
 	}
 }
 
+// TestLDAPHighestPrivilegeWins proves the highest-privilege group role is chosen.
 func TestLDAPHighestPrivilegeWins(t *testing.T) {
 	conn := &fakeLDAP{
 		binds:  map[string]string{"CN=svc,DC=example,DC=com": "svc-pw", "CN=bob,DC=example,DC=com": "bob-pw"},
@@ -97,6 +104,7 @@ func TestLDAPHighestPrivilegeWins(t *testing.T) {
 	}
 }
 
+// TestLDAPWrongPassword proves a failed user bind returns ErrUnauthorized.
 func TestLDAPWrongPassword(t *testing.T) {
 	conn := &fakeLDAP{
 		binds:    map[string]string{"CN=svc,DC=example,DC=com": "svc-pw"}, // user bind will fail
@@ -109,6 +117,7 @@ func TestLDAPWrongPassword(t *testing.T) {
 	}
 }
 
+// TestLDAPNoMappedGroup proves a user in no pamv1 group returns ErrUnauthorized.
 func TestLDAPNoMappedGroup(t *testing.T) {
 	conn := &fakeLDAP{
 		binds:    map[string]string{"CN=svc,DC=example,DC=com": "svc-pw", "CN=eve,DC=example,DC=com": "eve-pw"},
@@ -121,6 +130,7 @@ func TestLDAPNoMappedGroup(t *testing.T) {
 	}
 }
 
+// TestLDAPUserNotFound proves an absent user returns ErrUnauthorized.
 func TestLDAPUserNotFound(t *testing.T) {
 	conn := &fakeLDAP{
 		binds:    map[string]string{"CN=svc,DC=example,DC=com": "svc-pw"},
@@ -132,6 +142,7 @@ func TestLDAPUserNotFound(t *testing.T) {
 	}
 }
 
+// TestLDAPEmptyCreds proves an empty password is rejected before dialing.
 func TestLDAPEmptyCreds(t *testing.T) {
 	a := newLDAPAuth(t, &fakeLDAP{})
 	if _, err := a.Authenticate(context.Background(), "alice", ""); !errors.Is(err, ErrUnauthorized) {
@@ -139,6 +150,8 @@ func TestLDAPEmptyCreds(t *testing.T) {
 	}
 }
 
+// TestNewLDAPAuthenticatorValidation proves the constructor rejects an empty
+// config and accepts a minimal valid one.
 func TestNewLDAPAuthenticatorValidation(t *testing.T) {
 	if _, err := NewLDAPAuthenticator(LDAPConfig{}); err == nil {
 		t.Fatal("empty config should error")

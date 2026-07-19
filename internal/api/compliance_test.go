@@ -26,6 +26,8 @@ func getWithKey(t *testing.T, srv *httptest.Server, path, apiKey string) (*http.
 	return resp, body
 }
 
+// TestAuditExportJSON verifies the JSON export carries a matching SHA-256 in both
+// body and header and is deterministic over a fixed time window.
 func TestAuditExportJSON(t *testing.T) {
 	srv := newTestServer(t)
 	// Generate a couple of audit events.
@@ -73,6 +75,7 @@ func TestAuditExportJSON(t *testing.T) {
 	}
 }
 
+// TestAuditExportCSVAndFilter verifies CSV output and the ?action= filter scoping.
 func TestAuditExportCSVAndFilter(t *testing.T) {
 	srv := newTestServer(t)
 	do(t, srv, http.MethodPost, "/api/targets", testAPIKey, map[string]any{
@@ -108,6 +111,8 @@ func TestAuditExportCSVAndFilter(t *testing.T) {
 	}
 }
 
+// TestAuditExportRequiresReadAudit verifies the export requires CapReadAudit
+// (auditor allowed, plain user forbidden).
 func TestAuditExportRequiresReadAudit(t *testing.T) {
 	srv := newTestServer(t)
 	auditor := seedUser(t, srv, "bob", "auditor")

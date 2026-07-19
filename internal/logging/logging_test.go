@@ -5,6 +5,7 @@ import (
 	"testing"
 )
 
+// TestParseLevel checks the level-name to slog.Level mapping and its default.
 func TestParseLevel(t *testing.T) {
 	cases := map[string]slog.Level{
 		"debug": slog.LevelDebug, "DEBUG": slog.LevelDebug,
@@ -19,6 +20,7 @@ func TestParseLevel(t *testing.T) {
 	}
 }
 
+// TestSetupAndComponent checks Setup installs the logger and Component tags it.
 func TestSetupAndComponent(t *testing.T) {
 	Setup("debug", "json")
 	if !slog.Default().Enabled(nil, slog.LevelDebug) {

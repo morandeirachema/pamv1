@@ -133,6 +133,9 @@ type Config struct {
 	PortalURL        string
 }
 
+// Load reads configuration from the PAM_* environment variables, applying
+// defaults, and returns an error if a required variable (API key, database URL,
+// or the master key when the local KEK provider is used) is missing.
 func Load() (*Config, error) {
 	cfg := &Config{
 		ListenAddr:          getenv("PAM_LISTEN_ADDR", ":8080"),
@@ -227,6 +230,7 @@ func Load() (*Config, error) {
 	return cfg, nil
 }
 
+// getenv returns the environment variable key, or def when it is unset or empty.
 func getenv(key, def string) string {
 	if v := os.Getenv(key); v != "" {
 		return v
@@ -234,6 +238,8 @@ func getenv(key, def string) string {
 	return def
 }
 
+// getenvInt returns the environment variable key parsed as an int, or def when
+// it is unset, empty, or not a valid integer.
 func getenvInt(key string, def int) int {
 	if v := os.Getenv(key); v != "" {
 		if n, err := strconv.Atoi(v); err == nil {

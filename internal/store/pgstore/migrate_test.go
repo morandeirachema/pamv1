@@ -6,6 +6,8 @@ import (
 	"testing"
 )
 
+// TestLoadMigrations checks the embedded migrations load, start at 0001_init,
+// and are uniquely versioned and name-ordered.
 func TestLoadMigrations(t *testing.T) {
 	ms, err := loadMigrations()
 	if err != nil {

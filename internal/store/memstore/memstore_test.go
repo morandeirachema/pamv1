@@ -33,6 +33,7 @@ func TestOIDCStateSharedAcrossInstances(t *testing.T) {
 	}
 }
 
+// TestOIDCStateExpiry checks an expired OIDC state is not returned by TakeOIDCState.
 func TestOIDCStateExpiry(t *testing.T) {
 	st := New()
 	ctx := context.Background()
@@ -45,6 +46,7 @@ func TestOIDCStateExpiry(t *testing.T) {
 	}
 }
 
+// TestOIDCStateMissing checks TakeOIDCState reports not-found for an unknown state.
 func TestOIDCStateMissing(t *testing.T) {
 	st := New()
 	if _, _, ok, err := st.TakeOIDCState(context.Background(), "nope", time.Now()); ok || err != nil {

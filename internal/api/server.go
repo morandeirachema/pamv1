@@ -31,10 +31,13 @@ const (
 	reqInfoKey
 )
 
+// withPrincipal returns a copy of ctx carrying the authenticated Principal.
 func withPrincipal(ctx context.Context, p *auth.Principal) context.Context {
 	return context.WithValue(ctx, principalKey, p)
 }
 
+// principalFrom returns the Principal stored in ctx, or a fallback "unknown"
+// principal when none is present.
 func principalFrom(ctx context.Context) *auth.Principal {
 	if p, ok := ctx.Value(principalKey).(*auth.Principal); ok {
 		return p
@@ -42,6 +45,7 @@ func principalFrom(ctx context.Context) *auth.Principal {
 	return &auth.Principal{Name: "unknown"}
 }
 
+// actorFrom returns the name of the Principal in ctx, used for audit attribution.
 func actorFrom(ctx context.Context) string {
 	return principalFrom(ctx).Name
 }
@@ -50,6 +54,8 @@ func actorFrom(ctx context.Context) string {
 // context and the authz middleware fills with the resolved actor.
 type reqInfo struct{ actor string }
 
+// setActor records the resolved actor on the per-request reqInfo (if present),
+// so the access-log middleware can log who made the request.
 func setActor(ctx context.Context, actor string) {
 	if ri, ok := ctx.Value(reqInfoKey).(*reqInfo); ok {
 		ri.actor = actor
@@ -247,6 +253,7 @@ func New(st store.Store, v *vault.Vault, resolver *auth.Resolver, authn auth.Aut
 	return s, nil
 }
 
+// ServeHTTP dispatches the request through the server's middleware chain and router.
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	s.handler.ServeHTTP(w, r)
 }
@@ -258,11 +265,14 @@ type statusWriter struct {
 	bytes  int
 }
 
+// WriteHeader records the status code before writing it to the underlying writer.
 func (w *statusWriter) WriteHeader(code int) {
 	w.status = code
 	w.ResponseWriter.WriteHeader(code)
 }
 
+// Write proxies to the underlying writer, defaulting the status to 200 (as
+// net/http does on an implicit write) and accumulating the byte count.
 func (w *statusWriter) Write(b []byte) (int, error) {
 	if w.status == 0 {
 		w.status = http.StatusOK
@@ -299,6 +309,7 @@ func (s *Server) withAccessLog(next http.Handler) http.Handler {
 	})
 }
 
+// routes registers every HTTP route on the server's mux.
 func (s *Server) routes() {
 	s.mux.HandleFunc("GET /healthz", s.health)         // liveness
 	s.mux.HandleFunc("GET /readyz", s.readyz)          // readiness (store reachable)
@@ -414,6 +425,9 @@ func (s *Server) authenticated(next http.HandlerFunc) http.Handler {
 	})
 }
 
+// audit appends an audit event attributed to the actor in ctx, bumps the audit
+// (and, for rotations, rotation) metrics, and logs it. A store failure is logged
+// but not returned to the caller.
 func (s *Server) audit(ctx context.Context, action, detail string) {
 	e := store.AuditEvent{Actor: actorFrom(ctx), Action: action, Detail: detail}
 	if err := s.store.AppendAudit(ctx, &e); err != nil {
@@ -426,6 +440,7 @@ func (s *Server) audit(ctx context.Context, action, detail string) {
 	s.log.Info("audit", "actor", e.Actor, "action", action, "detail", detail)
 }
 
+// health is the liveness probe: it always reports ok while the process serves.
 func (s *Server) health(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }

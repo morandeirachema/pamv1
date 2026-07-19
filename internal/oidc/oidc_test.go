@@ -34,6 +34,7 @@ func signIDToken(t *testing.T, key *rsa.PrivateKey, kid string, claims map[strin
 	return signingInput + "." + base64.RawURLEncoding.EncodeToString(sig)
 }
 
+// b64uint base64url-encodes an integer's big-endian bytes (for a JWK exponent).
 func b64uint(i int) string {
 	b := big.NewInt(int64(i)).Bytes()
 	return base64.RawURLEncoding.EncodeToString(b)
@@ -58,6 +59,7 @@ func mockIdP(t *testing.T, key *rsa.PrivateKey, kid, idToken string) *httptest.S
 	return srv
 }
 
+// provider builds a Provider whose endpoints point at the test server srv.
 func provider(t *testing.T, srv *httptest.Server, issuer string) *Provider {
 	t.Helper()
 	p, err := NewProvider(Config{
@@ -71,6 +73,8 @@ func provider(t *testing.T, srv *httptest.Server, issuer string) *Provider {
 	return p
 }
 
+// TestExchangeValidToken proves a well-formed, correctly-signed ID token
+// exchanges into the expected claims.
 func TestExchangeValidToken(t *testing.T) {
 	key, _ := rsa.GenerateKey(rand.Reader, 2048)
 	const issuer = "https://issuer.example.com"
@@ -91,6 +95,8 @@ func TestExchangeValidToken(t *testing.T) {
 	}
 }
 
+// TestExchangeRejects proves Exchange rejects bad signature, wrong issuer, wrong
+// audience, nonce mismatch and expired tokens.
 func TestExchangeRejects(t *testing.T) {
 	key, _ := rsa.GenerateKey(rand.Reader, 2048)
 	other, _ := rsa.GenerateKey(rand.Reader, 2048)
@@ -125,6 +131,8 @@ func TestExchangeRejects(t *testing.T) {
 	}
 }
 
+// TestAuthCodeURLAndPKCE proves PKCE generation differs verifier/challenge and
+// the authorize URL carries the expected query parameters.
 func TestAuthCodeURLAndPKCE(t *testing.T) {
 	key, _ := rsa.GenerateKey(rand.Reader, 2048)
 	srv := mockIdP(t, key, "k1", "")
@@ -142,6 +150,7 @@ func TestAuthCodeURLAndPKCE(t *testing.T) {
 	}
 }
 
+// merge sets m[k]=v and returns m, for building claim variants inline.
 func merge(m map[string]any, k string, v any) map[string]any {
 	m[k] = v
 	return m

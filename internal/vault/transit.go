@@ -25,6 +25,8 @@ type TransitKEK struct {
 	hc    *http.Client
 }
 
+// NewTransitKEK builds a Transit-backed KEK. addr, token and key are all
+// required; addr has any trailing slash trimmed.
 func NewTransitKEK(addr, token, key string) (*TransitKEK, error) {
 	if addr == "" || token == "" || key == "" {
 		return nil, errors.New("vault: vault-transit KEK requires PAM_KEK_TRANSIT_ADDR, PAM_KEK_TRANSIT_TOKEN and PAM_KEK_TRANSIT_KEY")
@@ -37,8 +39,11 @@ func NewTransitKEK(addr, token, key string) (*TransitKEK, error) {
 	}, nil
 }
 
+// ID reports the provider identifier, "vault-transit:<key>".
 func (k *TransitKEK) ID() string { return "vault-transit:" + k.key }
 
+// Wrap encrypts the data key via Transit's encrypt endpoint and returns the
+// Transit ciphertext string ("vault:v1:...") as bytes.
 func (k *TransitKEK) Wrap(ctx context.Context, dek []byte) ([]byte, error) {
 	var resp struct {
 		Data struct {
@@ -56,6 +61,8 @@ func (k *TransitKEK) Wrap(ctx context.Context, dek []byte) ([]byte, error) {
 	return []byte(resp.Data.Ciphertext), nil
 }
 
+// Unwrap decrypts a Transit ciphertext back to the data key via the decrypt
+// endpoint.
 func (k *TransitKEK) Unwrap(ctx context.Context, wrapped []byte) ([]byte, error) {
 	var resp struct {
 		Data struct {
@@ -74,6 +81,8 @@ func (k *TransitKEK) Unwrap(ctx context.Context, wrapped []byte) ([]byte, error)
 	return dek, nil
 }
 
+// call POSTs body as JSON to the Transit path with the Vault token header and
+// decodes a 2xx response into out; non-2xx status returns an error with the body.
 func (k *TransitKEK) call(ctx context.Context, path string, body any, out any) error {
 	b, err := json.Marshal(body)
 	if err != nil {

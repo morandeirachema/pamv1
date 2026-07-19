@@ -10,6 +10,7 @@ import (
 	"github.com/morandeirachema/pamv1/internal/store"
 )
 
+// TestRoleCapabilities checks the role→capability matrix across all four roles.
 func TestRoleCapabilities(t *testing.T) {
 	cases := []struct {
 		role Role
@@ -45,6 +46,8 @@ func TestRoleCapabilities(t *testing.T) {
 	}
 }
 
+// TestCanConnectTarget checks target-grant logic: open when ungranted, admins
+// always allowed, and user/role grants matched or denied.
 func TestCanConnectTarget(t *testing.T) {
 	admin := &Principal{Name: "boss", Role: RoleAdmin}
 	user := &Principal{Name: "alice", Role: RoleUser}
@@ -72,6 +75,7 @@ func TestCanConnectTarget(t *testing.T) {
 	}
 }
 
+// TestParseRole checks that the four valid roles parse and an unknown one errors.
 func TestParseRole(t *testing.T) {
 	for _, ok := range []string{"admin", "user", "auditor", "approver"} {
 		if _, err := ParseRole(ok); err != nil {
@@ -89,6 +93,7 @@ type fakeDir struct {
 	sessions map[string]*store.Session // tokenHashHex -> session
 }
 
+// GetUserByTokenHash returns the seeded user for hash h, or store.ErrNotFound.
 func (f fakeDir) GetUserByTokenHash(_ context.Context, h string) (*store.User, error) {
 	if u, ok := f.users[h]; ok {
 		return u, nil
@@ -96,6 +101,7 @@ func (f fakeDir) GetUserByTokenHash(_ context.Context, h string) (*store.User, e
 	return nil, store.ErrNotFound
 }
 
+// GetSessionByTokenHash returns the seeded session for hash h, or store.ErrNotFound.
 func (f fakeDir) GetSessionByTokenHash(_ context.Context, h string) (*store.Session, error) {
 	if s, ok := f.sessions[h]; ok {
 		return s, nil
@@ -103,11 +109,14 @@ func (f fakeDir) GetSessionByTokenHash(_ context.Context, h string) (*store.Sess
 	return nil, store.ErrNotFound
 }
 
+// hashOf returns the hex SHA-256 of tok, matching how the resolver keys tokens.
 func hashOf(tok string) string {
 	sum := sha256.Sum256([]byte(tok))
 	return hex.EncodeToString(sum[:])
 }
 
+// TestResolve exercises every accepted key kind (bootstrap admin, break-glass,
+// per-user token, login session) and rejection of empty/unknown/bad-role keys.
 func TestResolve(t *testing.T) {
 	bg := sha256.Sum256([]byte("emergency"))
 	dir := fakeDir{

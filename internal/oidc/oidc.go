@@ -60,6 +60,8 @@ type Provider struct {
 	hc  *http.Client
 }
 
+// NewProvider validates cfg (issuer, client id, redirect, auth/token/JWKS URLs
+// are all required), defaults the scopes and HTTP client, and returns a Provider.
 func NewProvider(cfg Config) (*Provider, error) {
 	for name, v := range map[string]string{
 		"issuer": cfg.Issuer, "client id": cfg.ClientID, "redirect url": cfg.RedirectURL,
@@ -136,6 +138,9 @@ func (p *Provider) Exchange(ctx context.Context, code, verifier, nonce string) (
 	return p.verifyIDToken(ctx, tok.IDToken, nonce)
 }
 
+// verifyIDToken validates an ID token end to end: it requires RS256, verifies the
+// signature against the JWKS key named by the header kid, then checks the issuer,
+// audience, nonce and expiry (with 60s leeway) before returning the claims.
 func (p *Provider) verifyIDToken(ctx context.Context, idToken, nonce string) (*Claims, error) {
 	parts := strings.Split(idToken, ".")
 	if len(parts) != 3 {
@@ -197,6 +202,8 @@ type jwk struct {
 	E   string `json:"e"`
 }
 
+// publicKey fetches the provider's JWKS and returns the RSA public key whose kid
+// matches, erroring if none is found.
 func (p *Provider) publicKey(ctx context.Context, kid string) (*rsa.PublicKey, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, p.cfg.JWKSURL, nil)
 	if err != nil {
@@ -221,6 +228,8 @@ func (p *Provider) publicKey(ctx context.Context, kid string) (*rsa.PublicKey, e
 	return nil, fmt.Errorf("oidc: no JWKS key for kid %q", kid)
 }
 
+// rsaKeyFromJWK reconstructs an RSA public key from a JWK's base64url modulus (n)
+// and exponent (e).
 func rsaKeyFromJWK(k jwk) (*rsa.PublicKey, error) {
 	nb, err := base64.RawURLEncoding.DecodeString(k.N)
 	if err != nil {
@@ -237,6 +246,7 @@ func rsaKeyFromJWK(k jwk) (*rsa.PublicKey, error) {
 	return &rsa.PublicKey{N: new(big.Int).SetBytes(nb), E: e}, nil
 }
 
+// decodeSegment base64url-decodes a JWT segment and unmarshals its JSON into v.
 func decodeSegment(seg string, v any) error {
 	b, err := base64.RawURLEncoding.DecodeString(seg)
 	if err != nil {
@@ -245,6 +255,8 @@ func decodeSegment(seg string, v any) error {
 	return json.Unmarshal(b, v)
 }
 
+// audienceContains reports whether the "aud" claim (a single string or an array)
+// contains want.
 func audienceContains(raw json.RawMessage, want string) bool {
 	var one string
 	if json.Unmarshal(raw, &one) == nil {

@@ -11,6 +11,7 @@ import (
 // GF(2^8) log/exp tables with generator 3 and the AES reduction polynomial.
 var logTable, expTable [256]byte
 
+// init builds the GF(2^8) log/exp lookup tables used by mul and div.
 func init() {
 	x := byte(1)
 	for i := 0; i < 255; i++ {
@@ -38,6 +39,7 @@ func mulNoTable(a, b byte) byte {
 	return p
 }
 
+// mul multiplies two field elements in GF(2^8) via the log/exp tables.
 func mul(a, b byte) byte {
 	if a == 0 || b == 0 {
 		return 0
@@ -45,6 +47,7 @@ func mul(a, b byte) byte {
 	return expTable[(int(logTable[a])+int(logTable[b]))%255]
 }
 
+// div divides a by b in GF(2^8) via the log/exp tables.
 func div(a, b byte) byte {
 	// b != 0 by construction (distinct x-coordinates)
 	if a == 0 {

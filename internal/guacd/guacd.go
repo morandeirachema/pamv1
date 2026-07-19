@@ -35,6 +35,8 @@ func (i Instruction) Encode() string {
 	return b.String()
 }
 
+// writeElement writes s as a LENGTH.VALUE element, where LENGTH is its Unicode
+// code-point count.
 func writeElement(b *strings.Builder, s string) {
 	fmt.Fprintf(b, "%d.%s", len([]rune(s)), s)
 }
@@ -105,6 +107,8 @@ type Conn struct {
 	ID string
 }
 
+// Read reads from the buffered reader, so any bytes buffered during the
+// handshake are delivered to the interactive stream rather than lost.
 func (c *Conn) Read(p []byte) (int, error) { return c.r.Read(p) }
 
 // Connect dials guacd at addr and performs the handshake for params, injecting
@@ -129,11 +133,15 @@ func Connect(ctx context.Context, addr string, params Params) (*Conn, error) {
 	return c, nil
 }
 
+// send encodes and writes a single Guacamole instruction.
 func (c *Conn) send(opcode string, args ...string) error {
 	_, err := c.Conn.Write([]byte(Instruction{Opcode: opcode, Args: args}.Encode()))
 	return err
 }
 
+// handshake performs the Guacamole select/args/size/connect/ready exchange,
+// injecting the credential value guacd requests for each advertised arg, and
+// returns the connection id from the ready reply.
 func (c *Conn) handshake(p Params) (string, error) {
 	// 1. select the protocol.
 	if err := c.send("select", p.Protocol); err != nil {

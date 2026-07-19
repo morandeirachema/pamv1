@@ -9,6 +9,7 @@ import (
 	"github.com/morandeirachema/pamv1/internal/vault"
 )
 
+// newVault builds a vault with a fresh random master key for the test.
 func newVault(t *testing.T) *vault.Vault {
 	t.Helper()
 	key, err := vault.GenerateMasterKey()
@@ -22,6 +23,8 @@ func newVault(t *testing.T) *vault.Vault {
 	return v
 }
 
+// TestRotateVaultKEK checks re-encryption moves every secret from the old vault
+// to the new one, preserving plaintext, AAD binding, and the confirmed flag.
 func TestRotateVaultKEK(t *testing.T) {
 	ctx := context.Background()
 	st := memstore.New()

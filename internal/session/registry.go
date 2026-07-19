@@ -32,6 +32,7 @@ type Registry struct {
 	m  map[string]entry
 }
 
+// NewRegistry returns an empty, ready-to-use session registry.
 func NewRegistry() *Registry { return &Registry{m: make(map[string]entry)} }
 
 // Register records a session and returns its id; kill terminates it when called
@@ -78,6 +79,7 @@ func (r *Registry) Kill(id string) bool {
 	return true
 }
 
+// randID returns a random 16-hex-character session id.
 func randID() string {
 	b := make([]byte, 8)
 	_, _ = rand.Read(b)

@@ -16,6 +16,7 @@ import (
 // captureAlerter records alerts synchronously for assertions.
 type captureAlerter struct{ ch chan alert.Event }
 
+// Notify enqueues the alert non-blockingly for the test to assert on.
 func (c captureAlerter) Notify(_ context.Context, e alert.Event) {
 	select {
 	case c.ch <- e:
@@ -23,6 +24,8 @@ func (c captureAlerter) Notify(_ context.Context, e alert.Event) {
 	}
 }
 
+// TestBreakGlassQuorumUnseal verifies M-of-N shares reconstruct the key, issue a
+// working break-glass admin session, and fire the unseal + access alerts.
 func TestBreakGlassQuorumUnseal(t *testing.T) {
 	const emergencyKey = "the-sealed-emergency-key-2026"
 	sum := sha256.Sum256([]byte(emergencyKey))
@@ -84,6 +87,8 @@ func TestBreakGlassQuorumUnseal(t *testing.T) {
 	}
 }
 
+// TestBreakGlassWrongSharesRejected verifies shares of a different key fail to
+// unseal with 401.
 func TestBreakGlassWrongSharesRejected(t *testing.T) {
 	const emergencyKey = "sealed-key"
 	sum := sha256.Sum256([]byte(emergencyKey))
@@ -99,6 +104,8 @@ func TestBreakGlassWrongSharesRejected(t *testing.T) {
 	}
 }
 
+// TestBreakGlassNotConfigured verifies the unseal endpoint is 404 when no quorum
+// is configured.
 func TestBreakGlassNotConfigured(t *testing.T) {
 	srv := newTestServer(t) // no threshold
 	if status, _ := do(t, srv, http.MethodPost, "/api/breakglass/unseal", "",

@@ -6,6 +6,7 @@ import (
 	"testing"
 )
 
+// TestReadyzAndHealthz verifies both probes return 200 without authentication.
 func TestReadyzAndHealthz(t *testing.T) {
 	srv := newTestServer(t)
 	for _, path := range []string{"/healthz", "/readyz"} {
@@ -16,6 +17,8 @@ func TestReadyzAndHealthz(t *testing.T) {
 	}
 }
 
+// TestMetricsEndpoint verifies the Prometheus exposition includes the expected
+// series and counts a 401 as an auth failure.
 func TestMetricsEndpoint(t *testing.T) {
 	srv := newTestServer(t)
 	// Generate traffic: a couple of authenticated requests (audited) and a 401.

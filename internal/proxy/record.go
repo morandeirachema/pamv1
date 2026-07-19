@@ -14,6 +14,7 @@ import (
 	"time"
 )
 
+// encodePEM serializes a PEM block to its textual (memory) encoding.
 func encodePEM(b *pem.Block) []byte { return pem.EncodeToMemory(b) }
 
 // recordChain links session recordings into a tamper-evident hash chain: each
@@ -26,6 +27,8 @@ type recordChain struct {
 	head []byte
 }
 
+// newRecordChain opens the hash chain stored under dir, loading any persisted
+// head so the chain continues across restarts.
 func newRecordChain(dir string) *recordChain {
 	c := &recordChain{path: filepath.Join(dir, ".chain")}
 	if b, err := os.ReadFile(c.path); err == nil {
@@ -66,6 +69,9 @@ type Recording struct {
 	n  int64
 }
 
+// newRecording creates a .cast file under dir (named from a sanitized title),
+// writes the asciicast v2 header and returns a Recording that hashes every byte
+// it writes so its contents can be verified later.
 func newRecording(dir, title string, now time.Time) (*Recording, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, err
@@ -113,6 +119,8 @@ func (r *Recording) Close() (path, sha256hex string, n int64) {
 	return r.path, hex.EncodeToString(r.hasher.Sum(nil)), r.n
 }
 
+// sanitize replaces any character outside [A-Za-z0-9-_.@] with '-' so the
+// result is safe to use as a filename.
 func sanitize(s string) string {
 	var b strings.Builder
 	for _, c := range s {

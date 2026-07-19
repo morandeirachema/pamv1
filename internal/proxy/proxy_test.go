@@ -31,6 +31,7 @@ const (
 	targetOutput   = "hello-from-target\n"
 )
 
+// mustSigner returns a fresh ed25519 SSH signer or fails the test.
 func mustSigner(t *testing.T) ssh.Signer {
 	t.Helper()
 	_, priv, err := ed25519.GenerateKey(rand.Reader)
@@ -44,6 +45,7 @@ func mustSigner(t *testing.T) ssh.Signer {
 	return s
 }
 
+// mustVault builds a vault with a freshly generated master key or fails the test.
 func mustVault(t *testing.T) *vault.Vault {
 	t.Helper()
 	key, err := vault.GenerateMasterKey()
@@ -93,6 +95,8 @@ func startUpstream(t *testing.T, wantUser, wantPass, output string) (host string
 	return h, pn
 }
 
+// serveUpstream handles one upstream SSH connection, replying to every
+// exec/shell request with the fixed output and an exit-status of 0.
 func serveUpstream(conn net.Conn, cfg *ssh.ServerConfig, output string) {
 	sconn, chans, reqs, err := ssh.NewServerConn(conn, cfg)
 	if err != nil {
@@ -154,6 +158,7 @@ func startProxy(t *testing.T, st store.Store, v *vault.Vault, recDir string) str
 	return ln.Addr().String()
 }
 
+// dialProxy opens an SSH client to the proxy with the given login and password.
 func dialProxy(t *testing.T, addr, login, password string) (*ssh.Client, error) {
 	t.Helper()
 	return ssh.Dial("tcp", addr, &ssh.ClientConfig{
@@ -164,6 +169,8 @@ func dialProxy(t *testing.T, addr, login, password string) (*ssh.Client, error) 
 	})
 }
 
+// seedTarget creates the "web-01" SSH target plus a vaulted password credential
+// (upstreamUser/upstreamSecret) for it, returning the target.
 func seedTarget(t *testing.T, st store.Store, v *vault.Vault, host string, port int) *store.Target {
 	t.Helper()
 	ctx := context.Background()
@@ -240,6 +247,8 @@ func TestJITInjection(t *testing.T) {
 	}
 }
 
+// TestWrongProxyKeyRejected asserts the proxy rejects an invalid API key at the
+// authentication stage.
 func TestWrongProxyKeyRejected(t *testing.T) {
 	host, port := startUpstream(t, upstreamUser, upstreamSecret, targetOutput)
 	st := memstore.New()
@@ -253,6 +262,8 @@ func TestWrongProxyKeyRejected(t *testing.T) {
 	}
 }
 
+// TestUnknownTargetDenied asserts a valid API key authenticates but cannot open
+// a session to a target that does not exist.
 func TestUnknownTargetDenied(t *testing.T) {
 	host, port := startUpstream(t, upstreamUser, upstreamSecret, targetOutput)
 	st := memstore.New()
@@ -272,6 +283,8 @@ func TestUnknownTargetDenied(t *testing.T) {
 	}
 }
 
+// TestSpecificCredentialSelector checks the "creduser@target" login form selects
+// the credential whose username matches.
 func TestSpecificCredentialSelector(t *testing.T) {
 	host, port := startUpstream(t, upstreamUser, upstreamSecret, targetOutput)
 	st := memstore.New()
@@ -466,6 +479,7 @@ func TestApprovalGateProxy(t *testing.T) {
 	}
 }
 
+// fieldAfter returns the value following key in a space-separated detail string.
 func fieldAfter(s, key string) string {
 	i := strings.Index(s, key)
 	if i < 0 {

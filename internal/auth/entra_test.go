@@ -41,6 +41,7 @@ func mockEntra(t *testing.T, wantUser, wantPass string, claims map[string]any) *
 	return srv
 }
 
+// newEntra builds an EntraAuthenticator pointed at endpoint with a fixed role map.
 func newEntra(t *testing.T, endpoint string) *EntraAuthenticator {
 	t.Helper()
 	a, err := NewEntraAuthenticator(EntraConfig{
@@ -58,6 +59,7 @@ func newEntra(t *testing.T, endpoint string) *EntraAuthenticator {
 	return a
 }
 
+// TestEntraAppRoleLogin proves a user with a mapped app role logs in with that role.
 func TestEntraAppRoleLogin(t *testing.T) {
 	srv := mockEntra(t, "alice@contoso.com", "pw", map[string]any{
 		"roles":              []string{"pam.user"},
@@ -73,6 +75,8 @@ func TestEntraAppRoleLogin(t *testing.T) {
 	}
 }
 
+// TestEntraGroupClaimAndHighestWins proves group claims are honored and the
+// highest-privilege mapped claim wins.
 func TestEntraGroupClaimAndHighestWins(t *testing.T) {
 	srv := mockEntra(t, "bob", "pw", map[string]any{
 		"roles":  []string{"pam.user"},
@@ -87,6 +91,7 @@ func TestEntraGroupClaimAndHighestWins(t *testing.T) {
 	}
 }
 
+// TestEntraBadPassword proves a rejected credential returns ErrUnauthorized.
 func TestEntraBadPassword(t *testing.T) {
 	srv := mockEntra(t, "alice", "pw", map[string]any{"roles": []string{"pam.user"}})
 	a := newEntra(t, srv.URL)
@@ -95,6 +100,7 @@ func TestEntraBadPassword(t *testing.T) {
 	}
 }
 
+// TestEntraNoMappedRole proves a user with no mapped claim returns ErrUnauthorized.
 func TestEntraNoMappedRole(t *testing.T) {
 	srv := mockEntra(t, "eve", "pw", map[string]any{"roles": []string{"SomethingElse"}})
 	a := newEntra(t, srv.URL)
@@ -103,6 +109,7 @@ func TestEntraNoMappedRole(t *testing.T) {
 	}
 }
 
+// TestEntraValidation proves an empty config is rejected by the constructor.
 func TestEntraValidation(t *testing.T) {
 	if _, err := NewEntraAuthenticator(EntraConfig{}); err == nil {
 		t.Fatal("empty config should error")
@@ -115,6 +122,7 @@ type fakeAuth struct {
 	role       Role
 }
 
+// Authenticate returns a Principal when u/p match the fixture, else ErrUnauthorized.
 func (f fakeAuth) Authenticate(_ context.Context, u, p string) (*Principal, error) {
 	if u == f.user && p == f.pass {
 		return &Principal{Name: u, Role: f.role}, nil
@@ -122,6 +130,8 @@ func (f fakeAuth) Authenticate(_ context.Context, u, p string) (*Principal, erro
 	return nil, ErrUnauthorized
 }
 
+// TestChainAuthenticator checks chain construction (all-nil, single, multi) and
+// that authentication falls through to a later source or ends unauthorized.
 func TestChainAuthenticator(t *testing.T) {
 	if NewChain(nil, nil) != nil {
 		t.Fatal("all-nil chain should be nil")

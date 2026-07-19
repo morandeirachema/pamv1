@@ -10,6 +10,7 @@ import (
 	"time"
 )
 
+// TestWebhookNotify verifies the webhook delivers the event as JSON to its URL.
 func TestWebhookNotify(t *testing.T) {
 	got := make(chan Event, 1)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -34,6 +35,7 @@ func TestWebhookNotify(t *testing.T) {
 	}
 }
 
+// TestNoop verifies the Noop notifier neither panics nor blocks.
 func TestNoop(t *testing.T) {
 	// Must not panic or block.
 	Noop{}.Notify(context.Background(), Event{Type: "x"})

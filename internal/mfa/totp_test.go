@@ -20,6 +20,8 @@ func TestRFC6238Vector(t *testing.T) {
 	}
 }
 
+// TestValidateRoundtrip proves a fresh code validates, a code one step off is
+// accepted within skew, and stale or malformed codes are rejected.
 func TestValidateRoundtrip(t *testing.T) {
 	secret, err := GenerateSecret()
 	if err != nil {
@@ -46,6 +48,7 @@ func TestValidateRoundtrip(t *testing.T) {
 	}
 }
 
+// TestProvisioningURI checks the otpauth:// URI carries the expected fields.
 func TestProvisioningURI(t *testing.T) {
 	uri := ProvisioningURI("ABC234", "alice", "pamv1")
 	for _, want := range []string{"otpauth://totp/", "secret=ABC234", "issuer=pamv1", "digits=6", "period=30"} {
@@ -55,6 +58,7 @@ func TestProvisioningURI(t *testing.T) {
 	}
 }
 
+// TestGenerateSecretDistinct proves generated secrets are random and non-empty.
 func TestGenerateSecretDistinct(t *testing.T) {
 	a, _ := GenerateSecret()
 	b, _ := GenerateSecret()
@@ -63,6 +67,8 @@ func TestGenerateSecretDistinct(t *testing.T) {
 	}
 }
 
+// TestGenerateRecoveryCodes proves it returns the requested count of uniquely
+// formatted, non-duplicate codes.
 func TestGenerateRecoveryCodes(t *testing.T) {
 	codes, err := GenerateRecoveryCodes(10)
 	if err != nil {

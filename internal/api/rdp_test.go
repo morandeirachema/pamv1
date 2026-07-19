@@ -11,6 +11,8 @@ import (
 // exercised with ordinary HTTP requests. (Full guacd bridging is covered by the
 // internal/guacd handshake test.)
 
+// TestRDPDisabledWhenNoGuacd verifies the RDP endpoint is 404 when no guacd is
+// configured.
 func TestRDPDisabledWhenNoGuacd(t *testing.T) {
 	srv := newTestServer(t) // no GuacdAddr
 	if status, _ := do(t, srv, http.MethodGet, "/api/targets/1/rdp?token="+testAPIKey, "", nil); status != http.StatusNotFound {
@@ -18,6 +20,8 @@ func TestRDPDisabledWhenNoGuacd(t *testing.T) {
 	}
 }
 
+// TestRDPAuthAndTargetChecks verifies the pre-WebSocket-upgrade auth and protocol
+// checks: missing token, a non-connecting role, and a non-RDP target.
 func TestRDPAuthAndTargetChecks(t *testing.T) {
 	srv, _ := newTestServerOpts(t, nil, api.Options{GuacdAddr: "127.0.0.1:4822"})
 

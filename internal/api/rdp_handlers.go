@@ -166,6 +166,8 @@ func bridgeGuacd(ctx context.Context, ws *websocket.Conn, gconn *guacd.Conn) {
 	<-done
 }
 
+// atoiOr parses s as a positive int, returning def when s is empty, non-numeric,
+// or non-positive.
 func atoiOr(s string, def int) int {
 	if n, err := strconv.Atoi(s); err == nil && n > 0 {
 		return n

@@ -39,6 +39,7 @@ type Scanner struct {
 	Dial func(ctx context.Context, network, addr string) (net.Conn, error)
 }
 
+// timeout returns the per-connect timeout, or 1s when unset.
 func (s Scanner) timeout() time.Duration {
 	if s.Timeout <= 0 {
 		return time.Second
@@ -46,6 +47,7 @@ func (s Scanner) timeout() time.Duration {
 	return s.Timeout
 }
 
+// dial connects to addr using the injected dialer, falling back to net.Dialer.
 func (s Scanner) dial(ctx context.Context, addr string) (net.Conn, error) {
 	if s.Dial != nil {
 		return s.Dial(ctx, "tcp", addr)

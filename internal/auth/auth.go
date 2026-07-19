@@ -37,6 +37,8 @@ const (
 	RoleApprover Role = "approver"
 )
 
+// ParseRole validates s and returns the corresponding Role, or an error if it is
+// not one of the four known roles.
 func ParseRole(s string) (Role, error) {
 	switch Role(s) {
 	case RoleAdmin, RoleUser, RoleAuditor, RoleApprover:

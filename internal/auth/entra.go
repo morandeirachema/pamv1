@@ -44,6 +44,9 @@ type EntraAuthenticator struct {
 	endpoint string
 }
 
+// NewEntraAuthenticator validates cfg (tenant, client id/secret and at least one
+// role mapping are required) and applies defaults for scope, authority host and
+// the token endpoint.
 func NewEntraAuthenticator(cfg EntraConfig) (*EntraAuthenticator, error) {
 	switch {
 	case cfg.TenantID == "":
@@ -75,6 +78,9 @@ type entraClaims struct {
 	UPN               string   `json:"upn"`
 }
 
+// Authenticate performs the ROPC token request, parses the access token's app
+// role and group claims, and maps them to a Principal. Bad credentials return
+// ErrUnauthorized; a user with no mapped role also returns ErrUnauthorized.
 func (a *EntraAuthenticator) Authenticate(ctx context.Context, username, password string) (*Principal, error) {
 	if username == "" || password == "" {
 		return nil, ErrUnauthorized
@@ -122,6 +128,7 @@ func (a *EntraAuthenticator) Authenticate(ctx context.Context, username, passwor
 	return &Principal{Name: name, Role: role}, nil
 }
 
+// roleFor maps the combined app-role and group claims to the highest role.
 func (a *EntraAuthenticator) roleFor(roles, groups []string) (Role, bool) {
 	return HighestRole(append(append([]string{}, roles...), groups...), a.cfg.RoleMap)
 }
@@ -141,6 +148,7 @@ func parseJWTClaims(jwt string) (entraClaims, error) {
 	return c, json.Unmarshal(payload, &c)
 }
 
+// firstNonEmpty returns the first non-empty string in vals, or "".
 func firstNonEmpty(vals ...string) string {
 	for _, v := range vals {
 		if v != "" {

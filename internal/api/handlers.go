@@ -39,6 +39,8 @@ type targetIn struct {
 	RequireApproval bool   `json:"require_approval"`
 }
 
+// createTarget validates and persists a new target (defaulting the port to 22),
+// then audits the creation.
 func (s *Server) createTarget(w http.ResponseWriter, r *http.Request) {
 	var in targetIn
 	if !readJSON(w, r, &in) {
@@ -70,6 +72,7 @@ func (s *Server) createTarget(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, t)
 }
 
+// listTargets returns all targets in the inventory.
 func (s *Server) listTargets(w http.ResponseWriter, r *http.Request) {
 	targets, err := s.store.ListTargets(r.Context())
 	if err != nil {
@@ -79,6 +82,7 @@ func (s *Server) listTargets(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, targets)
 }
 
+// getTarget returns a single target by its {id} path value.
 func (s *Server) getTarget(w http.ResponseWriter, r *http.Request) {
 	id, ok := idParam(w, r)
 	if !ok {
@@ -92,6 +96,8 @@ func (s *Server) getTarget(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, t)
 }
 
+// deleteTarget removes a target by id (its credentials cascade in the store) and
+// audits the deletion.
 func (s *Server) deleteTarget(w http.ResponseWriter, r *http.Request) {
 	id, ok := idParam(w, r)
 	if !ok {
@@ -112,6 +118,8 @@ type grantIn struct {
 	Subject     string `json:"subject"`
 }
 
+// createTargetGrant adds a per-target access grant for a user or role (validating
+// the subject, and that a role subject is a known role) and audits it.
 func (s *Server) createTargetGrant(w http.ResponseWriter, r *http.Request) {
 	id, ok := idParam(w, r)
 	if !ok {
@@ -144,6 +152,7 @@ func (s *Server) createTargetGrant(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, g)
 }
 
+// listTargetGrants returns the access grants for a target.
 func (s *Server) listTargetGrants(w http.ResponseWriter, r *http.Request) {
 	id, ok := idParam(w, r)
 	if !ok {
@@ -157,6 +166,8 @@ func (s *Server) listTargetGrants(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, grants)
 }
 
+// deleteTargetGrant removes a target access grant by its {gid} path value and
+// audits it.
 func (s *Server) deleteTargetGrant(w http.ResponseWriter, r *http.Request) {
 	gid, err := strconv.ParseInt(r.PathValue("gid"), 10, 64)
 	if err != nil || gid < 1 {
@@ -190,6 +201,9 @@ type credentialIn struct {
 	SecretType string `json:"secret_type"`
 }
 
+// createCredential vaults a secret for a target, encrypting it under the target's
+// AAD (defaulting the type to password), and audits it. The stored ciphertext is
+// never returned to the client.
 func (s *Server) createCredential(w http.ResponseWriter, r *http.Request) {
 	var in credentialIn
 	if !readJSON(w, r, &in) {
@@ -225,6 +239,8 @@ func (s *Server) createCredential(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, c)
 }
 
+// listCredentials returns credentials, optionally scoped to ?target_id=. Secret
+// material is never included in the response.
 func (s *Server) listCredentials(w http.ResponseWriter, r *http.Request) {
 	var targetID int64
 	if q := r.URL.Query().Get("target_id"); q != "" {
@@ -278,6 +294,7 @@ func (s *Server) revealCredential(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// deleteCredential removes a credential by id and audits it.
 func (s *Server) deleteCredential(w http.ResponseWriter, r *http.Request) {
 	id, ok := idParam(w, r)
 	if !ok {
@@ -400,6 +417,8 @@ func (s *Server) recordWinRM(target *store.Target, credUser, actor, command stri
 	return path, hashHex(transcript)
 }
 
+// sanitizeName reduces a string to filename-safe characters (alphanumerics and
+// -_.@), replacing anything else with a dash.
 func sanitizeName(s string) string {
 	var b strings.Builder
 	for _, c := range s {
@@ -534,6 +553,8 @@ func (s *Server) checkSecondFactor(ctx context.Context, username string, enr *st
 	return false
 }
 
+// hashHex returns the hex-encoded SHA-256 of s. Used to derive the lookup hashes
+// stored for session/user tokens and recovery codes (plaintext is never stored).
 func hashHex(s string) string {
 	sum := sha256.Sum256([]byte(s))
 	return hex.EncodeToString(sum[:])
@@ -714,6 +735,7 @@ func (s *Server) createUser(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// listUsers returns all local users; token hashes are never serialized.
 func (s *Server) listUsers(w http.ResponseWriter, r *http.Request) {
 	users, err := s.store.ListUsers(r.Context())
 	if err != nil {
@@ -723,6 +745,7 @@ func (s *Server) listUsers(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, users)
 }
 
+// deleteUser removes a user by id and audits it.
 func (s *Server) deleteUser(w http.ResponseWriter, r *http.Request) {
 	id, ok := idParam(w, r)
 	if !ok {
@@ -736,6 +759,7 @@ func (s *Server) deleteUser(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// generateToken returns a new random access token with the "pamt_" prefix.
 func generateToken() (string, error) {
 	b := make([]byte, 24)
 	if _, err := rand.Read(b); err != nil {
@@ -746,6 +770,8 @@ func generateToken() (string, error) {
 
 // --- live sessions (listing + kill-switch) ---
 
+// listSessions returns the live proxy/RDP sessions, or an empty list when no
+// session registry is wired.
 func (s *Server) listSessions(w http.ResponseWriter, r *http.Request) {
 	if s.sessions == nil {
 		writeJSON(w, http.StatusOK, []any{})
@@ -754,6 +780,8 @@ func (s *Server) listSessions(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, s.sessions.List())
 }
 
+// killSession terminates a live session by id via the registry and audits it; an
+// unknown session id is a 404.
 func (s *Server) killSession(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	if s.sessions == nil || !s.sessions.Kill(id) {
@@ -766,6 +794,7 @@ func (s *Server) killSession(w http.ResponseWriter, r *http.Request) {
 
 // --- audit ---
 
+// listAudit returns recent audit events, capped by ?limit= (default 100).
 func (s *Server) listAudit(w http.ResponseWriter, r *http.Request) {
 	limit := 100
 	if q := r.URL.Query().Get("limit"); q != "" {
@@ -783,16 +812,20 @@ func (s *Server) listAudit(w http.ResponseWriter, r *http.Request) {
 
 // --- helpers ---
 
+// writeJSON writes v as a JSON response body with the given status code.
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(v)
 }
 
+// writeError writes a JSON {"error": msg} body with the given status code.
 func writeError(w http.ResponseWriter, status int, msg string) {
 	writeJSON(w, status, map[string]string{"error": msg})
 }
 
+// readJSON decodes the request body (capped at 1 MiB) into v, writing a 400 and
+// returning false on a decode failure.
 func readJSON(w http.ResponseWriter, r *http.Request, v any) bool {
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(v); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid JSON body")
@@ -801,6 +834,8 @@ func readJSON(w http.ResponseWriter, r *http.Request, v any) bool {
 	return true
 }
 
+// idParam parses the {id} path value as a positive int64, writing a 422 and
+// returning false when it is missing or invalid.
 func idParam(w http.ResponseWriter, r *http.Request) (int64, bool) {
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil || id < 1 {
@@ -810,6 +845,8 @@ func idParam(w http.ResponseWriter, r *http.Request) (int64, bool) {
 	return id, true
 }
 
+// storeError maps a store error to an HTTP response: ErrNotFound to 404,
+// ErrConflict to 409, and anything else to 500 (logged).
 func storeError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, store.ErrNotFound):

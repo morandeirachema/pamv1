@@ -27,6 +27,7 @@ type Memstore struct {
 	audit      []store.AuditEvent
 }
 
+// New returns an empty in-memory store ready for use.
 func New() *Memstore {
 	return &Memstore{
 		targets:   make(map[int64]store.Target),
@@ -41,11 +42,13 @@ func New() *Memstore {
 	}
 }
 
+// id returns the next monotonically increasing identity; the caller holds the lock.
 func (m *Memstore) id() int64 {
 	m.nextID++
 	return m.nextID
 }
 
+// CreateTarget inserts a target, assigning its ID and CreatedAt; ErrConflict if the name is taken.
 func (m *Memstore) CreateTarget(_ context.Context, t *store.Target) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -60,6 +63,7 @@ func (m *Memstore) CreateTarget(_ context.Context, t *store.Target) error {
 	return nil
 }
 
+// ListTargets returns all targets ordered by ID.
 func (m *Memstore) ListTargets(_ context.Context) ([]store.Target, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -71,6 +75,7 @@ func (m *Memstore) ListTargets(_ context.Context) ([]store.Target, error) {
 	return out, nil
 }
 
+// GetTarget returns the target with the given ID, or ErrNotFound.
 func (m *Memstore) GetTarget(_ context.Context, id int64) (*store.Target, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -81,6 +86,8 @@ func (m *Memstore) GetTarget(_ context.Context, id int64) (*store.Target, error)
 	return &t, nil
 }
 
+// DeleteTarget removes a target and cascades to its credentials, grants, and
+// access requests; ErrNotFound if the target is absent.
 func (m *Memstore) DeleteTarget(_ context.Context, id int64) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -106,6 +113,8 @@ func (m *Memstore) DeleteTarget(_ context.Context, id int64) error {
 	return nil
 }
 
+// CreateTargetGrant adds a grant for an existing target; ErrNotFound if the
+// target is missing, ErrConflict if an identical grant already exists.
 func (m *Memstore) CreateTargetGrant(_ context.Context, g *store.TargetGrant) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -122,6 +131,7 @@ func (m *Memstore) CreateTargetGrant(_ context.Context, g *store.TargetGrant) er
 	return nil
 }
 
+// ListTargetGrants returns the grants for a target, ordered by ID.
 func (m *Memstore) ListTargetGrants(_ context.Context, targetID int64) ([]store.TargetGrant, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -135,6 +145,7 @@ func (m *Memstore) ListTargetGrants(_ context.Context, targetID int64) ([]store.
 	return out, nil
 }
 
+// DeleteTargetGrant removes a grant by ID; ErrNotFound if absent.
 func (m *Memstore) DeleteTargetGrant(_ context.Context, id int64) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -145,6 +156,8 @@ func (m *Memstore) DeleteTargetGrant(_ context.Context, id int64) error {
 	return nil
 }
 
+// CreateAccessRequest records a new request (defaulting status to pending) for
+// an existing target; ErrNotFound if the target is missing.
 func (m *Memstore) CreateAccessRequest(_ context.Context, ar *store.AccessRequest) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -160,6 +173,7 @@ func (m *Memstore) CreateAccessRequest(_ context.Context, ar *store.AccessReques
 	return nil
 }
 
+// GetAccessRequest returns the access request with the given ID, or ErrNotFound.
 func (m *Memstore) GetAccessRequest(_ context.Context, id int64) (*store.AccessRequest, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -170,6 +184,8 @@ func (m *Memstore) GetAccessRequest(_ context.Context, id int64) (*store.AccessR
 	return &ar, nil
 }
 
+// ListAccessRequests returns requests with the given status (all when status is
+// ""), ordered by ID.
 func (m *Memstore) ListAccessRequests(_ context.Context, status string) ([]store.AccessRequest, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -183,6 +199,8 @@ func (m *Memstore) ListAccessRequests(_ context.Context, status string) ([]store
 	return out, nil
 }
 
+// DecideAccessRequest records an approve/deny decision, approver, and decision
+// time; ErrNotFound if the request is missing.
 func (m *Memstore) DecideAccessRequest(_ context.Context, id int64, status, approver string, decidedAt time.Time) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -198,6 +216,8 @@ func (m *Memstore) DecideAccessRequest(_ context.Context, id int64, status, appr
 	return nil
 }
 
+// HasActiveApproval reports whether requester has an approved, unexpired request
+// for targetID as of now.
 func (m *Memstore) HasActiveApproval(_ context.Context, requester string, targetID int64, now time.Time) (bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -210,6 +230,8 @@ func (m *Memstore) HasActiveApproval(_ context.Context, requester string, target
 	return false, nil
 }
 
+// activeCheckoutLocked returns the credential's active (unreturned, unexpired)
+// checkout, if any; the caller holds the lock.
 func (m *Memstore) activeCheckoutLocked(credentialID int64, now time.Time) (store.Checkout, bool) {
 	for _, co := range m.checkouts {
 		if co.CredentialID == credentialID && co.ReturnedAt == nil && now.Before(co.ExpiresAt) {
@@ -219,6 +241,8 @@ func (m *Memstore) activeCheckoutLocked(credentialID int64, now time.Time) (stor
 	return store.Checkout{}, false
 }
 
+// CreateCheckout leases a credential; ErrNotFound if the credential is missing,
+// ErrConflict if it already has an active checkout as of now.
 func (m *Memstore) CreateCheckout(_ context.Context, co *store.Checkout, now time.Time) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -234,6 +258,7 @@ func (m *Memstore) CreateCheckout(_ context.Context, co *store.Checkout, now tim
 	return nil
 }
 
+// GetActiveCheckout returns the credential's active checkout as of now, or ErrNotFound.
 func (m *Memstore) GetActiveCheckout(_ context.Context, credentialID int64, now time.Time) (*store.Checkout, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -243,6 +268,7 @@ func (m *Memstore) GetActiveCheckout(_ context.Context, credentialID int64, now 
 	return nil, store.ErrNotFound
 }
 
+// CheckinCheckout marks a checkout returned; ErrNotFound if missing or already returned.
 func (m *Memstore) CheckinCheckout(_ context.Context, id int64, at time.Time) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -256,6 +282,8 @@ func (m *Memstore) CheckinCheckout(_ context.Context, id int64, at time.Time) er
 	return nil
 }
 
+// ListCheckouts returns checkouts ordered by ID; activeOnly limits to
+// unreturned, unexpired ones as of now.
 func (m *Memstore) ListCheckouts(_ context.Context, activeOnly bool, now time.Time) ([]store.Checkout, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -270,6 +298,8 @@ func (m *Memstore) ListCheckouts(_ context.Context, activeOnly bool, now time.Ti
 	return out, nil
 }
 
+// CreateCredential inserts a credential for an existing target, assigning its ID
+// and CreatedAt; ErrNotFound if the target is missing.
 func (m *Memstore) CreateCredential(_ context.Context, c *store.Credential) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -282,6 +312,8 @@ func (m *Memstore) CreateCredential(_ context.Context, c *store.Credential) erro
 	return nil
 }
 
+// ListCredentials returns credentials for one target, or all when targetID is 0,
+// ordered by ID.
 func (m *Memstore) ListCredentials(_ context.Context, targetID int64) ([]store.Credential, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -295,6 +327,7 @@ func (m *Memstore) ListCredentials(_ context.Context, targetID int64) ([]store.C
 	return out, nil
 }
 
+// GetCredential returns the credential with the given ID, or ErrNotFound.
 func (m *Memstore) GetCredential(_ context.Context, id int64) (*store.Credential, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -305,6 +338,8 @@ func (m *Memstore) GetCredential(_ context.Context, id int64) (*store.Credential
 	return &c, nil
 }
 
+// UpdateCredentialSecretEnc replaces a credential's encrypted secret without
+// touching rotated_at; ErrNotFound if absent.
 func (m *Memstore) UpdateCredentialSecretEnc(_ context.Context, id int64, secretEnc string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -317,6 +352,8 @@ func (m *Memstore) UpdateCredentialSecretEnc(_ context.Context, id int64, secret
 	return nil
 }
 
+// RotateCredentialSecret replaces the encrypted secret and stamps rotated_at;
+// ErrNotFound if absent.
 func (m *Memstore) RotateCredentialSecret(_ context.Context, id int64, secretEnc string, rotatedAt time.Time) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -331,6 +368,7 @@ func (m *Memstore) RotateCredentialSecret(_ context.Context, id int64, secretEnc
 	return nil
 }
 
+// DeleteCredential removes a credential by ID; ErrNotFound if absent.
 func (m *Memstore) DeleteCredential(_ context.Context, id int64) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -341,6 +379,7 @@ func (m *Memstore) DeleteCredential(_ context.Context, id int64) error {
 	return nil
 }
 
+// AppendAudit appends an audit event, assigning its ID and timestamp.
 func (m *Memstore) AppendAudit(_ context.Context, e *store.AuditEvent) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -350,6 +389,7 @@ func (m *Memstore) AppendAudit(_ context.Context, e *store.AuditEvent) error {
 	return nil
 }
 
+// ListAudit returns up to limit audit events, newest first (all when limit <= 0).
 func (m *Memstore) ListAudit(_ context.Context, limit int) ([]store.AuditEvent, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -364,6 +404,8 @@ func (m *Memstore) ListAudit(_ context.Context, limit int) ([]store.AuditEvent, 
 	return out, nil
 }
 
+// ExportAudit returns audit events with since <= ts < until, oldest-first; a
+// zero since means from the beginning and a zero until means up to now.
 func (m *Memstore) ExportAudit(_ context.Context, since, until time.Time) ([]store.AuditEvent, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -379,6 +421,7 @@ func (m *Memstore) ExportAudit(_ context.Context, since, until time.Time) ([]sto
 	return out, nil
 }
 
+// CreateUser inserts a user, assigning its ID and CreatedAt; ErrConflict if the username is taken.
 func (m *Memstore) CreateUser(_ context.Context, u *store.User) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -393,6 +436,7 @@ func (m *Memstore) CreateUser(_ context.Context, u *store.User) error {
 	return nil
 }
 
+// ListUsers returns all users ordered by ID.
 func (m *Memstore) ListUsers(_ context.Context) ([]store.User, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -404,6 +448,7 @@ func (m *Memstore) ListUsers(_ context.Context) ([]store.User, error) {
 	return out, nil
 }
 
+// GetUserByTokenHash returns the user whose token hash matches, or ErrNotFound.
 func (m *Memstore) GetUserByTokenHash(_ context.Context, tokenHashHex string) (*store.User, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -415,6 +460,7 @@ func (m *Memstore) GetUserByTokenHash(_ context.Context, tokenHashHex string) (*
 	return nil, store.ErrNotFound
 }
 
+// DeleteUser removes a user by ID; ErrNotFound if absent.
 func (m *Memstore) DeleteUser(_ context.Context, id int64) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -425,6 +471,7 @@ func (m *Memstore) DeleteUser(_ context.Context, id int64) error {
 	return nil
 }
 
+// CreateSession inserts a session, assigning its ID and CreatedAt.
 func (m *Memstore) CreateSession(_ context.Context, s *store.Session) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -434,6 +481,8 @@ func (m *Memstore) CreateSession(_ context.Context, s *store.Session) error {
 	return nil
 }
 
+// GetSessionByTokenHash returns a non-expired session matching the token hash,
+// or ErrNotFound.
 func (m *Memstore) GetSessionByTokenHash(_ context.Context, tokenHashHex string) (*store.Session, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -449,6 +498,7 @@ func (m *Memstore) GetSessionByTokenHash(_ context.Context, tokenHashHex string)
 	return nil, store.ErrNotFound
 }
 
+// DeleteSession removes the session with the given token hash; ErrNotFound if absent.
 func (m *Memstore) DeleteSession(_ context.Context, tokenHashHex string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -461,6 +511,7 @@ func (m *Memstore) DeleteSession(_ context.Context, tokenHashHex string) error {
 	return store.ErrNotFound
 }
 
+// UpsertMFAEnrollment creates or replaces a user's TOTP enrollment.
 func (m *Memstore) UpsertMFAEnrollment(_ context.Context, e *store.MFAEnrollment) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -471,6 +522,7 @@ func (m *Memstore) UpsertMFAEnrollment(_ context.Context, e *store.MFAEnrollment
 	return nil
 }
 
+// GetMFAEnrollment returns a user's TOTP enrollment, or ErrNotFound.
 func (m *Memstore) GetMFAEnrollment(_ context.Context, username string) (*store.MFAEnrollment, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -481,6 +533,7 @@ func (m *Memstore) GetMFAEnrollment(_ context.Context, username string) (*store.
 	return &e, nil
 }
 
+// ListMFAEnrollments returns all enrollments ordered by username.
 func (m *Memstore) ListMFAEnrollments(_ context.Context) ([]store.MFAEnrollment, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -492,6 +545,8 @@ func (m *Memstore) ListMFAEnrollments(_ context.Context) ([]store.MFAEnrollment,
 	return out, nil
 }
 
+// DeleteMFAEnrollment removes a user's enrollment and any recovery codes;
+// ErrNotFound if the enrollment is absent.
 func (m *Memstore) DeleteMFAEnrollment(_ context.Context, username string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -503,6 +558,8 @@ func (m *Memstore) DeleteMFAEnrollment(_ context.Context, username string) error
 	return nil
 }
 
+// ReplaceMFARecoveryCodes stores a fresh set of recovery-code hashes for a user,
+// discarding any previous set.
 func (m *Memstore) ReplaceMFARecoveryCodes(_ context.Context, username string, codeHashes []string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -514,6 +571,8 @@ func (m *Memstore) ReplaceMFARecoveryCodes(_ context.Context, username string, c
 	return nil
 }
 
+// ConsumeMFARecoveryCode removes a matching unused recovery code and reports
+// whether one was consumed.
 func (m *Memstore) ConsumeMFARecoveryCode(_ context.Context, username, codeHash string) (bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -525,6 +584,7 @@ func (m *Memstore) ConsumeMFARecoveryCode(_ context.Context, username, codeHash 
 	return true, nil
 }
 
+// CountMFARecoveryCodes returns how many recovery codes remain for a user.
 func (m *Memstore) CountMFARecoveryCodes(_ context.Context, username string) (int, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -536,6 +596,8 @@ type oidcState struct {
 	expiresAt       time.Time
 }
 
+// PutOIDCState stores PKCE verifier/nonce state for an OIDC login, sweeping
+// expired entries first.
 func (m *Memstore) PutOIDCState(_ context.Context, state, verifier, nonce string, expiresAt time.Time) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -552,6 +614,8 @@ func (m *Memstore) PutOIDCState(_ context.Context, state, verifier, nonce string
 	return nil
 }
 
+// TakeOIDCState atomically fetches and deletes an unexpired state; ok is false
+// if it is missing or expired.
 func (m *Memstore) TakeOIDCState(_ context.Context, state string, now time.Time) (string, string, bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -565,6 +629,8 @@ func (m *Memstore) TakeOIDCState(_ context.Context, state string, now time.Time)
 	return s.verifier, s.nonce, true, nil
 }
 
+// Ping always succeeds for the in-memory store.
 func (m *Memstore) Ping(_ context.Context) error { return nil }
 
+// Close is a no-op for the in-memory store.
 func (m *Memstore) Close() {}

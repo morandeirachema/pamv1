@@ -70,6 +70,7 @@ func newTestServerOpts(t *testing.T, authn auth.Authenticator, opts api.Options)
 	return srv, st
 }
 
+// newTestServer returns a running server with the default (no-authenticator) options.
 func newTestServer(t *testing.T) *httptest.Server {
 	t.Helper()
 	srv, _ := newTestServerStore(t)
@@ -91,6 +92,8 @@ func seedUser(t *testing.T, srv *httptest.Server, username, role string) string 
 	return tok
 }
 
+// do issues an HTTP request with an optional X-API-Key and JSON body, returning
+// the response status and raw body.
 func do(t *testing.T, srv *httptest.Server, method, path, apiKey string, body any) (int, []byte) {
 	t.Helper()
 	var buf io.Reader
@@ -120,6 +123,7 @@ func do(t *testing.T, srv *httptest.Server, method, path, apiKey string, body an
 	return resp.StatusCode, data
 }
 
+// jsonMap unmarshals a JSON object body into a map, failing the test on error.
 func jsonMap(t *testing.T, data []byte) map[string]any {
 	t.Helper()
 	var m map[string]any
@@ -129,6 +133,7 @@ func jsonMap(t *testing.T, data []byte) map[string]any {
 	return m
 }
 
+// TestHealthzIsOpen verifies the liveness probe requires no authentication.
 func TestHealthzIsOpen(t *testing.T) {
 	srv := newTestServer(t)
 	status, _ := do(t, srv, http.MethodGet, "/healthz", "", nil)
@@ -137,6 +142,7 @@ func TestHealthzIsOpen(t *testing.T) {
 	}
 }
 
+// TestAuthRequired verifies API endpoints reject a missing or wrong key with 401.
 func TestAuthRequired(t *testing.T) {
 	srv := newTestServer(t)
 	for _, key := range []string{"", "wrong-key"} {
@@ -147,6 +153,9 @@ func TestAuthRequired(t *testing.T) {
 	}
 }
 
+// TestFullFlow exercises the target -> credential -> reveal -> audit -> delete
+// happy path, and confirms secrets never leak in create/list responses and that
+// credentials cascade when their target is deleted.
 func TestFullFlow(t *testing.T) {
 	srv := newTestServer(t)
 
@@ -198,6 +207,7 @@ func TestFullFlow(t *testing.T) {
 	}
 }
 
+// TestBreakGlass verifies the break-glass key authenticates and every use is audited.
 func TestBreakGlass(t *testing.T) {
 	srv := newTestServer(t)
 	status, _ := do(t, srv, http.MethodGet, "/api/targets", breakGlassKey, nil)
@@ -211,6 +221,8 @@ func TestBreakGlass(t *testing.T) {
 	}
 }
 
+// TestValidationAndConflicts covers input validation (bad os_type) and the
+// duplicate-name conflict on target creation.
 func TestValidationAndConflicts(t *testing.T) {
 	srv := newTestServer(t)
 	status, _ := do(t, srv, http.MethodPost, "/api/targets", testAPIKey, map[string]any{
@@ -228,6 +240,8 @@ func TestValidationAndConflicts(t *testing.T) {
 	}
 }
 
+// TestRBAC checks each role's capability matrix across the management, reveal,
+// audit and users endpoints.
 func TestRBAC(t *testing.T) {
 	srv := newTestServer(t)
 
@@ -287,6 +301,8 @@ type fakeAuthenticator struct {
 	role               auth.Role
 }
 
+// Authenticate returns the configured principal when the credentials match, else
+// ErrUnauthorized.
 func (f fakeAuthenticator) Authenticate(_ context.Context, u, p string) (*auth.Principal, error) {
 	if u == f.username && p == f.password {
 		return &auth.Principal{Name: u, Role: f.role}, nil
@@ -294,6 +310,8 @@ func (f fakeAuthenticator) Authenticate(_ context.Context, u, p string) (*auth.P
 	return nil, auth.ErrUnauthorized
 }
 
+// TestLoginSession verifies password login issues a role-scoped session token
+// that authenticates like any identity and can be revoked by logout.
 func TestLoginSession(t *testing.T) {
 	srv, _ := newTestServerAuthn(t, fakeAuthenticator{username: "ad-alice", password: "pw", role: auth.RoleUser})
 
@@ -337,6 +355,8 @@ func TestLoginSession(t *testing.T) {
 	}
 }
 
+// TestMFAEnrollmentAndLogin walks enrollment, then proves login requires a valid
+// OTP once MFA is confirmed (and rejects a wrong code).
 func TestMFAEnrollmentAndLogin(t *testing.T) {
 	srv, _ := newTestServerAuthn(t, fakeAuthenticator{username: "ad-alice", password: "pw", role: auth.RoleUser})
 
@@ -385,8 +405,8 @@ func TestMFAEnrollmentAndLogin(t *testing.T) {
 	}
 }
 
-// enrollAndConfirmMFA logs in, enrolls MFA and confirms it, returning the
-// TOTP secret and a full (post-enrollment) session token.
+// enrollMFA enrolls and confirms MFA for the given session token, returning the
+// TOTP secret.
 func enrollMFA(t *testing.T, srv *httptest.Server, sessTok string) string {
 	t.Helper()
 	status, data := do(t, srv, http.MethodPost, "/api/mfa/enroll", sessTok, nil)
@@ -401,6 +421,9 @@ func enrollMFA(t *testing.T, srv *httptest.Server, sessTok string) string {
 	return secret
 }
 
+// TestEnforceMFAPolicy verifies that with MFARequired an un-enrolled user gets an
+// enrollment-only session (blocked from everything else) and gains full access
+// only after enrolling and presenting an OTP.
 func TestEnforceMFAPolicy(t *testing.T) {
 	srv, _ := newTestServerOpts(t,
 		fakeAuthenticator{username: "ad-alice", password: "pw", role: auth.RoleUser},
@@ -436,6 +459,8 @@ func TestEnforceMFAPolicy(t *testing.T) {
 	}
 }
 
+// TestRecoveryCodes verifies a recovery code can stand in for the OTP once and is
+// then single-use.
 func TestRecoveryCodes(t *testing.T) {
 	srv, _ := newTestServerAuthn(t, fakeAuthenticator{username: "ad-alice", password: "pw", role: auth.RoleUser})
 
@@ -467,6 +492,9 @@ func TestRecoveryCodes(t *testing.T) {
 	}
 }
 
+// TestTargetGrantsEnforcement verifies per-target grants gate access: open with
+// no grants, denied when granted only to others, allowed by a user or role grant,
+// plus grant listing and role validation.
 func TestTargetGrantsEnforcement(t *testing.T) {
 	fake := &fakeWinRM{result: winrm.Result{Stdout: "ok\n"}}
 	srv, _ := newTestServerOpts(t, nil, api.Options{WinRM: fake})
@@ -514,6 +542,8 @@ func TestTargetGrantsEnforcement(t *testing.T) {
 	}
 }
 
+// TestLiveSessionsAndKill verifies auditors can list live sessions, only admins
+// can kill them (invoking the registered kill func), and an unknown id is a 404.
 func TestLiveSessionsAndKill(t *testing.T) {
 	reg := session.NewRegistry()
 	srv, _ := newTestServerOpts(t, nil, api.Options{Sessions: reg})
@@ -547,6 +577,8 @@ func TestLiveSessionsAndKill(t *testing.T) {
 	}
 }
 
+// TestRevealDisabledByPolicy verifies reveal is refused under policy for a normal
+// admin but still permitted for break-glass.
 func TestRevealDisabledByPolicy(t *testing.T) {
 	srv, _ := newTestServerOpts(t, nil, api.Options{RevealDisabled: true})
 	_, data := do(t, srv, http.MethodPost, "/api/targets", testAPIKey, map[string]any{
@@ -568,6 +600,7 @@ func TestRevealDisabledByPolicy(t *testing.T) {
 	}
 }
 
+// TestSecurityHeaders verifies the baseline hardening headers are set on responses.
 func TestSecurityHeaders(t *testing.T) {
 	srv := newTestServer(t)
 	_, _ = do(t, srv, http.MethodGet, "/healthz", "", nil)
@@ -592,6 +625,8 @@ func TestSecurityHeaders(t *testing.T) {
 	}
 }
 
+// TestAuthRateLimit verifies the per-IP limiter blocks login attempts past the
+// configured per-minute budget with 429.
 func TestAuthRateLimit(t *testing.T) {
 	srv, _ := newTestServerOpts(t,
 		fakeAuthenticator{username: "u", password: "p", role: auth.RoleUser},
@@ -612,6 +647,8 @@ func TestAuthRateLimit(t *testing.T) {
 	}
 }
 
+// TestLoginNotConfigured verifies login returns 503 when no password
+// authenticator is wired.
 func TestLoginNotConfigured(t *testing.T) {
 	srv := newTestServer(t) // no authenticator
 	if status, _ := do(t, srv, http.MethodPost, "/api/login", "", map[string]any{
@@ -629,11 +666,14 @@ type fakeWinRM struct {
 	err                               error
 }
 
+// Run records the dial parameters and command, then returns the canned result/error.
 func (f *fakeWinRM) Run(_ context.Context, host string, port int, user, password, command string) (winrm.Result, error) {
 	f.gotHost, f.gotPort, f.gotUser, f.gotPass, f.gotCmd = host, port, user, password, command
 	return f.result, f.err
 }
 
+// TestWinRMRun proves JIT injection: the vaulted secret and username reach the
+// runner (never the client), the run is audited, and a transcript is recorded.
 func TestWinRMRun(t *testing.T) {
 	fake := &fakeWinRM{result: winrm.Result{Stdout: "contoso\\Administrator\r\n", ExitCode: 0}}
 	recDir := t.TempDir()
@@ -681,6 +721,8 @@ func TestWinRMRun(t *testing.T) {
 	}
 }
 
+// TestWinRMRejectsNonWindowsTarget verifies a WinRM run against a non-WinRM
+// target is rejected with 422.
 func TestWinRMRejectsNonWindowsTarget(t *testing.T) {
 	srv, _ := newTestServerOpts(t, nil, api.Options{WinRM: &fakeWinRM{}})
 	_, data := do(t, srv, http.MethodPost, "/api/targets", testAPIKey, map[string]any{
@@ -693,6 +735,8 @@ func TestWinRMRejectsNonWindowsTarget(t *testing.T) {
 	}
 }
 
+// TestWinRMRequiresConnectCapability verifies a role without CapConnect (auditor)
+// cannot run WinRM commands.
 func TestWinRMRequiresConnectCapability(t *testing.T) {
 	srv, _ := newTestServerOpts(t, nil, api.Options{WinRM: &fakeWinRM{}})
 	auditorTok := seedUser(t, srv, "theo", "auditor")
@@ -706,6 +750,7 @@ func TestWinRMRequiresConnectCapability(t *testing.T) {
 	}
 }
 
+// itoa formats an int64 as a decimal string.
 func itoa(n int64) string {
 	return strconv.FormatInt(n, 10)
 }

@@ -6,11 +6,14 @@ import (
 	"testing"
 )
 
+// hexSHA returns the hex-encoded SHA-256 of s.
 func hexSHA(s string) string {
 	sum := sha256.Sum256([]byte(s))
 	return hex.EncodeToString(sum[:])
 }
 
+// TestRecordChain verifies each link is SHA-256(prevChain||fileHash) and that
+// the chain head persists across a reload of the same directory.
 func TestRecordChain(t *testing.T) {
 	dir := t.TempDir()
 	c := newRecordChain(dir)

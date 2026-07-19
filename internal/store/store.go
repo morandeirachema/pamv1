@@ -137,14 +137,20 @@ type MFAEnrollment struct {
 }
 
 type Store interface {
+	// CreateTarget inserts a target, populating its ID and CreatedAt.
 	CreateTarget(ctx context.Context, t *Target) error
+	// ListTargets returns all targets.
 	ListTargets(ctx context.Context) ([]Target, error)
+	// GetTarget returns one target by ID, or ErrNotFound.
 	GetTarget(ctx context.Context, id int64) (*Target, error)
+	// DeleteTarget removes a target (cascading to its dependents), or ErrNotFound.
 	DeleteTarget(ctx context.Context, id int64) error
 
+	// CreateCredential inserts a credential for a target, or ErrNotFound if the target is missing.
 	CreateCredential(ctx context.Context, c *Credential) error
 	// ListCredentials returns credentials for one target, or all when targetID is 0.
 	ListCredentials(ctx context.Context, targetID int64) ([]Credential, error)
+	// GetCredential returns one credential by ID, or ErrNotFound.
 	GetCredential(ctx context.Context, id int64) (*Credential, error)
 	// UpdateCredentialSecretEnc replaces a credential's encrypted secret (used
 	// by vault key rotation). It deliberately does NOT touch rotated_at — a KEK
@@ -154,14 +160,19 @@ type Store interface {
 	// (used by the credential-lifecycle rotation, where the secret on the target
 	// actually changed).
 	RotateCredentialSecret(ctx context.Context, id int64, secretEnc string, rotatedAt time.Time) error
+	// DeleteCredential removes a credential by ID, or ErrNotFound.
 	DeleteCredential(ctx context.Context, id int64) error
 
+	// CreateTargetGrant adds an authorization grant to a target.
 	CreateTargetGrant(ctx context.Context, g *TargetGrant) error
+	// ListTargetGrants returns the grants for a target.
 	ListTargetGrants(ctx context.Context, targetID int64) ([]TargetGrant, error)
+	// DeleteTargetGrant removes a grant by ID, or ErrNotFound.
 	DeleteTargetGrant(ctx context.Context, id int64) error
 
 	// Access requests (4-eyes approval workflow).
 	CreateAccessRequest(ctx context.Context, ar *AccessRequest) error
+	// GetAccessRequest returns one access request by ID, or ErrNotFound.
 	GetAccessRequest(ctx context.Context, id int64) (*AccessRequest, error)
 	// ListAccessRequests returns requests with the given status, or all when
 	// status is "".
@@ -183,27 +194,38 @@ type Store interface {
 	// ListCheckouts lists checkouts; activeOnly limits to unreturned, unexpired ones.
 	ListCheckouts(ctx context.Context, activeOnly bool, now time.Time) ([]Checkout, error)
 
+	// AppendAudit appends an audit event, populating its ID and TS.
 	AppendAudit(ctx context.Context, e *AuditEvent) error
+	// ListAudit returns the most recent audit events, newest first.
 	ListAudit(ctx context.Context, limit int) ([]AuditEvent, error)
 	// ExportAudit returns every audit event with since <= ts < until, ordered
 	// oldest-first (for NIS2 incident-report exports). A zero since means "from
 	// the beginning"; a zero until means "up to now".
 	ExportAudit(ctx context.Context, since, until time.Time) ([]AuditEvent, error)
 
+	// CreateUser inserts a user, populating its ID and CreatedAt.
 	CreateUser(ctx context.Context, u *User) error
+	// ListUsers returns all users.
 	ListUsers(ctx context.Context) ([]User, error)
+	// GetUserByTokenHash returns the user whose token hash matches, or ErrNotFound.
 	GetUserByTokenHash(ctx context.Context, tokenHashHex string) (*User, error)
+	// DeleteUser removes a user by ID, or ErrNotFound.
 	DeleteUser(ctx context.Context, id int64) error
 
+	// CreateSession inserts a login session, populating its ID and CreatedAt.
 	CreateSession(ctx context.Context, s *Session) error
 	// GetSessionByTokenHash returns a non-expired session, or ErrNotFound.
 	GetSessionByTokenHash(ctx context.Context, tokenHashHex string) (*Session, error)
+	// DeleteSession removes the session with the given token hash, or ErrNotFound.
 	DeleteSession(ctx context.Context, tokenHashHex string) error
 
 	// UpsertMFAEnrollment creates or replaces a user's TOTP enrollment.
 	UpsertMFAEnrollment(ctx context.Context, e *MFAEnrollment) error
+	// GetMFAEnrollment returns a user's TOTP enrollment, or ErrNotFound.
 	GetMFAEnrollment(ctx context.Context, username string) (*MFAEnrollment, error)
+	// ListMFAEnrollments returns all TOTP enrollments.
 	ListMFAEnrollments(ctx context.Context) ([]MFAEnrollment, error)
+	// DeleteMFAEnrollment removes a user's enrollment (and recovery codes), or ErrNotFound.
 	DeleteMFAEnrollment(ctx context.Context, username string) error
 
 	// ReplaceMFARecoveryCodes stores a fresh set of recovery-code hashes for a
@@ -225,5 +247,6 @@ type Store interface {
 	// Ping reports whether the backend is reachable (readiness probe).
 	Ping(ctx context.Context) error
 
+	// Close releases the backend's resources.
 	Close()
 }

@@ -80,6 +80,7 @@ func GeneratePassword(n int) (string, error) {
 	return string(out), nil
 }
 
+// pick returns a cryptographically random byte drawn from set.
 func pick(set string) (byte, error) {
 	idx, err := rand.Int(rand.Reader, big.NewInt(int64(len(set))))
 	if err != nil {
@@ -118,6 +119,7 @@ type SSHConnector struct {
 	HostKeyCallback ssh.HostKeyCallback
 }
 
+// timeout returns the configured dial+command timeout, or 15s when unset.
 func (c SSHConnector) timeout() time.Duration {
 	if c.Timeout <= 0 {
 		return 15 * time.Second
@@ -125,6 +127,8 @@ func (c SSHConnector) timeout() time.Duration {
 	return c.Timeout
 }
 
+// dial opens an SSH client to the target as username using password auth,
+// applying the configured host-key callback (InsecureIgnoreHostKey by default).
 func (c SSHConnector) dial(target store.Target, username, secret string) (*ssh.Client, error) {
 	cb := c.HostKeyCallback
 	if cb == nil {

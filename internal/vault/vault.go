@@ -98,6 +98,10 @@ func (v *Vault) Encrypt(ctx context.Context, plaintext, aad string) (string, err
 	return tokenPrefix + base64.RawURLEncoding.EncodeToString(buf), nil
 }
 
+// Decrypt reverses Encrypt: it unwraps the data key via the KEK and opens the
+// AES-256-GCM ciphertext bound to aad. Any failure — unknown version, tampered
+// token, wrong aad, or a KEK/unwrap error — returns ErrInvalidToken without
+// distinguishing the cause.
 func (v *Vault) Decrypt(ctx context.Context, token, aad string) (string, error) {
 	raw, ok := strings.CutPrefix(token, tokenPrefix)
 	if !ok {
@@ -132,6 +136,7 @@ func (v *Vault) Decrypt(ctx context.Context, token, aad string) (string, error) 
 	return string(pt), nil
 }
 
+// newGCM builds an AES-256-GCM AEAD from a 32-byte key.
 func newGCM(key []byte) (cipher.AEAD, error) {
 	block, err := aes.NewCipher(key)
 	if err != nil {
@@ -140,12 +145,14 @@ func newGCM(key []byte) (cipher.AEAD, error) {
 	return cipher.NewGCM(block)
 }
 
+// zero overwrites b with zeros; used to wipe transient key material.
 func zero(b []byte) {
 	for i := range b {
 		b[i] = 0
 	}
 }
 
+// decodeB64 decodes raw-urlsafe base64, tolerating any stray "=" padding.
 func decodeB64(s string) ([]byte, error) {
 	return base64.RawURLEncoding.DecodeString(strings.TrimRight(s, "="))
 }

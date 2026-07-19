@@ -18,6 +18,7 @@ type schedFake struct {
 	actual string
 }
 
+// Rotate records newSecret as the on-target password.
 func (f *schedFake) Rotate(_ context.Context, _ store.Target, _, _, newSecret string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -25,6 +26,8 @@ func (f *schedFake) Rotate(_ context.Context, _ store.Target, _, _, newSecret st
 	return nil
 }
 
+// Verify returns a non-nil error (drift) when secret does not match the
+// on-target password.
 func (f *schedFake) Verify(_ context.Context, _ store.Target, _, secret string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -34,6 +37,8 @@ func (f *schedFake) Verify(_ context.Context, _ store.Target, _, secret string) 
 	return nil
 }
 
+// newSchedTestServer builds a server with one seeded target and password
+// credential wired to the given fake connector, returning the server and credential.
 func newSchedTestServer(t *testing.T, fc *schedFake) (*Server, *store.Credential) {
 	t.Helper()
 	ctx := context.Background()
@@ -72,6 +77,8 @@ func newSchedTestServer(t *testing.T, fc *schedFake) (*Server, *store.Credential
 	return srv, cred
 }
 
+// TestLifecycleWorkerReconcileOnly verifies a report-only pass (maxAge 0) rotates
+// nothing and reports no drift.
 func TestLifecycleWorkerReconcileOnly(t *testing.T) {
 	fc := &schedFake{}
 	srv, _ := newSchedTestServer(t, fc)
@@ -82,6 +89,8 @@ func TestLifecycleWorkerReconcileOnly(t *testing.T) {
 	}
 }
 
+// TestLifecycleWorkerDetectsDrift verifies the pass flags an out-of-band password
+// change as out_of_sync.
 func TestLifecycleWorkerDetectsDrift(t *testing.T) {
 	fc := &schedFake{}
 	srv, _ := newSchedTestServer(t, fc)
@@ -94,6 +103,8 @@ func TestLifecycleWorkerDetectsDrift(t *testing.T) {
 	}
 }
 
+// TestLifecycleWorkerRotatesByMaxAge verifies a credential older than maxAge is
+// rotated and re-vaulted, stamping rotated_at.
 func TestLifecycleWorkerRotatesByMaxAge(t *testing.T) {
 	fc := &schedFake{}
 	srv, cred := newSchedTestServer(t, fc)

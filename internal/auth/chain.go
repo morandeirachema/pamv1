@@ -33,6 +33,8 @@ func NewChain(auths ...Authenticator) Authenticator {
 	}
 }
 
+// Authenticate tries each source in order, returning the first success. An
+// ErrUnauthorized from a source is skipped; any other error is returned at once.
 func (c *ChainAuthenticator) Authenticate(ctx context.Context, username, password string) (*Principal, error) {
 	for _, a := range c.authenticators {
 		p, err := a.Authenticate(ctx, username, password)

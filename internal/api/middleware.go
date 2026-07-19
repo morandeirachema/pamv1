@@ -33,10 +33,14 @@ type window struct {
 	reset time.Time
 }
 
+// newRateLimiter builds a fixed-window limiter allowing perMin requests per key
+// per minute; perMin <= 0 disables limiting.
 func newRateLimiter(perMin int) *rateLimiter {
 	return &rateLimiter{perMin: perMin, hits: make(map[string]*window)}
 }
 
+// allow reports whether a request for key fits within the current minute's
+// budget, opening or advancing the window and incrementing the count as needed.
 func (rl *rateLimiter) allow(key string) bool {
 	if rl.perMin <= 0 {
 		return true // disabled
@@ -69,6 +73,8 @@ func (s *Server) rateLimit(next http.Handler) http.Handler {
 	})
 }
 
+// clientIP extracts the host portion of the request's remote address, falling
+// back to the raw RemoteAddr when it has no port.
 func clientIP(r *http.Request) string {
 	if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
 		return host

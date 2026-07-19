@@ -65,6 +65,10 @@ type Proxy struct {
 	ln net.Listener
 }
 
+// New constructs a Proxy from the store, vault, auth resolver and cfg. It
+// requires a HostKey and resolver, defaults RecordingDir and DialTimeout when
+// unset, and warns loudly (falling back to InsecureIgnoreHostKey) when no
+// upstream host-key callback is supplied.
 func New(st store.Store, v *vault.Vault, resolver *auth.Resolver, cfg Config) (*Proxy, error) {
 	if cfg.HostKey == nil {
 		return nil, errors.New("proxy: HostKey is required")
@@ -179,6 +183,11 @@ func (p *Proxy) Addr() net.Addr {
 	return p.ln.Addr()
 }
 
+// handleConn completes the SSH handshake and runs every authorization gate in
+// order (enrollment, role CapConnect, target/credential resolution, per-target
+// grants and the approval gate) before dialing the upstream with the
+// JIT-decrypted secret and proxying its session channels. Each denial and the
+// session lifecycle are audited.
 func (p *Proxy) handleConn(ctx context.Context, nConn net.Conn) {
 	sconn, chans, reqs, err := ssh.NewServerConn(nConn, p.sshCfg)
 	if err != nil {
@@ -337,6 +346,9 @@ func (p *Proxy) resolve(ctx context.Context, targetName, credUser string) (*stor
 	return target, cred, secret, nil
 }
 
+// dialUpstream opens an SSH client to the target, authenticating with the
+// decrypted secret as either a parsed private key (SecretType "ssh_key") or a
+// password. The upstream host key is checked via the configured callback.
 func (p *Proxy) dialUpstream(target *store.Target, cred *store.Credential, secret string) (*ssh.Client, error) {
 	var auth ssh.AuthMethod
 	switch cred.SecretType {
@@ -358,6 +370,10 @@ func (p *Proxy) dialUpstream(target *store.Target, cred *store.Credential, secre
 	return ssh.Dial("tcp", fmt.Sprintf("%s:%d", target.Host, target.Port), cfg)
 }
 
+// handleSession bridges one client session channel to a freshly opened upstream
+// channel, forwarding channel requests and stdin/stdout/stderr both directions
+// and tee'ing the target's output into an asciicast recording. On close the
+// recording's SHA-256 and its position in the tamper-evident chain are audited.
 func (p *Proxy) handleSession(ctx context.Context, nc ssh.NewChannel, upstream *ssh.Client, target *store.Target, cred *store.Credential, actor string) {
 	clientChan, clientReqs, err := nc.Accept()
 	if err != nil {
@@ -422,12 +438,16 @@ func pumpRequests(in <-chan *ssh.Request, dst ssh.Channel) {
 	}
 }
 
+// rejectAll rejects every pending channel with reason and msg, used to refuse a
+// connection after authentication once a policy gate fails.
 func rejectAll(chans <-chan ssh.NewChannel, reason ssh.RejectionReason, msg string) {
 	for nc := range chans {
 		nc.Reject(reason, msg)
 	}
 }
 
+// audit appends an audit event, defaulting an empty actor to "proxy" and logging
+// (rather than returning) any append failure.
 func (p *Proxy) audit(ctx context.Context, actor, action, detail string) {
 	if actor == "" {
 		actor = "proxy"

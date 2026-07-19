@@ -6,6 +6,8 @@ import (
 	"testing"
 )
 
+// TestLocalKEKRoundtrip proves wrap→unwrap restores the data key and the
+// wrapped blob does not expose the plaintext key.
 func TestLocalKEKRoundtrip(t *testing.T) {
 	ctx := context.Background()
 	key, _ := GenerateMasterKey()
@@ -30,6 +32,7 @@ func TestLocalKEKRoundtrip(t *testing.T) {
 	}
 }
 
+// TestLocalKEKTamper proves a corrupted wrapped key fails to unwrap.
 func TestLocalKEKTamper(t *testing.T) {
 	ctx := context.Background()
 	key, _ := GenerateMasterKey()
@@ -41,6 +44,8 @@ func TestLocalKEKTamper(t *testing.T) {
 	}
 }
 
+// TestNewKEK checks provider selection: local (explicit and default), unknown
+// provider errors, and vault-transit without config errors.
 func TestNewKEK(t *testing.T) {
 	key, _ := GenerateMasterKey()
 

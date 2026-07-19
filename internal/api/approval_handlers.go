@@ -60,10 +60,12 @@ func (s *Server) listAccessRequests(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, reqs)
 }
 
+// approveAccessRequest approves the access request named in the {id} path value.
 func (s *Server) approveAccessRequest(w http.ResponseWriter, r *http.Request) {
 	s.decideAccessRequest(w, r, "approved")
 }
 
+// denyAccessRequest denies the access request named in the {id} path value.
 func (s *Server) denyAccessRequest(w http.ResponseWriter, r *http.Request) {
 	s.decideAccessRequest(w, r, "denied")
 }

@@ -6,6 +6,7 @@ import (
 	"testing"
 )
 
+// newVault builds a local-KEK vault with a fresh master key for tests.
 func newVault(t *testing.T) *Vault {
 	t.Helper()
 	key, err := GenerateMasterKey()
@@ -19,6 +20,8 @@ func newVault(t *testing.T) *Vault {
 	return v
 }
 
+// TestRoundtrip encrypts then decrypts, asserting the version prefix, no
+// plaintext leak, and a faithful round-trip.
 func TestRoundtrip(t *testing.T) {
 	ctx := context.Background()
 	v := newVault(t)
@@ -41,6 +44,7 @@ func TestRoundtrip(t *testing.T) {
 	}
 }
 
+// TestAADBinding proves a token encrypted under one AAD fails to decrypt under another.
 func TestAADBinding(t *testing.T) {
 	ctx := context.Background()
 	v := newVault(t)
@@ -50,6 +54,7 @@ func TestAADBinding(t *testing.T) {
 	}
 }
 
+// TestTamperDetection proves flipping the last token byte breaks decryption.
 func TestTamperDetection(t *testing.T) {
 	ctx := context.Background()
 	v := newVault(t)
@@ -65,6 +70,7 @@ func TestTamperDetection(t *testing.T) {
 	}
 }
 
+// TestUnknownVersion proves a token with an unrecognized version prefix is rejected.
 func TestUnknownVersion(t *testing.T) {
 	v := newVault(t)
 	if _, err := v.Decrypt(context.Background(), "v9:AAAA", "x"); err == nil {
@@ -72,12 +78,15 @@ func TestUnknownVersion(t *testing.T) {
 	}
 }
 
+// TestBadKey proves New rejects a master key that is not a 32-byte value.
 func TestBadKey(t *testing.T) {
 	if _, err := New("too-short"); err == nil {
 		t.Fatal("short master key should be rejected")
 	}
 }
 
+// TestDistinctTokens proves encrypting the same plaintext twice yields different
+// tokens (fresh data key and nonce per call).
 func TestDistinctTokens(t *testing.T) {
 	ctx := context.Background()
 	v := newVault(t)

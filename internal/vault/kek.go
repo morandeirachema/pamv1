@@ -33,6 +33,8 @@ type LocalKEK struct {
 	aead cipher.AEAD
 }
 
+// NewLocalKEK builds a LocalKEK from masterKey, which must be a 32-byte key
+// encoded as urlsafe base64 (as produced by GenerateMasterKey).
 func NewLocalKEK(masterKey string) (*LocalKEK, error) {
 	key, err := decodeB64(masterKey)
 	if err != nil || len(key) != 32 {
@@ -49,6 +51,8 @@ func NewLocalKEK(masterKey string) (*LocalKEK, error) {
 	return &LocalKEK{aead: aead}, nil
 }
 
+// Wrap seals the data key with AES-256-GCM under the local key, prepending a
+// fresh random nonce to the returned blob.
 func (k *LocalKEK) Wrap(_ context.Context, dek []byte) ([]byte, error) {
 	nonce := make([]byte, k.aead.NonceSize())
 	if _, err := rand.Read(nonce); err != nil {
@@ -57,6 +61,8 @@ func (k *LocalKEK) Wrap(_ context.Context, dek []byte) ([]byte, error) {
 	return k.aead.Seal(nonce, nonce, dek, []byte(kekAAD)), nil
 }
 
+// Unwrap reverses Wrap, returning ErrInvalidToken if the blob is too short or
+// fails GCM authentication.
 func (k *LocalKEK) Unwrap(_ context.Context, wrapped []byte) ([]byte, error) {
 	n := k.aead.NonceSize()
 	if len(wrapped) <= n {
@@ -69,6 +75,7 @@ func (k *LocalKEK) Unwrap(_ context.Context, wrapped []byte) ([]byte, error) {
 	return dek, nil
 }
 
+// ID reports the provider identifier ("local").
 func (k *LocalKEK) ID() string { return "local" }
 
 // KEKOptions selects and configures a KEK provider.

@@ -16,6 +16,7 @@ type fakeKMS struct {
 	failEnc bool
 }
 
+// Encrypt fakes KMS encryption by prefixing the plaintext (or fails if failEnc).
 func (f *fakeKMS) Encrypt(_ context.Context, in *kms.EncryptInput, _ ...func(*kms.Options)) (*kms.EncryptOutput, error) {
 	if f.failEnc {
 		return nil, errors.New("kms: access denied")
@@ -24,6 +25,7 @@ func (f *fakeKMS) Encrypt(_ context.Context, in *kms.EncryptInput, _ ...func(*km
 	return &kms.EncryptOutput{CiphertextBlob: blob}, nil
 }
 
+// Decrypt reverses Encrypt by stripping the prefix, erroring on a bad prefix.
 func (f *fakeKMS) Decrypt(_ context.Context, in *kms.DecryptInput, _ ...func(*kms.Options)) (*kms.DecryptOutput, error) {
 	if !bytes.HasPrefix(in.CiphertextBlob, f.prefix) {
 		return nil, errors.New("kms: invalid ciphertext")
@@ -31,6 +33,8 @@ func (f *fakeKMS) Decrypt(_ context.Context, in *kms.DecryptInput, _ ...func(*km
 	return &kms.DecryptOutput{Plaintext: in.CiphertextBlob[len(f.prefix):]}, nil
 }
 
+// TestAWSKMSKEKRoundtrip proves wrap→unwrap round-trips the data key through the
+// (mocked) KMS and the ID is well-formed.
 func TestAWSKMSKEKRoundtrip(t *testing.T) {
 	ctx := context.Background()
 	kek := &AWSKMSKEK{keyID: "arn:aws:kms:...:key/abc", client: &fakeKMS{prefix: []byte("KMS:")}}
@@ -51,6 +55,8 @@ func TestAWSKMSKEKRoundtrip(t *testing.T) {
 	}
 }
 
+// TestVaultOverAWSKMS proves the full envelope path works over a KMS KEK,
+// including AAD binding.
 func TestVaultOverAWSKMS(t *testing.T) {
 	ctx := context.Background()
 	kek := &AWSKMSKEK{keyID: "k", client: &fakeKMS{prefix: []byte("kms:")}}
@@ -68,6 +74,7 @@ func TestVaultOverAWSKMS(t *testing.T) {
 	}
 }
 
+// TestNewKEKAWS proves the aws-kms provider errors without a key id.
 func TestNewKEKAWS(t *testing.T) {
 	// Unknown provider errors; aws-kms without a key id errors.
 	if _, err := NewKEK(KEKOptions{Provider: "aws-kms"}); err == nil {

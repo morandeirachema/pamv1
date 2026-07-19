@@ -8,6 +8,8 @@ import (
 	"time"
 )
 
+// TestInstructionEncode checks the wire encoding and that element lengths count
+// Unicode code points, not bytes.
 func TestInstructionEncode(t *testing.T) {
 	got := Instruction{Opcode: "select", Args: []string{"rdp"}}.Encode()
 	if got != "6.select,3.rdp;" {
@@ -56,6 +58,8 @@ func mockGuacd(t *testing.T, argNames []string, connectCh chan<- []string) strin
 	return ln.Addr().String()
 }
 
+// TestConnectInjectsCredentials checks connect values are supplied in the order
+// guacd advertised its args, with the credential injected.
 func TestConnectInjectsCredentials(t *testing.T) {
 	connectCh := make(chan []string, 1)
 	addr := mockGuacd(t, []string{"hostname", "port", "username", "password", "domain"}, connectCh)
@@ -87,6 +91,8 @@ func TestConnectInjectsCredentials(t *testing.T) {
 	}
 }
 
+// TestConnectRecordingParams checks the recording args, including a derived
+// create-recording-path=true, are populated.
 func TestConnectRecordingParams(t *testing.T) {
 	connectCh := make(chan []string, 1)
 	addr := mockGuacd(t, []string{"recording-path", "recording-name", "create-recording-path"}, connectCh)
@@ -106,6 +112,8 @@ func TestConnectRecordingParams(t *testing.T) {
 	}
 }
 
+// TestConnectUnknownArgsAreEmpty checks Extra fills matching args while unknown
+// args are sent as empty values.
 func TestConnectUnknownArgsAreEmpty(t *testing.T) {
 	connectCh := make(chan []string, 1)
 	addr := mockGuacd(t, []string{"hostname", "security", "ignore-cert"}, connectCh)

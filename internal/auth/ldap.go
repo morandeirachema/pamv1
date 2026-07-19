@@ -44,6 +44,8 @@ type LDAPAuthenticator struct {
 	dial func(ctx context.Context) (ldapConn, error)
 }
 
+// NewLDAPAuthenticator validates cfg (URL, base DN and at least one group→role
+// mapping are required), defaults the user filter, and wires the real dialer.
 func NewLDAPAuthenticator(cfg LDAPConfig) (*LDAPAuthenticator, error) {
 	switch {
 	case cfg.URL == "":
@@ -61,6 +63,8 @@ func NewLDAPAuthenticator(cfg LDAPConfig) (*LDAPAuthenticator, error) {
 	return a, nil
 }
 
+// realDial opens the real LDAP connection, using TLS (with the configured verify
+// policy) for ldaps:// URLs.
 func (a *LDAPAuthenticator) realDial(_ context.Context) (ldapConn, error) {
 	var opts []ldap.DialOpt
 	if strings.HasPrefix(strings.ToLower(a.cfg.URL), "ldaps://") {
@@ -79,8 +83,13 @@ func (a *LDAPAuthenticator) realDial(_ context.Context) (ldapConn, error) {
 // realConn adapts *ldap.Conn to ldapConn (normalizing Close to return error).
 type realConn struct{ *ldap.Conn }
 
+// Close closes the underlying *ldap.Conn, adapting its no-error signature.
 func (c realConn) Close() error { c.Conn.Close(); return nil }
 
+// Authenticate binds as the service account to find the user, verifies the
+// password by binding as that user, then maps their groups to a role. A missing
+// or ambiguous user, a failed user bind, or no mapped group all return
+// ErrUnauthorized; infrastructure failures return a wrapped error.
 func (a *LDAPAuthenticator) Authenticate(ctx context.Context, username, password string) (*Principal, error) {
 	if username == "" || password == "" {
 		return nil, ErrUnauthorized

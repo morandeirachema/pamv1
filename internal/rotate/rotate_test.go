@@ -16,6 +16,8 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
+// TestGeneratePassword checks generated passwords are unique across many draws,
+// correctly sized, category-complete and free of shell-unsafe characters.
 func TestGeneratePassword(t *testing.T) {
 	seen := map[string]bool{}
 	for i := 0; i < 200; i++ {
@@ -42,6 +44,7 @@ func TestGeneratePassword(t *testing.T) {
 	}
 }
 
+// TestGeneratePasswordMinLength checks a requested length below 12 is clamped up.
 func TestGeneratePasswordMinLength(t *testing.T) {
 	pw, err := GeneratePassword(4)
 	if err != nil {
@@ -54,6 +57,8 @@ func TestGeneratePasswordMinLength(t *testing.T) {
 
 // --- SSH connector against an in-process SSH server ---
 
+// TestSSHConnectorVerifyAndRotate exercises Verify (valid and wrong secret) and
+// Rotate against an in-process SSH server, asserting the exact chpasswd stdin.
 func TestSSHConnectorVerifyAndRotate(t *testing.T) {
 	const user, oldPass = "svc-pam", "old-Secret.1"
 	srv := startSSHServer(t, user, oldPass)
@@ -85,6 +90,8 @@ func TestSSHConnectorVerifyAndRotate(t *testing.T) {
 	}
 }
 
+// TestSSHConnectorRejectsUnsafeUsername checks Rotate refuses a username
+// containing ':' (or newlines) that could corrupt the chpasswd payload.
 func TestSSHConnectorRejectsUnsafeUsername(t *testing.T) {
 	conn := SSHConnector{}
 	err := conn.Rotate(context.Background(), store.Target{Host: "127.0.0.1", Port: 1}, "bad:user", "old", "new")
@@ -103,6 +110,8 @@ type fakeRunner struct {
 	err      error
 }
 
+// Run records the command and credentials it was called with, then returns the
+// configured exit code or error.
 func (f *fakeRunner) Run(_ context.Context, _ string, _ int, user, pass, cmd string) (winrm.Result, error) {
 	f.lastCmd, f.lastUser, f.lastPass = cmd, user, pass
 	if f.err != nil {
@@ -111,6 +120,8 @@ func (f *fakeRunner) Run(_ context.Context, _ string, _ int, user, pass, cmd str
 	return winrm.Result{ExitCode: f.exit}, nil
 }
 
+// TestWinRMConnectorRotate checks Rotate issues the expected `net user` command
+// and authenticates with the old secret.
 func TestWinRMConnectorRotate(t *testing.T) {
 	fr := &fakeRunner{}
 	conn := WinRMConnector{Runner: fr}
@@ -126,6 +137,8 @@ func TestWinRMConnectorRotate(t *testing.T) {
 	}
 }
 
+// TestWinRMConnectorVerify checks a zero exit passes and a non-zero exit is
+// reported as drift.
 func TestWinRMConnectorVerify(t *testing.T) {
 	conn := WinRMConnector{Runner: &fakeRunner{exit: 0}}
 	if err := conn.Verify(context.Background(), store.Target{Protocol: "winrm"}, "u", "s"); err != nil {
@@ -146,12 +159,15 @@ type sshServer struct {
 	last string
 }
 
+// lastStdin returns the stdin the server last captured from an exec channel.
 func (s *sshServer) lastStdin() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.last
 }
 
+// startSSHServer starts an in-process SSH server that accepts only
+// (wantUser, wantPass) and records exec stdin for later inspection.
 func startSSHServer(t *testing.T, wantUser, wantPass string) *sshServer {
 	t.Helper()
 	srv := &sshServer{}
@@ -185,6 +201,8 @@ func startSSHServer(t *testing.T, wantUser, wantPass string) *sshServer {
 	return srv
 }
 
+// serve handles one connection, capturing the stdin of exec requests and
+// replying with exit-status 0.
 func (s *sshServer) serve(conn net.Conn, cfg *ssh.ServerConfig) {
 	sconn, chans, reqs, err := ssh.NewServerConn(conn, cfg)
 	if err != nil {
@@ -224,6 +242,7 @@ func (s *sshServer) serve(conn net.Conn, cfg *ssh.ServerConfig) {
 	}
 }
 
+// mustSigner returns a fresh ed25519 SSH signer or fails the test.
 func mustSigner(t *testing.T) ssh.Signer {
 	t.Helper()
 	_, priv, err := ed25519.GenerateKey(rand.Reader)

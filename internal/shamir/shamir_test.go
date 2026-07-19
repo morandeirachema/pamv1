@@ -5,6 +5,7 @@ import (
 	"testing"
 )
 
+// TestSplitCombine checks that any threshold subset of shares reconstructs the secret.
 func TestSplitCombine(t *testing.T) {
 	secret := []byte("break-glass-emergency-key-2026")
 	shares, err := Split(secret, 5, 3)
@@ -37,6 +38,7 @@ func TestSplitCombine(t *testing.T) {
 	}
 }
 
+// TestFewerThanThresholdIsWrong checks that below-threshold shares reveal nothing.
 func TestFewerThanThresholdIsWrong(t *testing.T) {
 	secret := []byte("0123456789abcdef")
 	shares, _ := Split(secret, 5, 3)
@@ -50,6 +52,7 @@ func TestFewerThanThresholdIsWrong(t *testing.T) {
 	}
 }
 
+// TestCorruptedShareFails checks that a tampered share does not reconstruct the secret.
 func TestCorruptedShareFails(t *testing.T) {
 	secret := []byte("sensitive")
 	shares, _ := Split(secret, 3, 3)
@@ -59,6 +62,7 @@ func TestCorruptedShareFails(t *testing.T) {
 	}
 }
 
+// TestSplitValidation checks Split rejects invalid parts/threshold arguments.
 func TestSplitValidation(t *testing.T) {
 	if _, err := Split(nil, 5, 3); err == nil {
 		t.Fatal("empty secret should error")

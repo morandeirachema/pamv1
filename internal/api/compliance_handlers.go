@@ -76,6 +76,8 @@ func (s *Server) exportAudit(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// parseTimeParam parses an RFC3339 timestamp, treating the empty string as the
+// zero time (an open bound).
 func parseTimeParam(v string) (time.Time, error) {
 	if v == "" {
 		return time.Time{}, nil

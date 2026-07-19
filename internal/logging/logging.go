@@ -33,6 +33,8 @@ func Component(name string) *slog.Logger {
 	return slog.Default().With("service", name)
 }
 
+// parseLevel maps a level name (debug|info|warn|error) to a slog.Level,
+// defaulting to info for empty or unrecognized values.
 func parseLevel(level string) slog.Level {
 	switch strings.ToLower(level) {
 	case "debug":

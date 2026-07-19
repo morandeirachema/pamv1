@@ -41,10 +41,13 @@ func mockTransit(t *testing.T, wantToken string) *httptest.Server {
 	return srv
 }
 
+// writeData writes a Vault-style {"data": {field: value}} JSON response.
 func writeData(w http.ResponseWriter, field, value string) {
 	json.NewEncoder(w).Encode(map[string]any{"data": map[string]string{field: value}})
 }
 
+// TestTransitKEKRoundtrip proves wrap→unwrap round-trips the data key through
+// the mock Transit engine and produces a transit-style ciphertext.
 func TestTransitKEKRoundtrip(t *testing.T) {
 	ctx := context.Background()
 	srv := mockTransit(t, "s.token")
@@ -99,6 +102,7 @@ func TestVaultOverTransit(t *testing.T) {
 	}
 }
 
+// TestTransitKEKAuthError proves a wrong Vault token surfaces as a Wrap error.
 func TestTransitKEKAuthError(t *testing.T) {
 	ctx := context.Background()
 	srv := mockTransit(t, "s.token")

@@ -49,6 +49,7 @@ func (m *Metrics) BreakGlass() { m.inc(&m.breakglass) }
 // Rotation records one credential rotation.
 func (m *Metrics) Rotation() { m.inc(&m.rotations) }
 
+// inc atomically increments the given counter under the lock.
 func (m *Metrics) inc(p *uint64) {
 	m.mu.Lock()
 	*p++
@@ -100,6 +101,7 @@ func (m *Metrics) WritePrometheus(w io.Writer) {
 	fmt.Fprintf(w, "pam_active_sessions %d\n", active)
 }
 
+// writeCounter emits a single Prometheus counter (HELP, TYPE and value lines).
 func writeCounter(w io.Writer, name, help string, v uint64) {
 	fmt.Fprintf(w, "# HELP %s %s\n", name, help)
 	fmt.Fprintf(w, "# TYPE %s counter\n", name)

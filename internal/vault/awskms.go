@@ -23,6 +23,8 @@ type AWSKMSKEK struct {
 	client kmsAPI
 }
 
+// NewAWSKMSKEK builds a KMS-backed KEK for keyID, loading credentials from the
+// default AWS chain (optionally pinned to region). keyID is required.
 func NewAWSKMSKEK(ctx context.Context, region, keyID string) (*AWSKMSKEK, error) {
 	if keyID == "" {
 		return nil, errors.New("vault: aws-kms KEK requires PAM_KEK_AWS_KEY_ID")
@@ -38,8 +40,10 @@ func NewAWSKMSKEK(ctx context.Context, region, keyID string) (*AWSKMSKEK, error)
 	return &AWSKMSKEK{keyID: keyID, client: kms.NewFromConfig(cfg)}, nil
 }
 
+// ID reports the provider identifier, "aws-kms:<keyID>".
 func (k *AWSKMSKEK) ID() string { return "aws-kms:" + k.keyID }
 
+// Wrap encrypts the data key with KMS and returns the ciphertext blob.
 func (k *AWSKMSKEK) Wrap(ctx context.Context, dek []byte) ([]byte, error) {
 	out, err := k.client.Encrypt(ctx, &kms.EncryptInput{KeyId: aws.String(k.keyID), Plaintext: dek})
 	if err != nil {
@@ -48,6 +52,7 @@ func (k *AWSKMSKEK) Wrap(ctx context.Context, dek []byte) ([]byte, error) {
 	return out.CiphertextBlob, nil
 }
 
+// Unwrap decrypts a KMS ciphertext blob back to the data key.
 func (k *AWSKMSKEK) Unwrap(ctx context.Context, wrapped []byte) ([]byte, error) {
 	out, err := k.client.Decrypt(ctx, &kms.DecryptInput{KeyId: aws.String(k.keyID), CiphertextBlob: wrapped})
 	if err != nil {

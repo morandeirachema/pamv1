@@ -51,6 +51,7 @@ func startUpstreamKeyed(t *testing.T, wantUser, wantPass, output string, hostKey
 	return h, pn
 }
 
+// startProxyPinned starts a proxy whose upstream host-key verification uses cb.
 func startProxyPinned(t *testing.T, st store.Store, v *vault.Vault, cb ssh.HostKeyCallback) string {
 	t.Helper()
 	resolver, err := auth.NewResolver(st, proxyAPIKey, "")
@@ -74,6 +75,8 @@ func startProxyPinned(t *testing.T, st store.Store, v *vault.Vault, cb ssh.HostK
 	return ln.Addr().String()
 }
 
+// writeKnownHosts writes a known_hosts file pinning key for host:port and
+// returns a host-key callback backed by it.
 func writeKnownHosts(t *testing.T, host string, port int, key ssh.PublicKey) ssh.HostKeyCallback {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "known_hosts")
@@ -89,6 +92,8 @@ func writeKnownHosts(t *testing.T, host string, port int, key ssh.PublicKey) ssh
 	return cb
 }
 
+// TestUpstreamHostKeyPinnedAccepts allows a session when the upstream host key
+// matches the pinned known_hosts entry.
 func TestUpstreamHostKeyPinnedAccepts(t *testing.T) {
 	hostKey := mustSigner(t)
 	host, port := startUpstreamKeyed(t, upstreamUser, upstreamSecret, targetOutput, hostKey)
@@ -115,6 +120,8 @@ func TestUpstreamHostKeyPinnedAccepts(t *testing.T) {
 	}
 }
 
+// TestUpstreamHostKeyPinnedRejectsMismatch denies a session when the upstream
+// host key differs from the pinned one (authentication still succeeds).
 func TestUpstreamHostKeyPinnedRejectsMismatch(t *testing.T) {
 	hostKey := mustSigner(t)
 	host, port := startUpstreamKeyed(t, upstreamUser, upstreamSecret, targetOutput, hostKey)

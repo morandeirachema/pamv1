@@ -31,6 +31,9 @@ func seedApprovalTarget(t *testing.T, srv *httptest.Server, requireApproval bool
 	return id
 }
 
+// TestApprovalWorkflow exercises the full 4-eyes flow: blocked without approval,
+// file a request, no self-approval, approval by a different principal unlocks the
+// connect (with the credential injected), and a decided request cannot be redecided.
 func TestApprovalWorkflow(t *testing.T) {
 	fake := &fakeWinRM{result: winrm.Result{Stdout: "ok\r\n"}}
 	srv, _ := newTestServerOpts(t, nil, api.Options{WinRM: fake})
@@ -85,6 +88,7 @@ func TestApprovalWorkflow(t *testing.T) {
 	}
 }
 
+// TestApprovalBreakGlassBypass verifies break-glass bypasses the approval gate.
 func TestApprovalBreakGlassBypass(t *testing.T) {
 	fake := &fakeWinRM{result: winrm.Result{Stdout: "ok\r\n"}}
 	srv, _ := newTestServerOpts(t, nil, api.Options{WinRM: fake})
@@ -96,6 +100,8 @@ func TestApprovalBreakGlassBypass(t *testing.T) {
 	}
 }
 
+// TestGlobalApprovalPolicyGatesUnflaggedTarget verifies the global RequireApproval
+// policy gates a target that does not itself opt in.
 func TestGlobalApprovalPolicyGatesUnflaggedTarget(t *testing.T) {
 	fake := &fakeWinRM{result: winrm.Result{Stdout: "ok\r\n"}}
 	srv, _ := newTestServerOpts(t, nil, api.Options{WinRM: fake, RequireApproval: true})

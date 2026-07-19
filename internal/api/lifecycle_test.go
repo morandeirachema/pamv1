@@ -24,6 +24,7 @@ type fakeConnector struct {
 	lastNew string
 }
 
+// Rotate sets the on-target password to newSecret and records it.
 func (f *fakeConnector) Rotate(_ context.Context, _ store.Target, _, _, newSecret string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -32,6 +33,8 @@ func (f *fakeConnector) Rotate(_ context.Context, _ store.Target, _, _, newSecre
 	return nil
 }
 
+// Verify succeeds only when secret matches the current on-target password (and
+// accepts any secret when none has been set).
 func (f *fakeConnector) Verify(_ context.Context, _ store.Target, _, secret string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -41,18 +44,22 @@ func (f *fakeConnector) Verify(_ context.Context, _ store.Target, _, secret stri
 	return nil
 }
 
+// setActual simulates an out-of-band password change on the target.
 func (f *fakeConnector) setActual(pw string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.actual = pw
 }
 
+// newSecret returns the last password Rotate was asked to set.
 func (f *fakeConnector) newSecret() string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.lastNew
 }
 
+// seedTargetCred creates a target and one credential of the given protocol and
+// secret (and optional secret type), returning the credential id.
 func seedTargetCred(t *testing.T, srv *httptest.Server, protocol, secretType, secret string) int64 {
 	t.Helper()
 	status, data := do(t, srv, http.MethodPost, "/api/targets", testAPIKey, map[string]any{
@@ -73,6 +80,8 @@ func seedTargetCred(t *testing.T, srv *httptest.Server, protocol, secretType, se
 	return int64(jsonMap(t, data)["id"].(float64))
 }
 
+// TestCredentialRotation verifies rotation sets a new secret on the target,
+// re-vaults exactly that secret without leaking it, and stamps rotated_at.
 func TestCredentialRotation(t *testing.T) {
 	fc := &fakeConnector{}
 	srv, _ := newTestServerOpts(t, nil, api.Options{
@@ -120,6 +129,8 @@ func TestCredentialRotation(t *testing.T) {
 	}
 }
 
+// TestRotationUnsupportedSecretType verifies rotating an ssh_key credential is
+// rejected with 422.
 func TestRotationUnsupportedSecretType(t *testing.T) {
 	fc := &fakeConnector{}
 	srv, _ := newTestServerOpts(t, nil, api.Options{Rotators: map[string]rotate.Rotator{"ssh": fc}})
@@ -131,6 +142,8 @@ func TestRotationUnsupportedSecretType(t *testing.T) {
 	}
 }
 
+// TestReconcileInSyncAndDrift verifies reconcile reports in_sync, detects
+// out-of-band drift, and that remediation brings vault and target back in sync.
 func TestReconcileInSyncAndDrift(t *testing.T) {
 	fc := &fakeConnector{}
 	srv, _ := newTestServerOpts(t, nil, api.Options{
@@ -163,6 +176,8 @@ func TestReconcileInSyncAndDrift(t *testing.T) {
 	}
 }
 
+// TestReconcileAllScan verifies the read-only scan reports the checked and
+// out-of-sync counts.
 func TestReconcileAllScan(t *testing.T) {
 	fc := &fakeConnector{}
 	srv, _ := newTestServerOpts(t, nil, api.Options{

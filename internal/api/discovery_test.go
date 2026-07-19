@@ -10,6 +10,8 @@ import (
 	"github.com/morandeirachema/pamv1/internal/api"
 )
 
+// TestDiscoveryScanAndCreate verifies a scan finds a reachable SSH port,
+// auto-creates a target for it, and does not re-create it on a second scan.
 func TestDiscoveryScanAndCreate(t *testing.T) {
 	// A real listener answers only for port 22; the injected dialer redirects
 	// probes of 127.0.0.1:22 to it, so the scan finds one SSH candidate.
@@ -65,6 +67,7 @@ func TestDiscoveryScanAndCreate(t *testing.T) {
 	}
 }
 
+// TestDiscoveryScanRequiresHosts verifies an empty hosts list is rejected with 422.
 func TestDiscoveryScanRequiresHosts(t *testing.T) {
 	srv := newTestServer(t)
 	if status, _ := do(t, srv, http.MethodPost, "/api/discovery/scan", testAPIKey, map[string]any{"hosts": []string{}}); status != http.StatusUnprocessableEntity {
@@ -72,6 +75,8 @@ func TestDiscoveryScanRequiresHosts(t *testing.T) {
 	}
 }
 
+// TestDiscoveryScanNeedsManageTargets verifies the scan requires CapManageTargets
+// (auditor forbidden).
 func TestDiscoveryScanNeedsManageTargets(t *testing.T) {
 	srv := newTestServer(t)
 	tok := seedUser(t, srv, "alice", "auditor") // no CapManageTargets

@@ -77,6 +77,7 @@ func TestPKCS11RoundTrip(t *testing.T) {
 	}
 }
 
+// randLabel returns a short random hex string for a throwaway key label.
 func randLabel(t *testing.T) string {
 	b := make([]byte, 6)
 	if _, err := rand.Read(b); err != nil {

@@ -10,6 +10,9 @@ import (
 	"github.com/morandeirachema/pamv1/internal/rotate"
 )
 
+// TestCredentialCheckoutLifecycle covers exclusive checkout, conflict on a double
+// checkout, active listing, rotation-on-check-in, and re-checkout returning the
+// new secret.
 func TestCredentialCheckoutLifecycle(t *testing.T) {
 	fc := &fakeConnector{}
 	srv, _ := newTestServerOpts(t, nil, api.Options{
@@ -64,6 +67,8 @@ func TestCredentialCheckoutLifecycle(t *testing.T) {
 	}
 }
 
+// TestCheckinWithoutCheckout verifies checking in a credential that is not checked
+// out returns 409.
 func TestCheckinWithoutCheckout(t *testing.T) {
 	fc := &fakeConnector{}
 	srv, _ := newTestServerOpts(t, nil, api.Options{Rotators: map[string]rotate.Rotator{"ssh": fc}})
@@ -73,6 +78,8 @@ func TestCheckinWithoutCheckout(t *testing.T) {
 	}
 }
 
+// TestCheckoutRespectsRevealDisabled verifies checkout is refused under the
+// reveal-disabled policy except for break-glass.
 func TestCheckoutRespectsRevealDisabled(t *testing.T) {
 	fc := &fakeConnector{}
 	srv, _ := newTestServerOpts(t, nil, api.Options{

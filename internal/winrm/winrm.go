@@ -33,6 +33,9 @@ type Client struct {
 	Timeout  time.Duration
 }
 
+// Run executes command on host:port over WinRM as user/password and returns the
+// captured output. A non-zero remote exit is reported in Result.ExitCode; the
+// returned error signals only transport or authentication failures.
 func (c Client) Run(ctx context.Context, host string, port int, user, password, command string) (Result, error) {
 	timeout := c.Timeout
 	if timeout == 0 {
@@ -53,6 +56,9 @@ func (c Client) Run(ctx context.Context, host string, port int, user, password, 
 	return Result{Stdout: stdout.String(), Stderr: stderr.String(), ExitCode: code}, nil
 }
 
+// newClient builds a masterzen/winrm client, selecting the NTLMv2 transport when
+// NTLM is set via per-call parameters so the library's shared defaults are never
+// mutated.
 func (c Client) newClient(endpoint *mw.Endpoint, user, password string) (*mw.Client, error) {
 	if !c.NTLM {
 		return mw.NewClient(endpoint, user, password)

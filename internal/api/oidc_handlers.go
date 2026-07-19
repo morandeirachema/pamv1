@@ -86,6 +86,8 @@ func (s *Server) oidcCallback(w http.ResponseWriter, r *http.Request) {
 	s.redirectPortal(w, r, "pam_token="+url.QueryEscape(token))
 }
 
+// redirectPortal 302-redirects to the portal URL with the given URL fragment,
+// which carries either a session token or an error code.
 func (s *Server) redirectPortal(w http.ResponseWriter, r *http.Request, fragment string) {
 	http.Redirect(w, r, s.portalURL+"#"+fragment, http.StatusFound)
 }

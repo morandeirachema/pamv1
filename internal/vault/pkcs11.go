@@ -75,6 +75,8 @@ func NewPKCS11KEK(module, pin, keyLabel, tokenLabel string) (KEK, error) {
 	return &PKCS11KEK{ctx: ctx, session: session, key: key, keyLabel: keyLabel}, nil
 }
 
+// Wrap encrypts the data key inside the HSM with CKM_AES_CBC_PAD under a fresh
+// random IV, returning iv||ciphertext. Session ops are serialized by mu.
 func (k *PKCS11KEK) Wrap(_ context.Context, dek []byte) ([]byte, error) {
 	iv := make([]byte, pkcs11IVSize)
 	if _, err := rand.Read(iv); err != nil {
@@ -93,6 +95,8 @@ func (k *PKCS11KEK) Wrap(_ context.Context, dek []byte) ([]byte, error) {
 	return append(append(make([]byte, 0, len(iv)+len(ct)), iv...), ct...), nil
 }
 
+// Unwrap splits the leading IV from the ciphertext and decrypts it in the HSM,
+// returning ErrInvalidToken on any failure.
 func (k *PKCS11KEK) Unwrap(_ context.Context, wrapped []byte) ([]byte, error) {
 	if len(wrapped) <= pkcs11IVSize {
 		return nil, ErrInvalidToken
@@ -111,10 +115,13 @@ func (k *PKCS11KEK) Unwrap(_ context.Context, wrapped []byte) ([]byte, error) {
 	return dek, nil
 }
 
+// ID reports the provider identifier, "pkcs11:<keyLabel>".
 func (k *PKCS11KEK) ID() string { return "pkcs11:" + k.keyLabel }
 
 // --- helpers ---
 
+// selectSlot returns the slot with a present token: the first one if tokenLabel
+// is empty, otherwise the slot whose token label matches (error if none match).
 func selectSlot(ctx *pkcs11.Ctx, tokenLabel string) (uint, error) {
 	slots, err := ctx.GetSlotList(true)
 	if err != nil {
@@ -134,6 +141,8 @@ func selectSlot(ctx *pkcs11.Ctx, tokenLabel string) (uint, error) {
 	return 0, fmt.Errorf("vault: pkcs11 token %q not found", tokenLabel)
 }
 
+// findKey locates the AES secret key with the given CKA_LABEL in the session,
+// erroring if no such key exists.
 func findKey(ctx *pkcs11.Ctx, session pkcs11.SessionHandle, label string) (pkcs11.ObjectHandle, error) {
 	tmpl := []*pkcs11.Attribute{
 		pkcs11.NewAttribute(pkcs11.CKA_CLASS, pkcs11.CKO_SECRET_KEY),
@@ -154,11 +163,15 @@ func findKey(ctx *pkcs11.Ctx, session pkcs11.SessionHandle, label string) (pkcs1
 	return objs[0], nil
 }
 
+// isAlreadyInit reports whether err is the benign "cryptoki already initialized"
+// PKCS#11 error (a shared module may already be initialized).
 func isAlreadyInit(err error) bool {
 	var e pkcs11.Error
 	return errors.As(err, &e) && e == pkcs11.CKR_CRYPTOKI_ALREADY_INITIALIZED
 }
 
+// isAlreadyLoggedIn reports whether err is the benign "user already logged in"
+// PKCS#11 error (the session may already hold a login).
 func isAlreadyLoggedIn(err error) bool {
 	var e pkcs11.Error
 	return errors.As(err, &e) && e == pkcs11.CKR_USER_ALREADY_LOGGED_IN

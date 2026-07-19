@@ -7,6 +7,8 @@ import (
 	"time"
 )
 
+// TestScanFindsOpenPort verifies a reachable port is returned and classified by
+// protocol and OS type.
 func TestScanFindsOpenPort(t *testing.T) {
 	// A real listener on an ephemeral port; we tell the scanner to probe it as
 	// if it were SSH (port 22) via an injected dialer that rewrites the address.
@@ -46,6 +48,8 @@ func TestScanFindsOpenPort(t *testing.T) {
 	}
 }
 
+// TestScanSkipsUnknownPortsAndClosed verifies unknown ports and failed dials
+// yield no candidates.
 func TestScanSkipsUnknownPortsAndClosed(t *testing.T) {
 	sc := Scanner{
 		Timeout: 200 * time.Millisecond,
@@ -59,6 +63,7 @@ func TestScanSkipsUnknownPortsAndClosed(t *testing.T) {
 	}
 }
 
+// TestDefaultPorts checks the default port set is non-empty.
 func TestDefaultPorts(t *testing.T) {
 	if len(DefaultPorts()) == 0 {
 		t.Fatal("DefaultPorts must not be empty")

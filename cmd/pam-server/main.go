@@ -44,6 +44,10 @@ import (
 	"golang.org/x/crypto/ssh/knownhosts"
 )
 
+// main parses the utility flags and dispatches: -genkey prints a fresh vault
+// master key, -hashkey prints the SHA-256 of a break-glass key read from stdin,
+// -rotate-kek re-encrypts secrets under a new master key, -split-key emits
+// Shamir shares of a break-glass key, and the default path runs the server.
 func main() {
 	genkey := flag.Bool("genkey", false, "print a new vault master key and exit")
 	hashkey := flag.Bool("hashkey", false, "read a break-glass key from stdin, print its SHA-256 hex and exit")
@@ -115,6 +119,7 @@ func runRotateKEK() error {
 	return nil
 }
 
+// fatal prints err to stderr prefixed with "pam-server:" and exits with status 1.
 func fatal(err error) {
 	fmt.Fprintln(os.Stderr, "pam-server:", err)
 	os.Exit(1)
@@ -145,6 +150,8 @@ func runSplitKey() error {
 	return nil
 }
 
+// getenvInt returns the integer value of the named environment variable, or def
+// when the variable is unset or does not parse as an integer.
 func getenvInt(key string, def int) int {
 	if v := os.Getenv(key); v != "" {
 		if n, err := strconv.Atoi(v); err == nil {
@@ -241,6 +248,12 @@ func roleMap(admin, user, auditor, approver string) map[string]auth.Role {
 	return m
 }
 
+// run loads configuration and starts the server: it builds the vault KEK,
+// opens the store (Postgres or the in-memory demo store), wires the identity
+// resolver, password authenticators and optional OIDC provider, configures
+// alerting and upstream SSH host-key verification, constructs the API/portal
+// handler, optionally launches the credential-lifecycle worker and the SSH
+// proxy, then serves HTTP(S) until interrupted and shuts down gracefully.
 func run() error {
 	cfg, err := config.Load()
 	if err != nil {

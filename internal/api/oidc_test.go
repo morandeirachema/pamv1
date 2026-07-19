@@ -29,9 +29,13 @@ type tokenBox struct {
 	v  string
 }
 
+// set stores the id_token the mock IdP will return next.
 func (b *tokenBox) set(s string) { b.mu.Lock(); b.v = s; b.mu.Unlock() }
-func (b *tokenBox) get() string  { b.mu.Lock(); defer b.mu.Unlock(); return b.v }
 
+// get returns the currently stored id_token.
+func (b *tokenBox) get() string { b.mu.Lock(); defer b.mu.Unlock(); return b.v }
+
+// signToken builds an RS256-signed JWT (kid "k1") carrying the given claims.
 func signToken(t *testing.T, key *rsa.PrivateKey, claims map[string]any) string {
 	t.Helper()
 	enc := func(v any) string { b, _ := json.Marshal(v); return base64.RawURLEncoding.EncodeToString(b) }
@@ -44,6 +48,8 @@ func signToken(t *testing.T, key *rsa.PrivateKey, claims map[string]any) string 
 	return in + "." + base64.RawURLEncoding.EncodeToString(sig)
 }
 
+// oidcServer starts a mock IdP (token + JWKS endpoints) and a PAM server wired to
+// it, returning the PAM server, its token box, and the IdP signing key.
 func oidcServer(t *testing.T) (*httptest.Server, *tokenBox, *rsa.PrivateKey) {
 	t.Helper()
 	key, _ := rsa.GenerateKey(rand.Reader, 2048)
@@ -86,6 +92,8 @@ func noRedirect(srv *httptest.Server) *http.Client {
 	return c
 }
 
+// TestOIDCLoginFlow walks the full Authorization Code + PKCE flow and confirms
+// the issued session carries the mapped admin role.
 func TestOIDCLoginFlow(t *testing.T) {
 	srv, box, key := oidcServer(t)
 	client := noRedirect(srv)
@@ -137,6 +145,8 @@ func TestOIDCLoginFlow(t *testing.T) {
 	}
 }
 
+// TestOIDCCallbackBadState verifies an unknown state redirects back with
+// pam_error=invalid_state.
 func TestOIDCCallbackBadState(t *testing.T) {
 	srv, _, _ := oidcServer(t)
 	client := noRedirect(srv)
@@ -151,6 +161,8 @@ func TestOIDCCallbackBadState(t *testing.T) {
 	}
 }
 
+// TestOIDCNotConfigured verifies the OIDC start endpoint is 404 when OIDC is not
+// configured.
 func TestOIDCNotConfigured(t *testing.T) {
 	srv := newTestServer(t)
 	client := noRedirect(srv)

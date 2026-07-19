@@ -5,6 +5,7 @@ import (
 	"time"
 )
 
+// TestRegistry covers register, list, kill (found and unknown id) and remove.
 func TestRegistry(t *testing.T) {
 	r := NewRegistry()
 	killed := false
@@ -34,6 +35,7 @@ func TestRegistry(t *testing.T) {
 	}
 }
 
+// TestRegistryOrdering checks List returns sessions oldest first.
 func TestRegistryOrdering(t *testing.T) {
 	r := NewRegistry()
 	r.Register(Info{Actor: "b", Started: time.Unix(2, 0)}, nil)

@@ -30,6 +30,7 @@ type Notifier interface {
 // Noop drops alerts (used when no webhook is configured).
 type Noop struct{}
 
+// Notify discards the event.
 func (Noop) Notify(context.Context, Event) {}
 
 // Webhook POSTs alerts as JSON to a URL (best-effort, fire-and-forget).
@@ -38,10 +39,14 @@ type Webhook struct {
 	hc  *http.Client
 }
 
+// NewWebhook returns a Webhook that POSTs alerts to url (10s HTTP timeout).
 func NewWebhook(url string) *Webhook {
 	return &Webhook{url: url, hc: &http.Client{Timeout: 10 * time.Second}}
 }
 
+// Notify marshals the event to JSON and POSTs it to the webhook URL from a
+// background goroutine, so it never blocks the caller; delivery errors are
+// logged but not returned.
 func (w *Webhook) Notify(_ context.Context, e Event) {
 	if e.Time.IsZero() {
 		// caller should stamp Time; leave as-is otherwise (avoids time.Now here).

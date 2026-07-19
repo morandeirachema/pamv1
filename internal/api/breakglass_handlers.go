@@ -24,6 +24,7 @@ type unsealState struct {
 	expires time.Time
 }
 
+// newUnsealState returns an empty break-glass share collector.
 func newUnsealState() *unsealState { return &unsealState{} }
 
 // add records a distinct share and returns the current collected set (a copy),
@@ -44,12 +45,14 @@ func (u *unsealState) add(share []byte, now time.Time) [][]byte {
 	return copyShares(u.shares)
 }
 
+// reset discards any collected shares.
 func (u *unsealState) reset() {
 	u.mu.Lock()
 	u.shares = nil
 	u.mu.Unlock()
 }
 
+// copyShares returns a new slice header over the same share byte slices.
 func copyShares(s [][]byte) [][]byte {
 	out := make([][]byte, len(s))
 	copy(out, s)
