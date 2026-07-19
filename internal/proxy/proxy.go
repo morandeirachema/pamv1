@@ -14,6 +14,7 @@
 package proxy
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
@@ -31,6 +32,7 @@ import (
 	"github.com/morandeirachema/pamv1/internal/session"
 	"github.com/morandeirachema/pamv1/internal/store"
 	"github.com/morandeirachema/pamv1/internal/vault"
+	"github.com/morandeirachema/pamv1/internal/winrm"
 )
 
 type Config struct {
@@ -52,6 +54,9 @@ type Config struct {
 	// AllowedProtocols, when non-empty, restricts which target protocols the proxy
 	// will broker (the proxy only handles "ssh"; this lets an OT policy forbid it).
 	AllowedProtocols []string
+	// WinRMRunner, if set, lets the proxy broker an interactive command loop to
+	// WinRM (Windows) targets; nil disables WinRM through the proxy.
+	WinRMRunner winrm.Runner
 }
 
 type Proxy struct {
@@ -68,6 +73,7 @@ type Proxy struct {
 	upstreamHKCB ssh.HostKeyCallback
 	onSessionEnd func(credentialID int64)
 	allowedProto map[string]bool
+	winrm        winrm.Runner
 	chain        *recordChain
 
 	mu sync.Mutex
@@ -104,6 +110,7 @@ func New(st store.Store, v *vault.Vault, resolver *auth.Resolver, cfg Config) (*
 		upstreamHKCB: cfg.UpstreamHostKey,
 		onSessionEnd: cfg.OnSessionEnd,
 		allowedProto: protocolSet(cfg.AllowedProtocols),
+		winrm:        cfg.WinRMRunner,
 		chain:        newRecordChain(cfg.RecordingDir),
 	}
 	if p.upstreamHKCB == nil {
@@ -289,6 +296,15 @@ func (p *Proxy) handleConn(ctx context.Context, nConn net.Conn) {
 		}
 	}
 
+	observeMode := ext["observe"] == "true"
+
+	// Non-SSH targets are brokered differently: WinRM targets get an interactive
+	// command loop (if a runner is configured); anything else is refused.
+	if target.Protocol != "ssh" {
+		p.serveWinRM(ctx, sconn, chans, target, cred, secret, actor, remote, observeMode)
+		return
+	}
+
 	upstream, err := p.dialUpstream(target, cred, secret)
 	if err != nil {
 		p.log.Error("upstream connection failed", "actor", actor, "target", target.Name,
@@ -360,9 +376,6 @@ func (p *Proxy) resolve(ctx context.Context, targetName, credUser string) (*stor
 	}
 	if target == nil {
 		return nil, nil, "", fmt.Errorf("unknown target %q", targetName)
-	}
-	if target.Protocol != "ssh" {
-		return nil, nil, "", fmt.Errorf("target %q protocol %q not supported by the ssh proxy", targetName, target.Protocol)
 	}
 	creds, err := p.store.ListCredentials(ctx, target.ID)
 	if err != nil {
@@ -475,6 +488,166 @@ func (p *Proxy) handleSession(ctx context.Context, nc ssh.NewChannel, upstream *
 			fmt.Sprintf("target:%s cred_user:%s file:%s bytes:%d sha256:%s chain:%s",
 				target.Name, cred.Username, path, n, sum, chain))
 	}
+}
+
+// serveWinRM brokers an interactive command loop to a WinRM (Windows) target.
+// The connection has already passed every gate (role, grants, approval, protocol
+// allowlist). Each operator line is run as a separate WinRM command — this is a
+// command loop, not a stateful PowerShell (working directory / variables do not
+// persist across lines). Refuses cleanly when no WinRM runner is configured.
+func (p *Proxy) serveWinRM(ctx context.Context, sconn *ssh.ServerConn, chans <-chan ssh.NewChannel, target *store.Target, cred *store.Credential, secret, actor, remote string, observe bool) {
+	if target.Protocol != "winrm" || p.winrm == nil {
+		p.log.Warn("session denied: protocol not proxyable", "actor", actor, "target", target.Name, "protocol", target.Protocol)
+		p.audit(ctx, actor, "session.denied", "target:"+target.Name+" reason:protocol-not-proxyable")
+		rejectAll(chans, ssh.Prohibited, "pamv1: this target's protocol is not available through the proxy")
+		return
+	}
+	mode := "interactive"
+	if observe {
+		mode = "observer"
+	}
+	p.log.Info("winrm session started", "actor", actor, "target", target.Name, "mode", mode)
+	p.audit(ctx, actor, "session.start",
+		fmt.Sprintf("target:%s host:%s:%d cred_user:%s protocol:winrm mode:%s", target.Name, target.Host, target.Port, cred.Username, mode))
+	if p.sessions != nil {
+		sid := p.sessions.Register(session.Info{
+			Actor: actor, Target: target.Name, Protocol: "winrm", Remote: remote, Started: time.Now(),
+		}, func() { sconn.Close() })
+		defer p.sessions.Remove(sid)
+	}
+	defer func() {
+		p.log.Info("winrm session ended", "actor", actor, "target", target.Name)
+		p.audit(ctx, actor, "session.end", "target:"+target.Name+" protocol:winrm")
+		if p.onSessionEnd != nil {
+			go p.onSessionEnd(cred.ID)
+		}
+	}()
+
+	for nc := range chans {
+		if nc.ChannelType() != "session" {
+			nc.Reject(ssh.UnknownChannelType, "pamv1: only session channels are proxied")
+			continue
+		}
+		p.handleWinRMSession(ctx, nc, target, cred, secret, actor, observe)
+	}
+}
+
+// handleWinRMSession answers channel requests for one WinRM session channel: it
+// runs a "shell" as an interactive command loop and an "exec" as a single
+// command, tee'ing output into an asciicast recording.
+func (p *Proxy) handleWinRMSession(ctx context.Context, nc ssh.NewChannel, target *store.Target, cred *store.Credential, secret, actor string, observe bool) {
+	ch, reqs, err := nc.Accept()
+	if err != nil {
+		return
+	}
+	defer ch.Close()
+
+	now := time.Now()
+	rec, err := newRecording(p.recordingDir, fmt.Sprintf("%d_%s_%s", now.UnixNano(), target.Name, actor), now)
+	if err != nil {
+		p.log.Error("recording setup failed", "err", err)
+	}
+	defer func() {
+		if rec != nil {
+			path, sum, n := rec.Close()
+			chain := p.chain.append(sum)
+			p.audit(ctx, actor, "session.record",
+				fmt.Sprintf("target:%s cred_user:%s file:%s bytes:%d sha256:%s chain:%s", target.Name, cred.Username, path, n, sum, chain))
+		}
+	}()
+
+	for req := range reqs {
+		switch req.Type {
+		case "pty-req", "env", "window-change":
+			if req.WantReply {
+				req.Reply(true, nil)
+			}
+		case "shell":
+			if req.WantReply {
+				req.Reply(true, nil)
+			}
+			p.winrmShellLoop(ctx, ch, target, cred, secret, actor, observe, rec)
+			ch.SendRequest("exit-status", false, ssh.Marshal(struct{ Code uint32 }{0}))
+			return
+		case "exec":
+			if req.WantReply {
+				req.Reply(true, nil)
+			}
+			var m struct{ Command string }
+			_ = ssh.Unmarshal(req.Payload, &m)
+			code := p.winrmRun(ctx, ch, target, cred, secret, actor, observe, rec, m.Command)
+			ch.SendRequest("exit-status", false, ssh.Marshal(struct{ Code uint32 }{uint32(code)}))
+			return
+		default:
+			if req.WantReply {
+				req.Reply(false, nil)
+			}
+		}
+	}
+}
+
+// winrmShellLoop reads operator lines and runs each as a WinRM command, printing
+// a prompt and streaming output. "exit"/"quit"/"logout" or EOF ends the session.
+func (p *Proxy) winrmShellLoop(ctx context.Context, ch ssh.Channel, target *store.Target, cred *store.Credential, secret, actor string, observe bool, rec io.Writer) {
+	out := recWriter(ch, rec)
+	fmt.Fprintf(out, "pamv1 WinRM shell for %s (each line is a separate command; type 'exit' to quit)\r\n", target.Name)
+	prompt := "pamv1 " + target.Name + "> "
+	scanner := bufio.NewScanner(ch)
+	scanner.Buffer(make([]byte, 0, 4096), 1<<20)
+	for {
+		fmt.Fprint(out, prompt)
+		if !scanner.Scan() {
+			return
+		}
+		line := strings.TrimRight(scanner.Text(), "\r\n")
+		fmt.Fprint(out, "\r\n") // echo the newline for the recording
+		switch strings.TrimSpace(line) {
+		case "":
+			continue
+		case "exit", "quit", "logout":
+			return
+		}
+		p.winrmRun(ctx, ch, target, cred, secret, actor, observe, rec, line)
+	}
+}
+
+// winrmRun executes one WinRM command, streams its output (tee'd to rec) and
+// audits it, returning the remote exit code. In observer mode it refuses to run.
+func (p *Proxy) winrmRun(ctx context.Context, ch ssh.Channel, target *store.Target, cred *store.Credential, secret, actor string, observe bool, rec io.Writer, command string) int {
+	out := recWriter(ch, rec)
+	if observe {
+		fmt.Fprint(out, "pamv1: read-only session, command ignored\r\n")
+		p.audit(ctx, actor, "access.denied", "target:"+target.Name+" reason:observer-winrm")
+		return 1
+	}
+	res, err := p.winrm.Run(ctx, target.Host, target.Port, cred.Username, secret, command)
+	if err != nil {
+		fmt.Fprintf(out, "pamv1: winrm error: %v\r\n", err)
+		p.audit(ctx, actor, "winrm.error", fmt.Sprintf("target:%s via:proxy error:%v", target.Name, err))
+		return 1
+	}
+	if res.Stdout != "" {
+		io.WriteString(out, crlf(res.Stdout))
+	}
+	if res.Stderr != "" {
+		io.WriteString(out, crlf(res.Stderr))
+	}
+	p.audit(ctx, actor, "winrm.run", fmt.Sprintf("target:%s cred_user:%s via:proxy exit:%d", target.Name, cred.Username, res.ExitCode))
+	return res.ExitCode
+}
+
+// recWriter returns a writer that sends to the client channel and, when set, tees
+// into the recording.
+func recWriter(ch ssh.Channel, rec io.Writer) io.Writer {
+	if rec == nil {
+		return ch
+	}
+	return io.MultiWriter(ch, rec)
+}
+
+// crlf normalizes bare LF line endings to CRLF for terminal display.
+func crlf(s string) string {
+	return strings.ReplaceAll(strings.ReplaceAll(s, "\r\n", "\n"), "\n", "\r\n")
 }
 
 // pumpRequests forwards SSH channel requests from in to dst, relaying replies.

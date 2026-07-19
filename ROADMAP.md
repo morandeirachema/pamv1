@@ -67,7 +67,7 @@ The flagship: users connect *through* pamv1, never holding the credential.
 - [ ] Browser RDP viewer: bundle guacamole-common-js and add a portal display (server-side tunnel is done and tested)
 - [x] guacd server-side session recording for RDP (`PAM_GUACD_RECORDING_PATH`; recording name in the `rdp.connect` audit)
 - [ ] Kerberos WinRM auth
-- [ ] Interactive WinRM/PowerShell shell through the SSH proxy (beyond one-shot commands)
+- [x] **Interactive WinRM shell through the SSH proxy** (`PAM_PROXY_WINRM`): `ssh <cred>@<winrm-target>@pam` opens a command loop — each line runs as a WinRM command (JIT credential), output streams back and is recorded. (A command loop, not a stateful PowerShell — working directory/variables don't persist across lines; a WinRS streaming shell is a follow-on needing a real host to verify.)
 
 ## Phase 5 — Hardening: database, vault, transport ✅
 

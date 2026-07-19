@@ -314,6 +314,8 @@ func run() error {
 
 	sessions := session.NewRegistry()
 
+	winrmClient := winrm.Client{HTTPS: cfg.WinRMHTTPS, Insecure: cfg.WinRMInsecure, NTLM: cfg.WinRMNTLM, Timeout: 30 * time.Second}
+
 	alerter := buildAlerter(cfg, log)
 
 	// Upstream SSH host-key verification (shared by the proxy and the rotation
@@ -333,7 +335,7 @@ func run() error {
 		SSHHostKeyCallback:  upstreamHostKey,
 		MFARequired:         cfg.MFARequired,
 		RecordingDir:        cfg.RecordingDir,
-		WinRM:               winrm.Client{HTTPS: cfg.WinRMHTTPS, Insecure: cfg.WinRMInsecure, NTLM: cfg.WinRMNTLM, Timeout: 30 * time.Second},
+		WinRM:               winrmClient,
 		OIDC:                oidcProvider,
 		OIDCRoleMap:         roleMap(cfg.OIDCRoleAdmin, cfg.OIDCRoleUser, cfg.OIDCRoleAuditor, cfg.OIDCRoleApprover),
 		PortalURL:           cfg.PortalURL,
@@ -377,6 +379,11 @@ func run() error {
 			onSessionEnd = func(credID int64) { handler.RotateCredentialByID(context.Background(), credID) }
 			log.Info("post-session credential rotation enabled")
 		}
+		var proxyWinRM winrm.Runner
+		if cfg.ProxyWinRM {
+			proxyWinRM = winrmClient
+			log.Info("interactive WinRM shell through the proxy enabled")
+		}
 		px, err := proxy.New(st, v, resolver, proxy.Config{
 			HostKey:          hostKey,
 			RecordingDir:     cfg.RecordingDir,
@@ -385,6 +392,7 @@ func run() error {
 			UpstreamHostKey:  upstreamHostKey,
 			OnSessionEnd:     onSessionEnd,
 			AllowedProtocols: splitAndTrim(cfg.AllowedProtocols),
+			WinRMRunner:      proxyWinRM,
 		})
 		if err != nil {
 			return err

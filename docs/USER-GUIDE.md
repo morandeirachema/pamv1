@@ -126,6 +126,10 @@ ssh -p 2222 root@web-01@PAM_HOST
 
 # Read-only / observer session: watch the output but cannot type or run commands
 ssh -p 2222 root@web-01+observe@PAM_HOST
+
+# Windows target (if the admin enabled it): an interactive WinRM command loop —
+# each line you type runs as a separate command (not a stateful PowerShell)
+ssh -p 2222 Administrator@win-01@PAM_HOST
 ```
 
 - `PAM_HOST` is the pamv1 proxy host; `2222` is the proxy port (ask your admin).

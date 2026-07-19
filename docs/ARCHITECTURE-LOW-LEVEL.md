@@ -358,6 +358,7 @@ the client channel closes.
 | `PAM_WINRM_INSECURE_SKIP_VERIFY` | `false` | skip WinRM TLS verify (dev only) |
 | `PAM_WINRM_AUTH` | `basic` | `basic` or `ntlm` |
 | `PAM_GUACD_ADDR` | — (RDP off) | Guacamole guacd address, e.g. `127.0.0.1:4822` |
+| `PAM_PROXY_WINRM` | `false` | broker an interactive WinRM command loop through the SSH proxy |
 | `PAM_GUACD_RDP_SECURITY` / `PAM_GUACD_IGNORE_CERT` | negotiate / `false` (verify) | RDP security mode; cert verification (opt-out for dev) |
 | `PAM_OIDC_ISSUER` | — (disabled) | OIDC login; set to enable the auth-code flow |
 | `PAM_OIDC_CLIENT_ID` / `_CLIENT_SECRET` / `_REDIRECT_URL` / `_SCOPES` | — | OIDC client |
@@ -440,6 +441,7 @@ secrets. Format `json` (SIEM) or `text` (humans); collect from stdout.
 
 | Date | Change |
 |---|---|
+| 2026-07-19 | Proxy: interactive WinRM command loop through the SSH proxy (`proxy.Config.WinRMRunner`, `PAM_PROXY_WINRM`) — each operator line runs as a WinRM command, recorded; stateless-per-line |
 | 2026-07-19 | OT: read-only observer sessions (`<login>+observe` → drop operator keystrokes, refuse exec/subsystem; `session.start … mode:observer`) |
 | 2026-07-19 | OT: protocol allowlist (`PAM_ALLOWED_PROTOCOLS`) enforced at create-target and every connect path (WinRM/RDP handlers + SSH proxy) |
 | 2026-07-19 | Alerting: email + syslog channels (`alert.Email`/`alert.Syslog`/`alert.Multi`, `PAM_ALERT_SYSLOG`/`PAM_ALERT_EMAIL_*`) alongside the webhook |

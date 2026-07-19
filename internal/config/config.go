@@ -88,6 +88,9 @@ type Config struct {
 	WinRMInsecure bool
 	// WinRMNTLM selects NTLMv2 auth (required by most AD-joined hosts).
 	WinRMNTLM bool
+	// ProxyWinRM enables an interactive WinRM command loop through the SSH proxy
+	// (ssh <cred>@<winrm-target>@pam). Opt-in — off by default.
+	ProxyWinRM bool
 	// GuacdAddr enables RDP brokering via an Apache Guacamole guacd daemon.
 	GuacdAddr string
 	// GuacdRecordingPath makes guacd record RDP sessions server-side.
@@ -195,6 +198,7 @@ func Load() (*Config, error) {
 		WinRMHTTPS:          os.Getenv("PAM_WINRM_HTTPS") != "false", // default HTTPS
 		WinRMInsecure:       os.Getenv("PAM_WINRM_INSECURE_SKIP_VERIFY") == "true",
 		WinRMNTLM:           os.Getenv("PAM_WINRM_AUTH") == "ntlm",
+		ProxyWinRM:          os.Getenv("PAM_PROXY_WINRM") == "true",
 		GuacdAddr:           os.Getenv("PAM_GUACD_ADDR"),
 		GuacdRecordingPath:  os.Getenv("PAM_GUACD_RECORDING_PATH"),
 		GuacdRDPSecurity:    os.Getenv("PAM_GUACD_RDP_SECURITY"),
