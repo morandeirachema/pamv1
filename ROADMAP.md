@@ -111,7 +111,7 @@ Designed for industrial environments ([IEC 62443](https://www.isa.org/standards-
 - [x] **Air-gap/offline mode** (`PAM_OT_AIRGAP`): disables all outbound calls (alert webhooks); alerts still hit the audit trail + local logs
 - [x] Deployment pattern for the industrial DMZ (level 3.5) documented (Purdue diagram, firewall guidance, IEC 62443 control mapping)
 - [x] **Protocol allowlisting** (`PAM_ALLOWED_PROTOCOLS`): restrict which target protocols may be created/connected (e.g. forbid RDP in an OT zone); enforced at create-target and on every connect path (API + proxy)
-- [ ] Read-only observer sessions for engineers (follow-on)
+- [x] **Read-only observer sessions**: `ssh <cred>@<target>+observe@pam` opens a view-only session — output streams and is recorded, but operator keystrokes are dropped and exec/subsystem requests are refused (`mode:observer` in the audit)
 - [ ] Serial/jump-host connectors for legacy equipment (follow-on)
 
 ## Phase 9 — NIS2 compliance pack ✅

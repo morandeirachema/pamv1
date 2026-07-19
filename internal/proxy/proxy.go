@@ -125,13 +125,23 @@ func (p *Proxy) authenticate(c ssh.ConnMetadata, password []byte) (*ssh.Permissi
 		p.log.Warn("authentication failed", "login", c.User(), "remote", c.RemoteAddr().String())
 		return nil, fmt.Errorf("pamv1: authentication failed")
 	}
-	credUser, targetName := splitLogin(c.User())
+	// A "+observe" suffix requests a read-only (view-only) session: the operator
+	// sees output but their keystrokes and exec requests are dropped.
+	login := c.User()
+	observe := false
+	if rest, ok := strings.CutSuffix(login, "+observe"); ok {
+		observe, login = true, rest
+	}
+	credUser, targetName := splitLogin(login)
 	ext := map[string]string{
 		"login":     c.User(),
 		"principal": principal.Name,
 		"role":      string(principal.Role),
 		"target":    targetName,
 		"cred_user": credUser,
+	}
+	if observe {
+		ext["observe"] = "true"
 	}
 	if principal.EnrollOnly {
 		ext["enroll_only"] = "true"
@@ -290,10 +300,15 @@ func (p *Proxy) handleConn(ctx context.Context, nConn net.Conn) {
 	}
 	defer upstream.Close()
 
+	observe := ext["observe"] == "true"
+	mode := "interactive"
+	if observe {
+		mode = "observer"
+	}
 	p.log.Info("session started", "actor", actor, "target", target.Name,
-		"host", fmt.Sprintf("%s:%d", target.Host, target.Port), "cred_user", cred.Username)
+		"host", fmt.Sprintf("%s:%d", target.Host, target.Port), "cred_user", cred.Username, "mode", mode)
 	p.audit(ctx, actor, "session.start",
-		fmt.Sprintf("target:%s host:%s:%d cred_user:%s", target.Name, target.Host, target.Port, cred.Username))
+		fmt.Sprintf("target:%s host:%s:%d cred_user:%s mode:%s", target.Name, target.Host, target.Port, cred.Username, mode))
 	if p.sessions != nil {
 		sid := p.sessions.Register(session.Info{
 			Actor: actor, Target: target.Name, Protocol: "ssh", Remote: remote, Started: time.Now(),
@@ -319,7 +334,7 @@ func (p *Proxy) handleConn(ctx context.Context, nConn net.Conn) {
 		wg.Add(1)
 		go func(nc ssh.NewChannel) {
 			defer wg.Done()
-			p.handleSession(ctx, nc, upstream, target, cred, actor)
+			p.handleSession(ctx, nc, upstream, target, cred, actor, observe)
 		}(nc)
 	}
 	wg.Wait()
@@ -398,7 +413,7 @@ func (p *Proxy) dialUpstream(target *store.Target, cred *store.Credential, secre
 // channel, forwarding channel requests and stdin/stdout/stderr both directions
 // and tee'ing the target's output into an asciicast recording. On close the
 // recording's SHA-256 and its position in the tamper-evident chain are audited.
-func (p *Proxy) handleSession(ctx context.Context, nc ssh.NewChannel, upstream *ssh.Client, target *store.Target, cred *store.Credential, actor string) {
+func (p *Proxy) handleSession(ctx context.Context, nc ssh.NewChannel, upstream *ssh.Client, target *store.Target, cred *store.Credential, actor string, observe bool) {
 	clientChan, clientReqs, err := nc.Accept()
 	if err != nil {
 		return
@@ -420,8 +435,14 @@ func (p *Proxy) handleSession(ctx context.Context, nc ssh.NewChannel, upstream *
 	}
 
 	// Forward channel requests both directions (pty-req, shell, exec,
-	// window-change from the client; exit-status from upstream).
-	go pumpRequests(clientReqs, upChan)
+	// window-change from the client; exit-status from upstream). In observer mode
+	// the client→upstream pump refuses exec/subsystem, and operator keystrokes are
+	// dropped — the session is view-only.
+	if observe {
+		go pumpRequestsObserver(clientReqs, upChan)
+	} else {
+		go pumpRequests(clientReqs, upChan)
+	}
 	var upReqDone sync.WaitGroup
 	upReqDone.Add(1)
 	go func() {
@@ -430,10 +451,14 @@ func (p *Proxy) handleSession(ctx context.Context, nc ssh.NewChannel, upstream *
 	}()
 
 	go io.Copy(clientChan.Stderr(), upChan.Stderr())
-	go func() {
-		io.Copy(upChan, clientChan) // operator keystrokes -> target
-		upChan.CloseWrite()
-	}()
+	if observe {
+		go io.Copy(io.Discard, clientChan) // drop operator keystrokes
+	} else {
+		go func() {
+			io.Copy(upChan, clientChan) // operator keystrokes -> target
+			upChan.CloseWrite()
+		}()
+	}
 
 	// Target output -> operator, tee'd into the recording.
 	var out io.Writer = clientChan
@@ -455,6 +480,24 @@ func (p *Proxy) handleSession(ctx context.Context, nc ssh.NewChannel, upstream *
 // pumpRequests forwards SSH channel requests from in to dst, relaying replies.
 func pumpRequests(in <-chan *ssh.Request, dst ssh.Channel) {
 	for req := range in {
+		ok, err := dst.SendRequest(req.Type, req.WantReply, req.Payload)
+		if req.WantReply {
+			req.Reply(ok && err == nil, nil)
+		}
+	}
+}
+
+// pumpRequestsObserver forwards channel requests like pumpRequests but refuses
+// anything that would run a command (exec, subsystem), so a read-only session
+// cannot execute — the operator may open a shell/pty and watch, nothing more.
+func pumpRequestsObserver(in <-chan *ssh.Request, dst ssh.Channel) {
+	for req := range in {
+		if req.Type == "exec" || req.Type == "subsystem" {
+			if req.WantReply {
+				req.Reply(false, nil)
+			}
+			continue
+		}
 		ok, err := dst.SendRequest(req.Type, req.WantReply, req.Payload)
 		if req.WantReply {
 			req.Reply(ok && err == nil, nil)

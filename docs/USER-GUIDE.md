@@ -123,6 +123,9 @@ ssh -p 2222 web-01@PAM_HOST
 
 # Choose a specific credential (account "root") on that target
 ssh -p 2222 root@web-01@PAM_HOST
+
+# Read-only / observer session: watch the output but cannot type or run commands
+ssh -p 2222 root@web-01+observe@PAM_HOST
 ```
 
 - `PAM_HOST` is the pamv1 proxy host; `2222` is the proxy port (ask your admin).
