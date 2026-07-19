@@ -65,7 +65,7 @@ flowchart TB
 | **REST API** | CRUD for targets/credentials, audit, authn | ✅ Phase 1 |
 | **Vault** | Encrypt/decrypt secrets; key custody | ✅ Phase 1 |
 | **Audit** | Append-only trail of every sensitive action | ✅ Phase 1 |
-| **Break-glass** | Sealed emergency access, loud + audited | ✅ Phase 1 |
+| **Break-glass** | Sealed key + M-of-N quorum unseal, auto-expiring, alerted | ✅ Phase 1/6 |
 | **Session Proxy** | Broker SSH; **JIT credential injection**; record sessions | ✅ Phase 2 |
 | **RBAC** | Four profiles (admin/user/auditor/approver), per-user tokens | ✅ Phase 3a |
 | **AD / Entra / OIDC login** | LDAPS + Entra ID (ROPC) + OIDC auth-code SSO, groups/app-roles → roles, session tokens | ✅ Phase 3b |
@@ -152,6 +152,7 @@ flowchart LR
 
 | Date | Change |
 |---|---|
+| 2026-07-19 | Phase 6: break-glass v2 (M-of-N quorum unseal, auto-expiring emergency sessions, real-time alerting); AWS KMS KEK |
 | 2026-07-19 | Phase 5: transport hardening (HTTPS/headers/rate-limit), vault key rotation, backup runbook; Phase 2 completed (per-target grants, live sessions + kill, hash-chained recordings, reveal lockdown) |
 | 2026-07-18 | Phase 3b hardening: OIDC Authorization Code SSO (PKCE + JWKS signature validation) |
 | 2026-07-18 | Phase 4: Windows targets — WinRM (basic/NTLM) command execution + RDP brokering via Guacamole guacd, JIT credential injection |

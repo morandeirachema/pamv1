@@ -25,6 +25,8 @@ internal/
   oidc/        # OIDC Authorization Code + PKCE, RS256 JWKS validation
   maint/       # offline maintenance (vault KEK rotation)
   session/     # live-session registry (list + kill), shared proxy↔api
+  shamir/      # Shamir secret sharing (GF(2^8)) for break-glass quorum
+  alert/       # real-time alert delivery (webhook), break-glass events
   auth/        # roles, capabilities, Principal, Resolver (RBAC)
   store/       # Store interface + domain types + CredentialAAD
     memstore/  # in-memory impl (tests, demo)
@@ -131,6 +133,13 @@ endpoints arrive with the OT/approval phase).
   `CapManageTargets`, `GET /api/audit` needs `CapReadAudit`).
 - User administration (`CapManageUsers`): `POST /api/users` mints a token and
   returns it **once**; only the SHA-256 is stored. `GET`/`DELETE /api/users`.
+- **Break-glass quorum** (`breakglass_handlers.go`, Phase 6): `POST
+  /api/breakglass/unseal` (public, rate-limited) collects Shamir shares in an
+  in-memory `unsealState`; when `PAM_BREAK_GLASS_THRESHOLD` shares reconstruct a
+  key whose SHA-256 matches `PAM_BREAK_GLASS_KEY_HASH`, it issues a short-lived
+  session (`SessionScopeBreakGlass` → admin + `BreakGlass=true`, auto-expiring).
+  Every break-glass use fires an `alert.Notifier` (webhook). Shares are produced
+  offline by `pam-server -split-key`; the server holds none.
 - Login (`authn` optional): `POST /api/login` (public) verifies username+password
   via the configured `Authenticator`, then — if the user has a **confirmed TOTP
   enrollment** — requires a valid `otp` (401 `mfa_required` if missing), and
@@ -255,6 +264,10 @@ the client channel closes.
 | `PAM_LOG_FORMAT` | `json` | logging (json/text) |
 | `PAM_TLS_CERT` / `PAM_TLS_KEY` | — | native HTTPS (TLS 1.2+) when both set |
 | `PAM_AUTH_RATE_LIMIT` | `20` | auth attempts / client IP / minute (0 disables) |
+| `PAM_REVEAL_DISABLED` | `false` | make credential reveal break-glass-only |
+| `PAM_BREAK_GLASS_THRESHOLD` / `_SHARES` | `0` / `5` | quorum M / N (M≥2 enables unseal) |
+| `PAM_BREAK_GLASS_TTL_MIN` | `15` | break-glass session lifetime (minutes) |
+| `PAM_ALERT_WEBHOOK` | — | JSON POST target for break-glass alerts |
 | `PAM_KEK_PROVIDER` | `local` | vault KEK: `local` (dev/test) or `vault-transit` |
 | `PAM_MASTER_KEY` | — (local only) | local KEK key (base64, dev/test) |
 | `PAM_KEK_TRANSIT_ADDR` / `_TOKEN` / `_KEY` | — | HashiCorp Vault Transit KEK (production) |
@@ -294,7 +307,7 @@ secrets. Format `json` (SIEM) or `text` (humans); collect from stdout.
 
 `target.create` · `target.delete` · `credential.create` · `credential.reveal` ·
 `credential.delete` · `credential.reveal_denied` · `grant.create` · `grant.delete` ·
-`winrm.denied` · `session.kill` · `user.create` · `user.delete` · `login` · `logout` ·
+`winrm.denied` · `session.kill` · `breakglass.unseal` · `user.create` · `user.delete` · `login` · `logout` ·
 `mfa.enroll` · `mfa.confirm` · `mfa.disable` · `mfa.recovery_generated` ·
 `mfa.recovery_used` · `winrm.run` · `winrm.error` · `rdp.connect` · `rdp.end` ·
 `rdp.error` · `authz.denied` · `breakglass.access` · `session.start` ·
@@ -335,6 +348,9 @@ secrets. Format `json` (SIEM) or `text` (humans); collect from stdout.
 - `oidc`: Exchange with a real RSA-signed token (valid), and rejects bad signature / wrong issuer / wrong audience / nonce mismatch / expired; PKCE + auth URL.
 - `api` (OIDC): full flow (start redirect → callback with a signed token → session → admin role enforced), bad-state error redirect, not-configured 404.
 - `auth` (Entra/chain): Entra app-role & group login, highest-privilege-wins, bad password, no mapped role (mock token endpoint); chain resolves via a later source and rejects when none match.
+- `shamir`: split/combine roundtrip (any M reconstruct), below-threshold and corrupted shares don't, validation.
+- `alert`: webhook receives the event; no-op is safe.
+- `api` (break-glass): quorum unseal issues a break-glass session that reads audit + fires unseal & access alerts; wrong shares 401; not-configured 404.
 - `api`: full CRUD flow, auth required, secret-non-leak, cascade delete, break-glass audited, validation/conflict, **RBAC** (user/auditor/approver each allowed only their capabilities), **login session** (issue → use with role enforcement → logout revokes), login-not-configured 503, **MFA** (enroll → confirm → login requires OTP → wrong OTP rejected), **enforce-MFA** (enrollment-only session blocked from other routes → enroll → full session), **recovery codes** (login with a code, single-use).
 - `proxy`: **end-to-end JIT injection** against an in-process upstream sshd that
   accepts only the vaulted password (proves the client never had it), plus wrong-key
@@ -346,6 +362,7 @@ secrets. Format `json` (SIEM) or `text` (humans); collect from stdout.
 
 | Date | Change |
 |---|---|
+| 2026-07-19 | Phase 6: break-glass v2 — `shamir` (M-of-N quorum), `pam-server -split-key`, `POST /api/breakglass/unseal` (auto-expiring session), `alert` webhook on break-glass access/unseal; AWS KMS KEK (`awskms.go`) |
 | 2026-07-19 | Phase 5 done: embedded versioned migrations (`pgstore/migrate.go`, `schema_migrations`, `migrations/0001_init.sql`) replacing the ad-hoc startup schema |
 | 2026-07-19 | Phase 2: live session registry (`internal/session`) — `GET /api/sessions` + `DELETE /api/sessions/{id}` (kill-switch); proxy + RDP register live sessions |
 | 2026-07-18 | Phase 2: per-target authorization (`store.TargetGrant`, `auth.CanConnectTarget`, `/api/targets/{id}/grants`, enforced in proxy/WinRM/RDP); reveal lockdown (`PAM_REVEAL_DISABLED`) |

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"time"
 )
 
 type Config struct {
@@ -36,6 +37,14 @@ type Config struct {
 	AuthRatePerMin int
 	// RevealDisabled makes credential reveal break-glass-only.
 	RevealDisabled bool
+
+	// BreakGlassThreshold (M) enables M-of-N quorum unseal; BreakGlassShares (N)
+	// is used by -split-key; BreakGlassTTL is the unsealed session lifetime.
+	BreakGlassThreshold int
+	BreakGlassShares    int
+	BreakGlassTTL       time.Duration
+	// AlertWebhook receives real-time break-glass alerts (JSON POST).
+	AlertWebhook string
 
 	// MFARequired makes password login require a confirmed TOTP second factor.
 	MFARequired bool
@@ -102,32 +111,36 @@ type Config struct {
 
 func Load() (*Config, error) {
 	cfg := &Config{
-		ListenAddr:         getenv("PAM_LISTEN_ADDR", ":8080"),
-		DatabaseURL:        os.Getenv("PAM_DATABASE_URL"),
-		MasterKey:          os.Getenv("PAM_MASTER_KEY"),
-		APIKey:             os.Getenv("PAM_API_KEY"),
-		BreakGlassKeyHash:  os.Getenv("PAM_BREAK_GLASS_KEY_HASH"),
-		SSHAddr:            getenv("PAM_SSH_ADDR", ":2222"),
-		SSHHostKeyPath:     os.Getenv("PAM_SSH_HOST_KEY"),
-		RecordingDir:       getenv("PAM_RECORDING_DIR", "recordings"),
-		LogLevel:           getenv("PAM_LOG_LEVEL", "info"),
-		LogFormat:          getenv("PAM_LOG_FORMAT", "json"),
-		TLSCert:            os.Getenv("PAM_TLS_CERT"),
-		TLSKey:             os.Getenv("PAM_TLS_KEY"),
-		AuthRatePerMin:     getenvInt("PAM_AUTH_RATE_LIMIT", 20),
-		RevealDisabled:     os.Getenv("PAM_REVEAL_DISABLED") == "true",
-		MFARequired:        os.Getenv("PAM_MFA_REQUIRED") == "true",
-		WinRMHTTPS:         os.Getenv("PAM_WINRM_HTTPS") != "false", // default HTTPS
-		WinRMInsecure:      os.Getenv("PAM_WINRM_INSECURE_SKIP_VERIFY") == "true",
-		WinRMNTLM:          os.Getenv("PAM_WINRM_AUTH") == "ntlm",
-		GuacdAddr:          os.Getenv("PAM_GUACD_ADDR"),
-		GuacdRecordingPath: os.Getenv("PAM_GUACD_RECORDING_PATH"),
-		KEKProvider:        getenv("PAM_KEK_PROVIDER", "local"),
-		TransitAddr:        os.Getenv("PAM_KEK_TRANSIT_ADDR"),
-		TransitToken:       os.Getenv("PAM_KEK_TRANSIT_TOKEN"),
-		TransitKey:         os.Getenv("PAM_KEK_TRANSIT_KEY"),
-		AWSKMSKeyID:        os.Getenv("PAM_KEK_AWS_KEY_ID"),
-		AWSRegion:          os.Getenv("PAM_KEK_AWS_REGION"),
+		ListenAddr:          getenv("PAM_LISTEN_ADDR", ":8080"),
+		DatabaseURL:         os.Getenv("PAM_DATABASE_URL"),
+		MasterKey:           os.Getenv("PAM_MASTER_KEY"),
+		APIKey:              os.Getenv("PAM_API_KEY"),
+		BreakGlassKeyHash:   os.Getenv("PAM_BREAK_GLASS_KEY_HASH"),
+		SSHAddr:             getenv("PAM_SSH_ADDR", ":2222"),
+		SSHHostKeyPath:      os.Getenv("PAM_SSH_HOST_KEY"),
+		RecordingDir:        getenv("PAM_RECORDING_DIR", "recordings"),
+		LogLevel:            getenv("PAM_LOG_LEVEL", "info"),
+		LogFormat:           getenv("PAM_LOG_FORMAT", "json"),
+		TLSCert:             os.Getenv("PAM_TLS_CERT"),
+		TLSKey:              os.Getenv("PAM_TLS_KEY"),
+		AuthRatePerMin:      getenvInt("PAM_AUTH_RATE_LIMIT", 20),
+		RevealDisabled:      os.Getenv("PAM_REVEAL_DISABLED") == "true",
+		BreakGlassThreshold: getenvInt("PAM_BREAK_GLASS_THRESHOLD", 0),
+		BreakGlassShares:    getenvInt("PAM_BREAK_GLASS_SHARES", 5),
+		BreakGlassTTL:       time.Duration(getenvInt("PAM_BREAK_GLASS_TTL_MIN", 15)) * time.Minute,
+		AlertWebhook:        os.Getenv("PAM_ALERT_WEBHOOK"),
+		MFARequired:         os.Getenv("PAM_MFA_REQUIRED") == "true",
+		WinRMHTTPS:          os.Getenv("PAM_WINRM_HTTPS") != "false", // default HTTPS
+		WinRMInsecure:       os.Getenv("PAM_WINRM_INSECURE_SKIP_VERIFY") == "true",
+		WinRMNTLM:           os.Getenv("PAM_WINRM_AUTH") == "ntlm",
+		GuacdAddr:           os.Getenv("PAM_GUACD_ADDR"),
+		GuacdRecordingPath:  os.Getenv("PAM_GUACD_RECORDING_PATH"),
+		KEKProvider:         getenv("PAM_KEK_PROVIDER", "local"),
+		TransitAddr:         os.Getenv("PAM_KEK_TRANSIT_ADDR"),
+		TransitToken:        os.Getenv("PAM_KEK_TRANSIT_TOKEN"),
+		TransitKey:          os.Getenv("PAM_KEK_TRANSIT_KEY"),
+		AWSKMSKeyID:         os.Getenv("PAM_KEK_AWS_KEY_ID"),
+		AWSRegion:           os.Getenv("PAM_KEK_AWS_REGION"),
 
 		LDAPURL:                os.Getenv("PAM_LDAP_URL"),
 		LDAPBindDN:             os.Getenv("PAM_LDAP_BIND_DN"),

@@ -79,12 +79,14 @@ The flagship: users connect *through* pamv1, never holding the credential.
 - [x] **AWS KMS KEK** (`aws-kms` provider): the data key is wrapped/unwrapped by KMS (`PAM_KEK_AWS_KEY_ID`/`PAM_KEK_AWS_REGION`); the CMK never leaves KMS
 - [ ] _(optional extension, interface ready)_ PKCS#11 HSM KEK provider
 
-## Phase 6 — Break-glass v2 ⬜
+## Phase 6 — Break-glass v2 ✅
 
-- [ ] M-of-N quorum unseal (Shamir secret sharing) for emergency access
-- [ ] Auto-expiring break-glass sessions + forced credential rotation after use
-- [ ] Real-time alerting (webhook/email/syslog) on any break-glass event
-- [ ] Documented offline procedure (sealed envelopes, dual control, periodic drills)
+- [x] **M-of-N quorum unseal** ([Shamir secret sharing](internal/shamir), `pam-server -split-key`, `POST /api/breakglass/unseal`): custodians submit shares; when M reconstruct the key (verified against its hash) a session is issued
+- [x] **Auto-expiring break-glass sessions** (short-TTL session, `PAM_BREAK_GLASS_TTL_MIN`, scope `breakglass` → admin + loud audit)
+- [x] **Real-time alerting** (`internal/alert` webhook, `PAM_ALERT_WEBHOOK`) on every break-glass **access** and **unseal**
+- [x] Documented offline procedure (sealed shares, dual control) — see the [Admin Guide](docs/ADMIN-GUIDE.md)
+- [ ] Forced credential rotation after break-glass use (needs the rotation connectors from Phase 7)
+- [ ] Additional alert channels (email/syslog) on the same `Notifier` interface
 
 ## Phase 7 — Credential lifecycle ⬜
 

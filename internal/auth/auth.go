@@ -130,6 +130,10 @@ func HighestRole(claims []string, m map[string]Role) (Role, bool) {
 // MFA enrollment (issued when a policy requires MFA but the user has none).
 const SessionScopeEnroll = "enroll"
 
+// SessionScopeBreakGlass marks a short-lived emergency session issued after a
+// successful M-of-N quorum unseal; it grants admin and is audited loudly.
+const SessionScopeBreakGlass = "breakglass"
+
 // Principal is an authenticated identity for the duration of a request or
 // session.
 type Principal struct {
@@ -189,8 +193,11 @@ func (r *Resolver) Resolve(ctx context.Context, key string) (*Principal, error) 
 			}
 			return nil, ErrUnauthorized
 		}
-		// Login session token (e.g. Active Directory / Entra ID).
+		// Login session token (e.g. Active Directory / Entra ID / break-glass).
 		if s, err := r.dir.GetSessionByTokenHash(ctx, hash); err == nil {
+			if s.Scope == SessionScopeBreakGlass {
+				return &Principal{Name: s.Username, Role: RoleAdmin, BreakGlass: true}, nil
+			}
 			if role, perr := ParseRole(s.Role); perr == nil {
 				return &Principal{Name: s.Username, Role: role, EnrollOnly: s.Scope == SessionScopeEnroll}, nil
 			}

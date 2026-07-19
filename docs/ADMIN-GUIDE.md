@@ -395,7 +395,33 @@ For emergencies when the normal admin path is unavailable.
 4. **After the incident:** rotate the emergency key (new hash), rotate any
    revealed credentials, and review the audit trail.
 
-Quorum unseal, auto-expiry and alerting are planned in [Phase 6](../ROADMAP.md#phase-6--break-glass-v2-).
+### Break-glass v2: M-of-N quorum unseal
+
+Instead of a single sealed key, split it among **custodians** so no one person
+can invoke break-glass alone. Split the key offline (the server never sees the
+shares):
+
+```bash
+echo -n "<emergency-key>" | PAM_BREAK_GLASS_SHARES=5 PAM_BREAK_GLASS_THRESHOLD=3 ./pam-server -split-key
+# → 5 hex shares; any 3 reconstruct the key. Give one to each custodian.
+```
+
+Configure the server with the key's hash and the threshold:
+`PAM_BREAK_GLASS_KEY_HASH=<hash>`, `PAM_BREAK_GLASS_THRESHOLD=3`. In an emergency,
+custodians each POST their share:
+
+```bash
+curl -X POST https://PAM_HOST/api/breakglass/unseal -d '{"share":"<hex-share>"}'
+# → {"collected":1,"needed":3} … until the 3rd:
+# → {"token":"pamt_…","role":"admin","expires_at":"…"}
+```
+
+The reconstructed key is verified against the configured hash; a valid quorum
+yields a **short-lived admin session** (`PAM_BREAK_GLASS_TTL_MIN`, default 15 min)
+that auto-expires. Every unseal and every subsequent break-glass request is
+audited (`breakglass.unseal` / `breakglass.access`) and, if `PAM_ALERT_WEBHOOK`
+is set, **alerted in real time**. Keep custodians and their shares under dual
+control, and run periodic drills.
 
 ### Rotating the vault key
 

@@ -3,11 +3,13 @@ package api
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"log/slog"
 	"net/http"
 	"time"
 
+	"github.com/morandeirachema/pamv1/internal/alert"
 	"github.com/morandeirachema/pamv1/internal/auth"
 	"github.com/morandeirachema/pamv1/internal/logging"
 	"github.com/morandeirachema/pamv1/internal/oidc"
@@ -78,6 +80,14 @@ type Options struct {
 	RevealDisabled bool
 	// Sessions is the live-session registry (shared with the proxy).
 	Sessions *session.Registry
+	// BreakGlassHashHex is the hex SHA-256 of the emergency key (for quorum unseal).
+	BreakGlassHashHex string
+	// BreakGlassThreshold (M) enables M-of-N quorum unseal when >= 2.
+	BreakGlassThreshold int
+	// BreakGlassTTL is the lifetime of an unsealed break-glass session.
+	BreakGlassTTL time.Duration
+	// Alerter delivers real-time break-glass alerts (defaults to no-op).
+	Alerter alert.Notifier
 }
 
 type Server struct {
@@ -97,6 +107,11 @@ type Server struct {
 	authLimiter        *rateLimiter
 	revealDisabled     bool
 	sessions           *session.Registry
+	breakGlassHash     []byte
+	bgThreshold        int
+	bgTTL              time.Duration
+	unseal             *unsealState
+	alerter            alert.Notifier
 	log                *slog.Logger
 	mux                *http.ServeMux
 	handler            http.Handler
@@ -118,6 +133,20 @@ func New(st store.Store, v *vault.Vault, resolver *auth.Resolver, authn auth.Aut
 	if portalURL == "" {
 		portalURL = "/"
 	}
+	var bgHash []byte
+	if opts.BreakGlassHashHex != "" {
+		if b, derr := hex.DecodeString(opts.BreakGlassHashHex); derr == nil {
+			bgHash = b
+		}
+	}
+	bgTTL := opts.BreakGlassTTL
+	if bgTTL <= 0 {
+		bgTTL = 15 * time.Minute
+	}
+	alerter := opts.Alerter
+	if alerter == nil {
+		alerter = alert.Noop{}
+	}
 	s := &Server{
 		store:              st,
 		vault:              v,
@@ -135,6 +164,11 @@ func New(st store.Store, v *vault.Vault, resolver *auth.Resolver, authn auth.Aut
 		authLimiter:        newRateLimiter(opts.AuthRatePerMin),
 		revealDisabled:     opts.RevealDisabled,
 		sessions:           opts.Sessions,
+		breakGlassHash:     bgHash,
+		bgThreshold:        opts.BreakGlassThreshold,
+		bgTTL:              bgTTL,
+		unseal:             newUnsealState(),
+		alerter:            alerter,
 		log:                logging.Component("api"),
 		mux:                http.NewServeMux(),
 	}
@@ -200,6 +234,7 @@ func (s *Server) routes() {
 	s.mux.Handle("POST /api/logout", s.authenticated(s.logout))
 	s.mux.HandleFunc("GET /api/auth/oidc/start", s.oidcStart)
 	s.mux.Handle("GET /api/auth/oidc/callback", s.rateLimit(http.HandlerFunc(s.oidcCallback)))
+	s.mux.Handle("POST /api/breakglass/unseal", s.rateLimit(http.HandlerFunc(s.breakGlassUnseal)))
 
 	// Self-service MFA (any authenticated identity manages its own second factor).
 	s.mux.Handle("GET /api/mfa", s.authenticated(s.mfaStatus))
@@ -252,6 +287,10 @@ func (s *Server) authz(cap auth.Capability, next http.HandlerFunc) http.Handler 
 		if p.BreakGlass {
 			s.log.Warn("BREAK-GLASS access", "method", r.Method, "path", r.URL.Path, "remote", r.RemoteAddr)
 			s.audit(ctx, "breakglass.access", r.Method+" "+r.URL.Path)
+			s.alerter.Notify(ctx, alert.Event{
+				Type: "breakglass.access", Actor: p.Name,
+				Detail: r.Method + " " + r.URL.Path, Remote: r.RemoteAddr, Time: time.Now(),
+			})
 		}
 		if p.EnrollOnly {
 			s.audit(ctx, "authz.denied", r.Method+" "+r.URL.Path+" reason:mfa-enrollment-incomplete")

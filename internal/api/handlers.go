@@ -487,6 +487,12 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 
 // issueSession mints a session token (scope "" = full, "enroll" = MFA setup only).
 func (s *Server) issueSession(ctx context.Context, p *auth.Principal, scope string) (string, store.Session, error) {
+	return s.issueSessionTTL(ctx, p, scope, sessionTTL)
+}
+
+// issueSessionTTL mints a session token with an explicit lifetime (break-glass
+// sessions use a short TTL).
+func (s *Server) issueSessionTTL(ctx context.Context, p *auth.Principal, scope string, ttl time.Duration) (string, store.Session, error) {
 	token, err := generateToken()
 	if err != nil {
 		return "", store.Session{}, err
@@ -496,7 +502,7 @@ func (s *Server) issueSession(ctx context.Context, p *auth.Principal, scope stri
 		Role:      string(p.Role),
 		Scope:     scope,
 		TokenHash: hashHex(token),
-		ExpiresAt: time.Now().Add(sessionTTL).UTC(),
+		ExpiresAt: time.Now().Add(ttl).UTC(),
 	}
 	if err := s.store.CreateSession(ctx, &sess); err != nil {
 		return "", store.Session{}, err

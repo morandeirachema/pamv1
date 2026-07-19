@@ -20,10 +20,12 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
 
+	"github.com/morandeirachema/pamv1/internal/alert"
 	"github.com/morandeirachema/pamv1/internal/api"
 	"github.com/morandeirachema/pamv1/internal/auth"
 	"github.com/morandeirachema/pamv1/internal/config"
@@ -32,6 +34,7 @@ import (
 	"github.com/morandeirachema/pamv1/internal/oidc"
 	"github.com/morandeirachema/pamv1/internal/proxy"
 	"github.com/morandeirachema/pamv1/internal/session"
+	"github.com/morandeirachema/pamv1/internal/shamir"
 	"github.com/morandeirachema/pamv1/internal/store"
 	"github.com/morandeirachema/pamv1/internal/store/memstore"
 	"github.com/morandeirachema/pamv1/internal/store/pgstore"
@@ -43,6 +46,7 @@ func main() {
 	genkey := flag.Bool("genkey", false, "print a new vault master key and exit")
 	hashkey := flag.Bool("hashkey", false, "read a break-glass key from stdin, print its SHA-256 hex and exit")
 	rotateKEK := flag.Bool("rotate-kek", false, "re-encrypt all vaulted secrets from PAM_MASTER_KEY to PAM_NEW_MASTER_KEY and exit")
+	splitKey := flag.Bool("split-key", false, "read a break-glass key from stdin and print N Shamir shares (PAM_BREAK_GLASS_SHARES / _THRESHOLD)")
 	flag.Parse()
 
 	switch {
@@ -61,6 +65,10 @@ func main() {
 		fmt.Println(hex.EncodeToString(sum[:]))
 	case *rotateKEK:
 		if err := runRotateKEK(); err != nil {
+			fatal(err)
+		}
+	case *splitKey:
+		if err := runSplitKey(); err != nil {
 			fatal(err)
 		}
 	default:
@@ -108,6 +116,40 @@ func runRotateKEK() error {
 func fatal(err error) {
 	fmt.Fprintln(os.Stderr, "pam-server:", err)
 	os.Exit(1)
+}
+
+// runSplitKey reads the break-glass key from stdin and prints N Shamir shares
+// (hex, one per line), of which PAM_BREAK_GLASS_THRESHOLD reconstruct the key.
+// Distribute one share to each custodian; the server holds none.
+func runSplitKey() error {
+	data, err := io.ReadAll(os.Stdin)
+	if err != nil {
+		return err
+	}
+	key := []byte(strings.TrimSpace(string(data)))
+	if len(key) == 0 {
+		return fmt.Errorf("no key on stdin")
+	}
+	n := getenvInt("PAM_BREAK_GLASS_SHARES", 5)
+	m := getenvInt("PAM_BREAK_GLASS_THRESHOLD", 3)
+	shares, err := shamir.Split(key, n, m)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(os.Stderr, "# %d shares; any %d reconstruct the key. Distribute one per custodian.\n", n, m)
+	for _, s := range shares {
+		fmt.Println(hex.EncodeToString(s))
+	}
+	return nil
+}
+
+func getenvInt(key string, def int) int {
+	if v := os.Getenv(key); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			return n
+		}
+	}
+	return def
 }
 
 // buildAuthenticator wires the enabled password identity sources (on-prem AD via
@@ -252,18 +294,28 @@ func run() error {
 
 	sessions := session.NewRegistry()
 
+	var alerter alert.Notifier = alert.Noop{}
+	if cfg.AlertWebhook != "" {
+		alerter = alert.NewWebhook(cfg.AlertWebhook)
+		log.Info("alerting enabled", "webhook", cfg.AlertWebhook)
+	}
+
 	handler, err := api.New(st, v, resolver, authn, api.Options{
-		Sessions:           sessions,
-		MFARequired:        cfg.MFARequired,
-		RecordingDir:       cfg.RecordingDir,
-		WinRM:              winrm.Client{HTTPS: cfg.WinRMHTTPS, Insecure: cfg.WinRMInsecure, NTLM: cfg.WinRMNTLM, Timeout: 30 * time.Second},
-		OIDC:               oidcProvider,
-		OIDCRoleMap:        roleMap(cfg.OIDCRoleAdmin, cfg.OIDCRoleUser, cfg.OIDCRoleAuditor, cfg.OIDCRoleApprover),
-		PortalURL:          cfg.PortalURL,
-		GuacdAddr:          cfg.GuacdAddr,
-		GuacdRecordingPath: cfg.GuacdRecordingPath,
-		AuthRatePerMin:     cfg.AuthRatePerMin,
-		RevealDisabled:     cfg.RevealDisabled,
+		Sessions:            sessions,
+		MFARequired:         cfg.MFARequired,
+		RecordingDir:        cfg.RecordingDir,
+		WinRM:               winrm.Client{HTTPS: cfg.WinRMHTTPS, Insecure: cfg.WinRMInsecure, NTLM: cfg.WinRMNTLM, Timeout: 30 * time.Second},
+		OIDC:                oidcProvider,
+		OIDCRoleMap:         roleMap(cfg.OIDCRoleAdmin, cfg.OIDCRoleUser, cfg.OIDCRoleAuditor, cfg.OIDCRoleApprover),
+		PortalURL:           cfg.PortalURL,
+		GuacdAddr:           cfg.GuacdAddr,
+		GuacdRecordingPath:  cfg.GuacdRecordingPath,
+		AuthRatePerMin:      cfg.AuthRatePerMin,
+		RevealDisabled:      cfg.RevealDisabled,
+		BreakGlassHashHex:   cfg.BreakGlassKeyHash,
+		BreakGlassThreshold: cfg.BreakGlassThreshold,
+		BreakGlassTTL:       cfg.BreakGlassTTL,
+		Alerter:             alerter,
 	})
 	if err != nil {
 		return err

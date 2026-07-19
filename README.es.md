@@ -185,6 +185,11 @@ Nunca ves la credencial.
 4. **Tras el incidente**: rota la clave de emergencia, rota las credenciales reveladas y revisa la
    auditoría.
 
+**Break-glass v2:** apertura por **quórum M-de-N** (reparte la clave en N shares con `-split-key`;
+los custodios envían sus shares para reconstruirla). En ambos casos obtienes una sesión de admin
+**de corta duración con autoexpiración**, y cada acceso/apertura break-glass se audita y se
+**alerta en tiempo real** a un webhook.
+
 ## Protocolos seguros y OT
 
 Usa siempre protocolos seguros: **HTTPS** para el portal/API, **LDAPS** para AD, **TLS** para
