@@ -69,4 +69,51 @@ func TestRotateVaultKEK(t *testing.T) {
 	if pt, err := to.Decrypt(ctx, enr.SecretEnc, store.MFAAAD("alice")); err != nil || pt != "TOTPSECRET" {
 		t.Fatalf("new vault should decrypt MFA secret: %q %v", pt, err)
 	}
+
+	// Idempotent/resumable: re-running against the same store must not fail on the
+	// already-rotated rows (it would strand a partially-rotated store otherwise).
+	n2, err := RotateVaultKEK(ctx, st, from, to)
+	if err != nil {
+		t.Fatalf("re-run after full rotation should be a no-op, got: %v", err)
+	}
+	if n2 != 0 {
+		t.Fatalf("re-run rotated %d secrets, want 0 (all already rotated)", n2)
+	}
+}
+
+// TestRotateVaultKEKResumesPartial proves a rotation interrupted partway can be
+// resumed: rows already under the new KEK are skipped, and the remaining ones
+// are rotated, without either KEK having to decrypt the whole store.
+func TestRotateVaultKEKResumesPartial(t *testing.T) {
+	ctx := context.Background()
+	st := memstore.New()
+	from, to := newVault(t), newVault(t)
+	target := &store.Target{Name: "web", Host: "h", Port: 22, OSType: "linux", Protocol: "ssh"}
+	if err := st.CreateTarget(ctx, target); err != nil {
+		t.Fatal(err)
+	}
+	// Two credentials: one already under the NEW KEK (as if a prior run rotated it
+	// before crashing), one still under the OLD KEK.
+	rotatedEnc, _ := to.Encrypt(ctx, "already", store.CredentialAAD(target.ID))
+	if err := st.CreateCredential(ctx, &store.Credential{TargetID: target.ID, Username: "a", SecretType: "password", SecretEnc: rotatedEnc}); err != nil {
+		t.Fatal(err)
+	}
+	pendingEnc, _ := from.Encrypt(ctx, "pending", store.CredentialAAD(target.ID))
+	if err := st.CreateCredential(ctx, &store.Credential{TargetID: target.ID, Username: "b", SecretType: "password", SecretEnc: pendingEnc}); err != nil {
+		t.Fatal(err)
+	}
+
+	n, err := RotateVaultKEK(ctx, st, from, to)
+	if err != nil {
+		t.Fatalf("resume should not fail on the already-rotated row: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("rotated %d, want 1 (only the pending row)", n)
+	}
+	creds, _ := st.ListCredentials(ctx, target.ID)
+	for _, c := range creds {
+		if _, err := to.Decrypt(ctx, c.SecretEnc, store.CredentialAAD(target.ID)); err != nil {
+			t.Fatalf("credential %q should decrypt under the new KEK after resume: %v", c.Username, err)
+		}
+	}
 }

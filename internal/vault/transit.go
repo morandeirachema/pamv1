@@ -8,10 +8,25 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
+
+// isLoopbackHost reports whether host is a loopback address or localhost, where
+// plaintext transit traffic never leaves the machine.
+func isLoopbackHost(host string) bool {
+	switch host {
+	case "localhost", "127.0.0.1", "::1":
+		return true
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return ip.IsLoopback()
+	}
+	return false
+}
 
 // TransitKEK wraps data keys with HashiCorp Vault's Transit secrets engine
 // (https://developer.hashicorp.com/vault/docs/secrets/transit) over HTTPS. The
@@ -30,6 +45,13 @@ type TransitKEK struct {
 func NewTransitKEK(addr, token, key string) (*TransitKEK, error) {
 	if addr == "" || token == "" || key == "" {
 		return nil, errors.New("vault: vault-transit KEK requires PAM_KEK_TRANSIT_ADDR, PAM_KEK_TRANSIT_TOKEN and PAM_KEK_TRANSIT_KEY")
+	}
+	// This address carries plaintext data keys and the Vault token — require TLS,
+	// except for a loopback dev/sidecar where the traffic never leaves the host.
+	if u, err := url.Parse(addr); err != nil {
+		return nil, fmt.Errorf("vault: invalid PAM_KEK_TRANSIT_ADDR: %w", err)
+	} else if u.Scheme != "https" && !isLoopbackHost(u.Hostname()) {
+		return nil, errors.New("vault: PAM_KEK_TRANSIT_ADDR must use https:// (it carries plaintext data keys and the Vault token)")
 	}
 	return &TransitKEK{
 		addr:  strings.TrimRight(addr, "/"),

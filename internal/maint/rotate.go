@@ -22,6 +22,12 @@ func RotateVaultKEK(ctx context.Context, st store.Store, from, to *vault.Vault) 
 	}
 	for _, c := range creds {
 		aad := store.CredentialAAD(c.TargetID)
+		// Idempotent/resumable: if this secret already decrypts under the new KEK
+		// (a prior run rotated it before crashing), skip it rather than failing on
+		// the `from` decrypt and stranding the store in a mixed-key state.
+		if _, err := to.Decrypt(ctx, c.SecretEnc, aad); err == nil {
+			continue
+		}
 		plain, err := from.Decrypt(ctx, c.SecretEnc, aad)
 		if err != nil {
 			return n, fmt.Errorf("credential %d decrypt: %w", c.ID, err)
@@ -42,6 +48,9 @@ func RotateVaultKEK(ctx context.Context, st store.Store, from, to *vault.Vault) 
 	}
 	for _, e := range enrollments {
 		aad := store.MFAAAD(e.Username)
+		if _, err := to.Decrypt(ctx, e.SecretEnc, aad); err == nil {
+			continue // already rotated under the new KEK
+		}
 		plain, err := from.Decrypt(ctx, e.SecretEnc, aad)
 		if err != nil {
 			return n, fmt.Errorf("mfa %s decrypt: %w", e.Username, err)
