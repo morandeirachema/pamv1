@@ -40,21 +40,36 @@ func NewAWSKMSKEK(ctx context.Context, region, keyID string) (*AWSKMSKEK, error)
 	return &AWSKMSKEK{keyID: keyID, client: kms.NewFromConfig(cfg)}, nil
 }
 
+// kmsEncryptionContext binds the wrapped data key to this application at the KMS
+// layer: KMS records it with the ciphertext and requires the identical context
+// on Decrypt, so a principal with kms:Decrypt on the same CMK cannot unwrap a
+// stolen pamv1 blob without it (defense-in-depth on top of the inner GCM).
+var kmsEncryptionContext = map[string]string{"app": "pamv1"}
+
 // ID reports the provider identifier, "aws-kms:<keyID>".
 func (k *AWSKMSKEK) ID() string { return "aws-kms:" + k.keyID }
 
 // Wrap encrypts the data key with KMS and returns the ciphertext blob.
 func (k *AWSKMSKEK) Wrap(ctx context.Context, dek []byte) ([]byte, error) {
-	out, err := k.client.Encrypt(ctx, &kms.EncryptInput{KeyId: aws.String(k.keyID), Plaintext: dek})
+	out, err := k.client.Encrypt(ctx, &kms.EncryptInput{
+		KeyId:             aws.String(k.keyID),
+		Plaintext:         dek,
+		EncryptionContext: kmsEncryptionContext,
+	})
 	if err != nil {
 		return nil, err
 	}
 	return out.CiphertextBlob, nil
 }
 
-// Unwrap decrypts a KMS ciphertext blob back to the data key.
+// Unwrap decrypts a KMS ciphertext blob back to the data key. The same
+// EncryptionContext used to Wrap is required or KMS refuses to decrypt.
 func (k *AWSKMSKEK) Unwrap(ctx context.Context, wrapped []byte) ([]byte, error) {
-	out, err := k.client.Decrypt(ctx, &kms.DecryptInput{KeyId: aws.String(k.keyID), CiphertextBlob: wrapped})
+	out, err := k.client.Decrypt(ctx, &kms.DecryptInput{
+		KeyId:             aws.String(k.keyID),
+		CiphertextBlob:    wrapped,
+		EncryptionContext: kmsEncryptionContext,
+	})
 	if err != nil {
 		return nil, err
 	}
