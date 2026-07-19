@@ -49,7 +49,7 @@
 </head>
 <body>
 <div id="term"></div>
-<script>
+<script nonce="__CSP_NONCE__">
 (() => {
   const term = document.getElementById("term");
   let apiKey = sessionStorage.getItem("pam_api_key") || "";
@@ -68,7 +68,7 @@
   let msg = ssoMsg, msgErr = ssoErr;
   let targets = [], creds = [], audit = [], viewCred = null;
 
-  const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   const pad = (s, n) => esc(String(s ?? "")).padEnd(n);
   const now = () => { const d = new Date(), z = (x) => String(x).padStart(2, "0");
     return `${z(d.getDate())}/${z(d.getMonth() + 1)}/${String(d.getFullYear()).slice(2)}  ${z(d.getHours())}:${z(d.getMinutes())}:${z(d.getSeconds())}`; };
@@ -192,7 +192,7 @@ Type options, press Enter.
 
 <form id="f-list"><table>
 <tr><th>Opt</th><th>ID</th><th>Name</th><th>Host</th><th>Port</th><th>OS</th><th>Proto</th></tr>
-${targets.map((t) => `<tr><td><input class="opt" name="o${t.id}" maxlength="1"></td><td>${t.id}</td><td>${pad(t.name, 18)}</td><td>${pad(t.host, 22)}</td><td>${t.port}</td><td>${pad(t.os_type, 8)}</td><td>${esc(t.protocol)}</td></tr>`).join("")}
+${targets.map((t) => `<tr><td><input class="opt" name="o${esc(t.id)}" maxlength="1"></td><td>${esc(t.id)}</td><td>${pad(t.name, 18)}</td><td>${pad(t.host, 22)}</td><td>${esc(t.port)}</td><td>${pad(t.os_type, 8)}</td><td>${esc(t.protocol)}</td></tr>`).join("")}
 </table>${targets.length ? "" : `<div class="cyan indent">(No targets defined. Press F6 to add.)</div>`}
 <input type="submit" hidden></form>
 ${fkeys("F3=Exit   F5=Refresh   F6=Add target   F12=Cancel")}`;
@@ -242,7 +242,7 @@ Type options, press Enter.
 
 <form id="f-list"><table>
 <tr><th>Opt</th><th>ID</th><th>Target</th><th>User</th><th>Type</th><th>Secret</th></tr>
-${creds.map((c) => `<tr><td><input class="opt" name="o${c.id}" maxlength="1"></td><td>${c.id}</td><td>${pad(tn[c.target_id] || c.target_id, 18)}</td><td>${pad(c.username, 14)}</td><td>${pad(c.secret_type, 8)}</td><td>********</td></tr>`).join("")}
+${creds.map((c) => `<tr><td><input class="opt" name="o${esc(c.id)}" maxlength="1"></td><td>${esc(c.id)}</td><td>${pad(tn[c.target_id] || c.target_id, 18)}</td><td>${pad(c.username, 14)}</td><td>${pad(c.secret_type, 8)}</td><td>********</td></tr>`).join("")}
 </table>${creds.length ? "" : `<div class="cyan indent">(Vault is empty. Press F6 to add.)</div>`}
 <input type="submit" hidden></form>
 ${fkeys("F3=Exit   F5=Refresh   F6=Add credential   F12=Cancel")}`;
@@ -312,7 +312,7 @@ ${fkeys("F3=Exit   F5=Refresh   F12=Cancel")}`;
     })[screen]();
   }
 
-  function go(s) { screen = s; render(); msg = ""; msgErr = false; }
+  function go(s) { if (s !== "credview") viewCred = null; screen = s; render(); msg = ""; msgErr = false; }
   function signoff() { apiKey = ""; sessionStorage.removeItem("pam_api_key"); say("SIGN OFF COMPLETE."); go("signon"); }
 
   window.addEventListener("keydown", async (ev) => {
