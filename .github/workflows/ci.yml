@@ -53,6 +53,35 @@ jobs:
           export PAM_TEST_PKCS11_TOKEN=pamv1-test
           CGO_ENABLED=1 go test -tags pkcs11 ./internal/vault/ -run PKCS11 -v
 
+  # Run the store conformance suite against a live PostgreSQL, so the pgstore
+  # SQL and migrations are verified (the default `test` job skips it because
+  # PAM_TEST_DATABASE_URL is unset).
+  pgstore:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: pam
+          POSTGRES_PASSWORD: pam
+          POSTGRES_DB: pam
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+      - name: store contract test (live Postgres)
+        env:
+          PAM_TEST_DATABASE_URL: postgres://pam:pam@localhost:5432/pam?sslmode=disable
+        run: go test ./internal/store/pgstore/ -run PGStoreContract -v
+
   docker:
     runs-on: ubuntu-latest
     steps:

@@ -416,7 +416,8 @@ secrets. Format `json` (SIEM) or `text` (humans); collect from stdout.
 ## 7. Testing
 
 - `vault`: envelope roundtrip, AAD binding, tamper detection, version rejection, distinct tokens; local KEK wrap/unwrap + tamper; KEK factory; **Transit KMS** wrap/unwrap and full envelope over a mock Vault Transit server; **PKCS#11 HSM** wrap/unwrap + full envelope against SoftHSM2 (tag `pkcs11`, CI).
-- `auth`: role→capability matrix, role parsing, resolver (bootstrap/break-glass/token/**session**/unknown); **LDAP** authenticate (success, highest-privilege-wins, wrong password, no mapped group, unknown user) against a fake `ldapConn`.
+- `auth`: role→capability matrix, role parsing, resolver (bootstrap/break-glass/token/**session**/unknown); **LDAP** authenticate against a fake `ldapConn`; **Entra** app-role/group login with an RS256-signed id_token (valid maps roles; a forged signature is rejected).
+- `store` conformance: `storetest.RunStoreContract` exercises the whole `Store` interface (targets/creds/grants/access-requests/checkouts/audit+export/users/sessions/MFA/recovery/OIDC-state) — run by **memstore** and, in CI, against a **live PostgreSQL** (`PAM_TEST_DATABASE_URL`).
 - `mfa`: RFC 6238 test vector, validate roundtrip + skew + wrong/short code, otpauth URI, secret randomness, recovery-code generation.
 - `api` (WinRM): JIT injection (fake runner receives the vaulted secret), non-Windows target rejected, `CapConnect` required, transcript recorded + audited.
 - `winrm`: basic and NTLM client construction (NTLM must not mutate library defaults).
@@ -439,6 +440,7 @@ secrets. Format `json` (SIEM) or `text` (humans); collect from stdout.
 
 | Date | Change |
 |---|---|
+| 2026-07-19 | Tests: shared store conformance suite (`internal/store/storetest.RunStoreContract`) run by memstore and, in CI, against a live PostgreSQL (`PAM_TEST_DATABASE_URL`, a `postgres` service job) — verifies the pgstore SQL/migrations |
 | 2026-07-19 | Hardening: Entra ROPC now validates the id_token RS256 signature against the tenant JWKS (`oidc.VerifyRS256`) instead of reading unverified claims |
 | 2026-07-19 | Hardening: RDP now verifies the server certificate by default (`PAM_GUACD_RDP_SECURITY`/`PAM_GUACD_IGNORE_CERT`) instead of hardcoding `security:any`/`ignore-cert:true` |
 | 2026-07-19 | Hardening: upstream SSH host-key pinning (`PAM_SSH_KNOWN_HOSTS`, `proxy.Config.UpstreamHostKey` + rotation connector) — no longer trusts any target key |
