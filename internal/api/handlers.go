@@ -172,16 +172,38 @@ func (s *Server) listTargetGrants(w http.ResponseWriter, r *http.Request) {
 // deleteTargetGrant removes a target access grant by its {gid} path value and
 // audits it.
 func (s *Server) deleteTargetGrant(w http.ResponseWriter, r *http.Request) {
+	tid, ok := idParam(w, r)
+	if !ok {
+		return
+	}
 	gid, err := strconv.ParseInt(r.PathValue("gid"), 10, 64)
 	if err != nil || gid < 1 {
 		writeError(w, http.StatusUnprocessableEntity, "invalid grant id")
+		return
+	}
+	// The route is scoped to a target — only delete the grant if it belongs to
+	// that target, so DELETE /targets/1/grants/5 cannot remove target 2's grant.
+	grants, err := s.store.ListTargetGrants(r.Context(), tid)
+	if err != nil {
+		storeError(w, err)
+		return
+	}
+	found := false
+	for _, g := range grants {
+		if g.ID == gid {
+			found = true
+			break
+		}
+	}
+	if !found {
+		writeError(w, http.StatusNotFound, "grant not found for this target")
 		return
 	}
 	if err := s.store.DeleteTargetGrant(r.Context(), gid); err != nil {
 		storeError(w, err)
 		return
 	}
-	s.audit(r.Context(), "grant.delete", strconv.FormatInt(gid, 10))
+	s.audit(r.Context(), "grant.delete", fmt.Sprintf("target:%d grant:%d", tid, gid))
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -468,11 +490,18 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	principal, err := s.authn.Authenticate(r.Context(), in.Username, in.Password)
 	if err != nil {
 		s.log.Warn("login failed", "user", in.Username, "remote", r.RemoteAddr)
+		s.auditAs(r.Context(), in.Username, "login.failed", "reason:credentials remote:"+r.RemoteAddr)
 		writeError(w, http.StatusUnauthorized, "invalid credentials")
 		return
 	}
 
 	enr, mfaErr := s.store.GetMFAEnrollment(r.Context(), principal.Name)
+	if mfaErr != nil && !errors.Is(mfaErr, store.ErrNotFound) {
+		// A store error must not silently downgrade a confirmed-MFA user to
+		// password-only login — fail closed.
+		storeError(w, mfaErr)
+		return
+	}
 	switch {
 	case mfaErr == nil && enr.Confirmed:
 		// User has MFA — require a valid code (or a single-use recovery code).
@@ -484,6 +513,7 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		}
 		if !s.checkSecondFactor(r.Context(), principal.Name, enr, in.OTP) {
 			s.log.Warn("mfa failed", "user", principal.Name, "remote", r.RemoteAddr)
+			s.auditAs(r.Context(), principal.Name, "login.failed", "reason:mfa remote:"+r.RemoteAddr)
 			writeError(w, http.StatusUnauthorized, "invalid multi-factor code")
 			return
 		}
@@ -571,9 +601,13 @@ func hashHex(s string) string {
 
 // logout revokes the caller's own session token.
 func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
-	// Best-effort: only session tokens exist in the table; other identities
-	// (bootstrap/token) simply have nothing to delete.
-	_ = s.store.DeleteSession(r.Context(), hashHex(r.Header.Get("X-API-Key")))
+	// ErrNotFound is fine — bootstrap/token identities have no session row — but a
+	// real store error must not be reported as a successful revocation.
+	err := s.store.DeleteSession(r.Context(), hashHex(r.Header.Get("X-API-Key")))
+	if err != nil && !errors.Is(err, store.ErrNotFound) {
+		storeError(w, err)
+		return
+	}
 	s.audit(r.Context(), "logout", actorFrom(r.Context()))
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -585,6 +619,24 @@ func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
 // unconfirmed until the user proves a code via mfaVerify.
 func (s *Server) mfaEnroll(w http.ResponseWriter, r *http.Request) {
 	p := principalFrom(r.Context())
+	// Replacing a CONFIRMED second factor requires proving the current one, so a
+	// stolen session token cannot silently swap MFA to an attacker's device. The
+	// first enrollment (none or unconfirmed) needs no code.
+	var body struct {
+		OTP string `json:"otp"`
+	}
+	if r.Body != nil {
+		_ = json.NewDecoder(r.Body).Decode(&body)
+	}
+	if existing, gerr := s.store.GetMFAEnrollment(r.Context(), p.Name); gerr == nil && existing.Confirmed {
+		if body.OTP == "" || !s.checkSecondFactor(r.Context(), p.Name, existing, body.OTP) {
+			writeError(w, http.StatusUnauthorized, "current multi-factor code required to re-enroll")
+			return
+		}
+	} else if gerr != nil && !errors.Is(gerr, store.ErrNotFound) {
+		storeError(w, gerr)
+		return
+	}
 	secret, err := mfa.GenerateSecret()
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "secret generation failed")
@@ -658,9 +710,28 @@ func (s *Server) mfaStatus(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"enrolled": true, "confirmed": e.Confirmed})
 }
 
-// mfaDisable removes the caller's TOTP enrollment (and recovery codes).
+// mfaDisable removes the caller's TOTP enrollment (and recovery codes). Removing
+// a confirmed factor requires proving the current one, so a stolen session cannot
+// strip a victim's MFA.
 func (s *Server) mfaDisable(w http.ResponseWriter, r *http.Request) {
 	p := principalFrom(r.Context())
+	existing, gerr := s.store.GetMFAEnrollment(r.Context(), p.Name)
+	if gerr != nil && !errors.Is(gerr, store.ErrNotFound) {
+		storeError(w, gerr)
+		return
+	}
+	if gerr == nil && existing.Confirmed {
+		var body struct {
+			OTP string `json:"otp"`
+		}
+		if r.Body != nil {
+			_ = json.NewDecoder(r.Body).Decode(&body)
+		}
+		if body.OTP == "" || !s.checkSecondFactor(r.Context(), p.Name, existing, body.OTP) {
+			writeError(w, http.StatusUnauthorized, "current multi-factor code required to disable MFA")
+			return
+		}
+	}
 	if err := s.store.DeleteMFAEnrollment(r.Context(), p.Name); err != nil && !errors.Is(err, store.ErrNotFound) {
 		storeError(w, err)
 		return

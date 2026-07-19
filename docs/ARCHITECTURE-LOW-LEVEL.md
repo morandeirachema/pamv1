@@ -403,7 +403,7 @@ secrets. Format `json` (SIEM) or `text` (humans); collect from stdout.
 `access.request` · `access.approve` · `access.deny` · `access.denied` · `access.decision_denied` · `audit.export` · `identity.reconcile` · `user.revoked` ·
 `mfa.enroll` · `mfa.confirm` · `mfa.disable` · `mfa.recovery_generated` ·
 `mfa.recovery_used` · `winrm.run` · `winrm.error` · `rdp.connect` · `rdp.end` ·
-`rdp.error` · `authz.denied` · `breakglass.access` · `session.start` ·
+`rdp.error` · `authz.denied` · `login.failed` · `breakglass.access` · `session.start` ·
 `session.record` · `session.record_failed` · `session.end` · `session.denied` · `session.error`. The actor is the Principal name
 (`bootstrap-admin`, `break-glass`, or a username).
 

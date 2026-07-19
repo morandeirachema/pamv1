@@ -338,7 +338,7 @@ func (s *Server) routes() {
 	// Authentication endpoints are rate-limited per client IP.
 	s.mux.Handle("POST /api/login", s.rateLimit(http.HandlerFunc(s.login))) // public: this IS authentication
 	s.mux.Handle("POST /api/logout", s.authenticated(s.logout))
-	s.mux.HandleFunc("GET /api/auth/oidc/start", s.oidcStart)
+	s.mux.Handle("GET /api/auth/oidc/start", s.rateLimit(http.HandlerFunc(s.oidcStart)))
 	s.mux.Handle("GET /api/auth/oidc/callback", s.rateLimit(http.HandlerFunc(s.oidcCallback)))
 	s.mux.Handle("POST /api/breakglass/unseal", s.rateLimit(http.HandlerFunc(s.breakGlassUnseal)))
 
@@ -449,7 +449,14 @@ func (s *Server) authenticated(next http.HandlerFunc) http.Handler {
 // (and, for rotations, rotation) metrics, and logs it. A store failure is logged
 // but not returned to the caller.
 func (s *Server) audit(ctx context.Context, action, detail string) {
-	e := store.AuditEvent{Actor: actorFrom(ctx), Action: action, Detail: detail}
+	s.auditAs(ctx, actorFrom(ctx), action, detail)
+}
+
+// auditAs appends an audit event with an explicit actor, for events where the
+// actor is not the authenticated principal in ctx — notably failed logins, whose
+// actor is the attempted (unauthenticated) username.
+func (s *Server) auditAs(ctx context.Context, actor, action, detail string) {
+	e := store.AuditEvent{Actor: actor, Action: action, Detail: detail}
 	if err := s.store.AppendAudit(ctx, &e); err != nil {
 		s.log.Error("audit append failed", "action", action, "err", err)
 	}
@@ -457,7 +464,7 @@ func (s *Server) audit(ctx context.Context, action, detail string) {
 	if action == "credential.rotate" {
 		s.metrics.Rotation()
 	}
-	s.log.Info("audit", "actor", e.Actor, "action", action, "detail", detail)
+	s.log.Info("audit", "actor", actor, "action", action, "detail", detail)
 }
 
 // health is the liveness probe: it always reports ok while the process serves.
