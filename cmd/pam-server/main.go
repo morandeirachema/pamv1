@@ -2,10 +2,12 @@
 //
 // Utility flags:
 //
-//	-genkey   print a fresh vault master key (PAM_MASTER_KEY) and exit
-//	-hashkey  read an emergency break-glass key from stdin and print its
-//	          SHA-256 hex (PAM_BREAK_GLASS_KEY_HASH); the plaintext key is
-//	          then sealed offline (envelope / safe) and never stored.
+//	-genkey       print a fresh vault master key (PAM_MASTER_KEY) and exit
+//	-hashkey      read an emergency break-glass key from stdin and print its
+//	              SHA-256 hex (PAM_BREAK_GLASS_KEY_HASH); the plaintext key is
+//	              then sealed offline (envelope / safe) and never stored.
+//	-healthcheck  probe the local /healthz endpoint and exit 0 if healthy
+//	              (used by the container HEALTHCHECK on the shell-less image).
 package main
 
 import (
@@ -17,6 +19,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -53,6 +56,7 @@ func main() {
 	hashkey := flag.Bool("hashkey", false, "read a break-glass key from stdin, print its SHA-256 hex and exit")
 	rotateKEK := flag.Bool("rotate-kek", false, "re-encrypt all vaulted secrets from PAM_MASTER_KEY to PAM_NEW_MASTER_KEY and exit")
 	splitKey := flag.Bool("split-key", false, "read a break-glass key from stdin and print N Shamir shares (PAM_BREAK_GLASS_SHARES / _THRESHOLD)")
+	healthcheck := flag.Bool("healthcheck", false, "probe the local /healthz endpoint and exit 0 if healthy (for container HEALTHCHECK)")
 	flag.Parse()
 
 	switch {
@@ -81,11 +85,43 @@ func main() {
 		if err := runSplitKey(); err != nil {
 			fatal(err)
 		}
+	case *healthcheck:
+		if err := runHealthcheck(); err != nil {
+			fatal(err)
+		}
 	default:
 		if err := run(); err != nil {
 			fatal(err)
 		}
 	}
+}
+
+// runHealthcheck probes the local liveness endpoint and exits non-zero unless it
+// returns 200. It exists so a container HEALTHCHECK works on the distroless image
+// (which has no shell or curl): `pam-server -healthcheck` targets the configured
+// PAM_LISTEN_ADDR on the loopback.
+func runHealthcheck() error {
+	addr := os.Getenv("PAM_LISTEN_ADDR")
+	if addr == "" {
+		addr = ":8080"
+	}
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return fmt.Errorf("PAM_LISTEN_ADDR %q: %w", addr, err)
+	}
+	if host == "" || host == "0.0.0.0" || host == "::" {
+		host = "127.0.0.1" // the server binds all interfaces; probe loopback
+	}
+	client := &http.Client{Timeout: 3 * time.Second}
+	resp, err := client.Get("http://" + net.JoinHostPort(host, port) + "/healthz")
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("healthz returned %d", resp.StatusCode)
+	}
+	return nil
 }
 
 // runRotateKEK re-encrypts every vaulted secret from the current local master

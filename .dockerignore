@@ -1,0 +1,16 @@
+# Keep secrets, VCS history, and local artifacts out of the build context so
+# `COPY . .` cannot bake them into a build-stage layer or the build cache.
+.git
+.github
+.env
+.env.*
+*.pem
+*.key
+*_key
+recordings/
+pam-server
+*.log
+# Docs and deploy manifests are not needed to build the binary.
+docs/
+deploy/
+README*.md
