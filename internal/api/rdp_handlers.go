@@ -102,7 +102,7 @@ func (s *Server) rdpTunnel(w http.ResponseWriter, r *http.Request) {
 		Height:        atoiOr(r.URL.Query().Get("height"), 768),
 		RecordingPath: s.guacdRecordingPath,
 		RecordingName: recName,
-		Extra:         map[string]string{"security": "any", "ignore-cert": "true"},
+		Extra:         rdpExtra(s.guacdRDPSecurity, s.guacdIgnoreCert),
 	})
 	if err != nil {
 		s.log.Error("rdp connect failed", "target", target.Name, "err", err)
@@ -173,4 +173,20 @@ func atoiOr(s string, def int) int {
 		return n
 	}
 	return def
+}
+
+// rdpExtra builds the guacd RDP security parameters. By default (security == ""
+// and ignoreCert == false) it sets neither, so guacd negotiates the security mode
+// and verifies the RDP server certificate. A security mode is passed through when
+// set; ignore-cert is only sent (disabling cert verification) when explicitly
+// enabled for dev/self-signed hosts.
+func rdpExtra(security string, ignoreCert bool) map[string]string {
+	extra := map[string]string{}
+	if security != "" {
+		extra["security"] = security
+	}
+	if ignoreCert {
+		extra["ignore-cert"] = "true"
+	}
+	return extra
 }

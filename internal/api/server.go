@@ -83,6 +83,10 @@ type Options struct {
 	// GuacdRecordingPath, if set, makes guacd record RDP sessions server-side
 	// (a path on the guacd host).
 	GuacdRecordingPath string
+	// GuacdRDPSecurity sets the RDP security mode ("nla"/"tls"/"rdp"/…); empty
+	// negotiates. GuacdIgnoreCert disables RDP server-cert verification (dev only).
+	GuacdRDPSecurity string
+	GuacdIgnoreCert  bool
 	// AuthRatePerMin limits authentication attempts per client IP per minute
 	// (0 disables rate limiting).
 	AuthRatePerMin int
@@ -138,6 +142,8 @@ type Server struct {
 	portalURL          string
 	guacdAddr          string
 	guacdRecordingPath string
+	guacdRDPSecurity   string
+	guacdIgnoreCert    bool
 	authLimiter        *rateLimiter
 	revealDisabled     bool
 	sessions           *session.Registry
@@ -226,6 +232,8 @@ func New(st store.Store, v *vault.Vault, resolver *auth.Resolver, authn auth.Aut
 		portalURL:          portalURL,
 		guacdAddr:          opts.GuacdAddr,
 		guacdRecordingPath: opts.GuacdRecordingPath,
+		guacdRDPSecurity:   opts.GuacdRDPSecurity,
+		guacdIgnoreCert:    opts.GuacdIgnoreCert,
 		authLimiter:        newRateLimiter(opts.AuthRatePerMin),
 		revealDisabled:     opts.RevealDisabled,
 		sessions:           opts.Sessions,

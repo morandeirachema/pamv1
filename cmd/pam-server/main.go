@@ -346,6 +346,8 @@ func run() error {
 		PortalURL:           cfg.PortalURL,
 		GuacdAddr:           cfg.GuacdAddr,
 		GuacdRecordingPath:  cfg.GuacdRecordingPath,
+		GuacdRDPSecurity:    cfg.GuacdRDPSecurity,
+		GuacdIgnoreCert:     cfg.GuacdIgnoreCert,
 		AuthRatePerMin:      cfg.AuthRatePerMin,
 		RevealDisabled:      cfg.RevealDisabled,
 		BreakGlassHashHex:   cfg.BreakGlassKeyHash,

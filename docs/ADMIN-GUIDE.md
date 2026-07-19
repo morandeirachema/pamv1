@@ -320,6 +320,14 @@ pamv1 brokers RDP through [Apache Guacamole](https://guacamole.apache.org/)'s
 PAM_GUACD_ADDR=127.0.0.1:4822
 ```
 
+By default guacd **verifies the RDP server certificate** and negotiates the
+security mode. For self-signed or legacy hosts, opt out or pin the mode:
+
+```bash
+PAM_GUACD_RDP_SECURITY=nla     # force a mode (nla|tls|rdp); empty = negotiate
+PAM_GUACD_IGNORE_CERT=true     # dev only — skip RDP server-cert verification
+```
+
 Create the target with `protocol=rdp`, port `3389`, and a credential. The
 WebSocket endpoint `GET /api/targets/{id}/rdp?token=<session-token>` decrypts the
 credential just-in-time, injects it into the guacd handshake, and tunnels the

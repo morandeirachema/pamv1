@@ -77,6 +77,11 @@ type Config struct {
 	GuacdAddr string
 	// GuacdRecordingPath makes guacd record RDP sessions server-side.
 	GuacdRecordingPath string
+	// GuacdRDPSecurity sets the RDP security mode ("nla", "tls", "rdp", …); empty
+	// lets guacd negotiate. GuacdIgnoreCert disables RDP server-cert verification
+	// (dev only — default false verifies the certificate).
+	GuacdRDPSecurity string
+	GuacdIgnoreCert  bool
 
 	// KEKProvider selects the vault Key Encryption Key backend:
 	// "local" (default, dev/test — uses MasterKey) or "vault-transit".
@@ -169,6 +174,8 @@ func Load() (*Config, error) {
 		WinRMNTLM:           os.Getenv("PAM_WINRM_AUTH") == "ntlm",
 		GuacdAddr:           os.Getenv("PAM_GUACD_ADDR"),
 		GuacdRecordingPath:  os.Getenv("PAM_GUACD_RECORDING_PATH"),
+		GuacdRDPSecurity:    os.Getenv("PAM_GUACD_RDP_SECURITY"),
+		GuacdIgnoreCert:     os.Getenv("PAM_GUACD_IGNORE_CERT") == "true",
 		KEKProvider:         getenv("PAM_KEK_PROVIDER", "local"),
 		TransitAddr:         os.Getenv("PAM_KEK_TRANSIT_ADDR"),
 		TransitToken:        os.Getenv("PAM_KEK_TRANSIT_TOKEN"),
