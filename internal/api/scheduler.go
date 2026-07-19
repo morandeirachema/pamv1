@@ -46,6 +46,10 @@ func (s *Server) RotateCredentialByID(ctx context.Context, credentialID int64) {
 		s.log.Warn("post-session rotation: target not found", "credential", credentialID, "err", err)
 		return
 	}
+	// Record the attempt before the external password change, so a crash between
+	// changing the target and persisting the new secret to the vault still leaves
+	// a rotate_started with no matching rotate/rotate_failed — a detectable trail.
+	s.audit(ctx, "credential.rotate_started", fmt.Sprintf("credential:%d target:%s reason:post-session", cred.ID, target.Name))
 	if _, err := s.rotateCredential(ctx, cred, target); err != nil {
 		s.audit(ctx, "credential.rotate_failed", fmt.Sprintf("credential:%d reason:post-session error:%v", cred.ID, err))
 		s.log.Error("post-session rotation failed", "credential", cred.ID, "err", err)

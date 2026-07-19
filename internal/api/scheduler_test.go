@@ -148,3 +148,32 @@ func TestRotateCredentialByID(t *testing.T) {
 	// A missing credential is a safe no-op (no panic).
 	srv.RotateCredentialByID(context.Background(), 999999)
 }
+
+// TestRotateCredentialByIDAuditsStart proves the post-session rotation records
+// an attempt (credential.rotate_started) before the external password change, so
+// a crash mid-rotation leaves a detectable trail, plus credential.rotate on
+// success.
+func TestRotateCredentialByIDAuditsStart(t *testing.T) {
+	fc := &schedFake{}
+	srv, cred := newSchedTestServer(t, fc)
+	srv.RotateCredentialByID(context.Background(), cred.ID)
+	events, err := srv.store.ListAudit(context.Background(), 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var started, done bool
+	for _, e := range events {
+		switch e.Action {
+		case "credential.rotate_started":
+			started = true
+		case "credential.rotate":
+			done = true
+		}
+	}
+	if !started {
+		t.Error("expected credential.rotate_started before the rotation")
+	}
+	if !done {
+		t.Error("expected credential.rotate on success")
+	}
+}

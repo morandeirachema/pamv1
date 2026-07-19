@@ -92,6 +92,8 @@ type Proxy struct {
 	chain        *recordChain
 	requireRec   bool
 
+	bg sync.WaitGroup // background tasks (post-session rotation) to drain on shutdown
+
 	mu      sync.Mutex
 	ln      net.Listener
 	conns   map[net.Conn]struct{} // accepted client connections, for shutdown force-close
@@ -234,6 +236,7 @@ func (p *Proxy) Serve(ctx context.Context, ln net.Listener) error {
 		if err != nil {
 			if ctx.Err() != nil {
 				wg.Wait() // graceful shutdown: active conns already force-closed
+				p.bg.Wait()
 				return nil
 			}
 			// Retry a transient accept error (e.g. fd exhaustion, EMFILE) with
@@ -253,6 +256,7 @@ func (p *Proxy) Serve(ctx context.Context, ln net.Listener) error {
 				case <-time.After(tempDelay):
 				case <-ctx.Done():
 					wg.Wait()
+					p.bg.Wait()
 					return nil
 				}
 				continue
@@ -289,6 +293,21 @@ func (p *Proxy) untrackConn(c net.Conn) {
 	p.mu.Lock()
 	delete(p.conns, c)
 	p.mu.Unlock()
+}
+
+// fireSessionEnd runs the post-session credential-rotation callback (if any) as
+// a tracked background task, so a graceful shutdown drains in-flight rotations
+// instead of killing the process mid-rotation (which could leave a target's
+// password changed but the vault stale). It must not block the caller.
+func (p *Proxy) fireSessionEnd(credID int64) {
+	if p.onSessionEnd == nil {
+		return
+	}
+	p.bg.Add(1)
+	go func() {
+		defer p.bg.Done()
+		p.onSessionEnd(credID)
+	}()
 }
 
 // closeActiveConns force-closes every tracked client connection. Closing the
@@ -450,9 +469,7 @@ func (p *Proxy) handleConn(ctx context.Context, nConn net.Conn) {
 		p.auditClosing(ctx, actor, "session.end", "target:"+target.Name)
 		// Force post-session credential rotation, if configured, so a secret
 		// used in one session cannot be reused in the next.
-		if p.onSessionEnd != nil {
-			go p.onSessionEnd(cred.ID)
-		}
+		p.fireSessionEnd(cred.ID)
 	}()
 
 	var wg sync.WaitGroup
@@ -740,9 +757,7 @@ func (p *Proxy) serveWinRM(ctx context.Context, sconn *ssh.ServerConn, chans <-c
 	defer func() {
 		p.log.Info("winrm session ended", "actor", actor, "target", target.Name)
 		p.auditClosing(ctx, actor, "session.end", "target:"+target.Name+" protocol:winrm")
-		if p.onSessionEnd != nil {
-			go p.onSessionEnd(cred.ID)
-		}
+		p.fireSessionEnd(cred.ID)
 	}()
 
 	for nc := range chans {

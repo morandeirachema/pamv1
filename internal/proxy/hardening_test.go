@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -371,5 +372,58 @@ func TestServeRetriesTemporaryAcceptErrors(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("Serve did not return after cancel")
+	}
+}
+
+// TestShutdownWaitsForPostSessionRotation proves the post-session rotation
+// callback is tracked as a background task, so a graceful shutdown drains it
+// instead of returning while a rotation is still in flight.
+func TestShutdownWaitsForPostSessionRotation(t *testing.T) {
+	host, port := startIdleUpstream(t, upstreamUser, upstreamSecret)
+	st := memstore.New()
+	v := mustVault(t)
+	seedTarget(t, st, v, host, port)
+	resolver, err := auth.NewResolver(st, proxyAPIKey, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rotated int32
+	px, err := proxy.New(st, v, resolver, proxy.Config{
+		HostKey:      mustSigner(t),
+		RecordingDir: t.TempDir(),
+		OnSessionEnd: func(int64) {
+			time.Sleep(150 * time.Millisecond)
+			atomic.StoreInt32(&rotated, 1)
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { px.Serve(ctx, ln); close(done) }()
+
+	client, err := dialProxy(t, ln.Addr().String(), "web-01", proxyAPIKey)
+	if err != nil {
+		t.Fatalf("dial proxy: %v", err)
+	}
+	sess, err := client.NewSession()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sess.Shell(); err != nil {
+		t.Fatalf("shell: %v", err)
+	}
+
+	cancel()
+	<-done
+	client.Close()
+
+	if atomic.LoadInt32(&rotated) == 0 {
+		t.Error("Serve returned before the post-session rotation finished — the callback escaped the drain")
 	}
 }
