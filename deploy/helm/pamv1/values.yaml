@@ -36,11 +36,13 @@ config:
   # PAM_REQUIRE_APPROVAL: "true"
   # PAM_OT_AIRGAP: "true"
 
-# Secret PAM_* values. If create=true a Secret is rendered from these entries
-# (base64-encoded by Helm). In production prefer existingSecret + an external
-# secret manager (Vault, External Secrets Operator).
+# Secret PAM_* values. create is false by default so PAM_MASTER_KEY and friends
+# are NOT rendered into a Helm-managed Secret (which would persist verbatim in
+# release history / `helm get values`). Provide an existingSecret from an external
+# secret manager (Vault, External Secrets Operator), or set create=true with the
+# data below only for a throwaway demo.
 secret:
-  create: true
+  create: false
   existingSecret: ""
   data:
     PAM_MASTER_KEY: ""      # ./pam-server -genkey

@@ -31,7 +31,9 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- define "pamv1.secretName" -}}
 {{- if .Values.secret.existingSecret -}}
 {{- .Values.secret.existingSecret -}}
-{{- else -}}
+{{- else if .Values.secret.create -}}
 {{- printf "%s-secrets" (include "pamv1.fullname" .) -}}
+{{- else -}}
+{{- fail "Provide credentials: set secret.existingSecret to a pre-created Secret, or secret.create=true with secret.data. create is false by default so PAM_MASTER_KEY does not land in Helm release history." -}}
 {{- end -}}
 {{- end -}}

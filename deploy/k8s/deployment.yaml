@@ -22,11 +22,16 @@ spec:
       automountServiceAccountToken: false
       securityContext:
         runAsNonRoot: true
+        runAsUser: 65532          # distroless nonroot UID, numeric so runAsNonRoot is verifiable
+        runAsGroup: 65532
+        fsGroup: 65532            # make /data writable (SSH host key + recordings)
         seccompProfile:
           type: RuntimeDefault
       containers:
         - name: pam-server
-          image: ghcr.io/morandeirachema/pamv1:latest
+          # Pin to a released version (or a digest); :latest is non-reproducible
+          # and defeats rollback.
+          image: ghcr.io/morandeirachema/pamv1:0.10.0
           ports:
             - containerPort: 8080
               name: http

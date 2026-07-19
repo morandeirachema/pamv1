@@ -25,6 +25,9 @@ spec:
       {{- end }}
       securityContext:
         runAsNonRoot: true
+        runAsUser: 65532          # distroless nonroot UID, numeric so the kubelet
+        runAsGroup: 65532         # can verify runAsNonRoot without a passwd lookup
+        fsGroup: 65532            # make the mounted /data volume writable (host key + recordings)
         seccompProfile:
           type: RuntimeDefault
       containers:
@@ -52,6 +55,15 @@ spec:
             readOnlyRootFilesystem: true
             capabilities:
               drop: ["ALL"]
+          # Migrations run before the HTTP listener binds, so gate liveness on a
+          # startupProbe that tolerates a slow first boot instead of restarting
+          # mid-migration.
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 5
+            failureThreshold: 30
           readinessProbe:
             httpGet:
               path: /readyz
@@ -71,7 +83,8 @@ spec:
           persistentVolumeClaim:
             claimName: {{ include "pamv1.fullname" . }}-data
         {{- else }}
-          emptyDir: {}
+          emptyDir:
+            sizeLimit: {{ .Values.persistence.size }}
         {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:
