@@ -389,6 +389,14 @@ func run() error {
 			proxyWinRM = winrmClient
 			log.Info("interactive WinRM shell through the proxy enabled")
 		}
+		var jump *proxy.JumpConfig
+		if cfg.SSHJumpHost != "" {
+			keyPEM, jerr := os.ReadFile(cfg.SSHJumpKey)
+			if jerr != nil {
+				return fmt.Errorf("ssh jump key %q: %w", cfg.SSHJumpKey, jerr)
+			}
+			jump = &proxy.JumpConfig{Addr: cfg.SSHJumpHost, User: cfg.SSHJumpUser, KeyPEM: string(keyPEM), HostKey: upstreamHostKey}
+		}
 		px, err := proxy.New(st, v, resolver, proxy.Config{
 			HostKey:          hostKey,
 			RecordingDir:     cfg.RecordingDir,
@@ -398,6 +406,7 @@ func run() error {
 			OnSessionEnd:     onSessionEnd,
 			AllowedProtocols: splitAndTrim(cfg.AllowedProtocols),
 			WinRMRunner:      proxyWinRM,
+			Jump:             jump,
 		})
 		if err != nil {
 			return err

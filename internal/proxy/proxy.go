@@ -57,6 +57,17 @@ type Config struct {
 	// WinRMRunner, if set, lets the proxy broker an interactive command loop to
 	// WinRM (Windows) targets; nil disables WinRM through the proxy.
 	WinRMRunner winrm.Runner
+	// Jump, if set, reaches SSH targets through an SSH bastion (for legacy
+	// equipment only accessible via a jump host).
+	Jump *JumpConfig
+}
+
+// JumpConfig configures reaching SSH targets through an SSH bastion.
+type JumpConfig struct {
+	Addr    string              // bastion host:port
+	User    string              // bastion login
+	KeyPEM  string              // bastion private key (OpenSSH PEM)
+	HostKey ssh.HostKeyCallback // verifies the bastion's host key (nil = trust-any)
 }
 
 type Proxy struct {
@@ -74,6 +85,7 @@ type Proxy struct {
 	onSessionEnd func(credentialID int64)
 	allowedProto map[string]bool
 	winrm        winrm.Runner
+	upstreamDial func(addr string) (net.Conn, error)
 	chain        *recordChain
 
 	mu sync.Mutex
@@ -116,6 +128,14 @@ func New(st store.Store, v *vault.Vault, resolver *auth.Resolver, cfg Config) (*
 	if p.upstreamHKCB == nil {
 		p.log.Warn("upstream SSH host keys are NOT verified (set PAM_SSH_KNOWN_HOSTS to pin them)")
 		p.upstreamHKCB = ssh.InsecureIgnoreHostKey()
+	}
+	if cfg.Jump != nil {
+		dial, err := jumpDial(*cfg.Jump, cfg.DialTimeout)
+		if err != nil {
+			return nil, fmt.Errorf("proxy: jump host: %w", err)
+		}
+		p.upstreamDial = dial
+		p.log.Info("SSH targets routed through a jump host", "jump", cfg.Jump.Addr)
 	}
 	p.sshCfg = &ssh.ServerConfig{PasswordCallback: p.authenticate}
 	p.sshCfg.AddHostKey(cfg.HostKey)
@@ -419,7 +439,70 @@ func (p *Proxy) dialUpstream(target *store.Target, cred *store.Credential, secre
 		HostKeyCallback: p.upstreamHKCB,
 		Timeout:         p.dialTimeout,
 	}
-	return ssh.Dial("tcp", fmt.Sprintf("%s:%d", target.Host, target.Port), cfg)
+	addr := fmt.Sprintf("%s:%d", target.Host, target.Port)
+	// Route the raw TCP connection through the jump-host dialer when configured
+	// (targets reachable only via a bastion); otherwise dial directly.
+	if p.upstreamDial == nil {
+		return ssh.Dial("tcp", addr, cfg)
+	}
+	conn, err := p.upstreamDial(addr)
+	if err != nil {
+		return nil, err
+	}
+	c, chans, reqs, err := ssh.NewClientConn(conn, addr, cfg)
+	if err != nil {
+		conn.Close()
+		return nil, err
+	}
+	return ssh.NewClient(c, chans, reqs), nil
+}
+
+// jumpDial builds an upstream dialer that reaches the target through an SSH
+// bastion: it opens a fresh bastion connection (public-key auth) per target dial
+// and tunnels a direct-tcpip channel to the target. Closing the returned conn
+// also closes the bastion connection.
+func jumpDial(jc JumpConfig, timeout time.Duration) (func(addr string) (net.Conn, error), error) {
+	if jc.Addr == "" || jc.User == "" || jc.KeyPEM == "" {
+		return nil, errors.New("jump host requires an address, user and key")
+	}
+	signer, err := ssh.ParsePrivateKey([]byte(jc.KeyPEM))
+	if err != nil {
+		return nil, fmt.Errorf("parse jump key: %w", err)
+	}
+	hostCB := jc.HostKey
+	if hostCB == nil {
+		hostCB = ssh.InsecureIgnoreHostKey()
+	}
+	return func(addr string) (net.Conn, error) {
+		bastion, err := ssh.Dial("tcp", jc.Addr, &ssh.ClientConfig{
+			User:            jc.User,
+			Auth:            []ssh.AuthMethod{ssh.PublicKeys(signer)},
+			HostKeyCallback: hostCB,
+			Timeout:         timeout,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("jump host dial: %w", err)
+		}
+		conn, err := bastion.Dial("tcp", addr)
+		if err != nil {
+			bastion.Close()
+			return nil, fmt.Errorf("jump to target: %w", err)
+		}
+		return &jumpConn{Conn: conn, bastion: bastion}, nil
+	}, nil
+}
+
+// jumpConn wraps a tunneled connection so closing it also closes the bastion.
+type jumpConn struct {
+	net.Conn
+	bastion *ssh.Client
+}
+
+// Close closes the tunneled connection and the underlying bastion connection.
+func (j *jumpConn) Close() error {
+	err := j.Conn.Close()
+	j.bastion.Close()
+	return err
 }
 
 // handleSession bridges one client session channel to a freshly opened upstream

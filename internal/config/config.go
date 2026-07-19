@@ -25,6 +25,11 @@ type Config struct {
 	// SSHKnownHosts pins upstream target host keys (an OpenSSH known_hosts file).
 	// Empty = trust any upstream key (insecure; logged loudly).
 	SSHKnownHosts string
+	// SSHJump* route SSH targets through an SSH bastion (for legacy equipment only
+	// reachable via a jump host). Empty SSHJumpHost disables it.
+	SSHJumpHost string
+	SSHJumpUser string
+	SSHJumpKey  string // path to the bastion private key (PEM)
 	// RecordingDir is where session recordings are written.
 	RecordingDir string
 
@@ -169,6 +174,9 @@ func Load() (*Config, error) {
 		SSHAddr:             getenv("PAM_SSH_ADDR", ":2222"),
 		SSHHostKeyPath:      os.Getenv("PAM_SSH_HOST_KEY"),
 		SSHKnownHosts:       os.Getenv("PAM_SSH_KNOWN_HOSTS"),
+		SSHJumpHost:         os.Getenv("PAM_SSH_JUMP_HOST"),
+		SSHJumpUser:         os.Getenv("PAM_SSH_JUMP_USER"),
+		SSHJumpKey:          os.Getenv("PAM_SSH_JUMP_KEY"),
 		RecordingDir:        getenv("PAM_RECORDING_DIR", "recordings"),
 		LogLevel:            getenv("PAM_LOG_LEVEL", "info"),
 		LogFormat:           getenv("PAM_LOG_FORMAT", "json"),

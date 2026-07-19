@@ -325,6 +325,7 @@ the client channel closes.
 | `PAM_SSH_ADDR` | `:2222`; `off` disables | proxy |
 | `PAM_SSH_HOST_KEY` | "" (ephemeral) | proxy host key |
 | `PAM_SSH_KNOWN_HOSTS` | "" (trust-any + warn) | pin upstream target host keys (OpenSSH known_hosts) |
+| `PAM_SSH_JUMP_HOST` / `_USER` / `_KEY` | — | reach SSH targets through an SSH bastion (jump host) |
 | `PAM_RECORDING_DIR` | `recordings` | proxy recordings |
 | `PAM_LOG_LEVEL` | `info` | logging (debug/info/warn/error) |
 | `PAM_LOG_FORMAT` | `json` | logging (json/text) |
@@ -441,6 +442,7 @@ secrets. Format `json` (SIEM) or `text` (humans); collect from stdout.
 
 | Date | Change |
 |---|---|
+| 2026-07-19 | Phase 8: SSH jump-host / bastion connector (`proxy.Config.Jump`, `PAM_SSH_JUMP_*`) — targets reached via a `direct-tcpip` tunnel through the bastion |
 | 2026-07-19 | Phase 7: identity reconciliation (`POST /api/identity/reconcile`, `auth.DirectorySource.UserStatus`, revokes disabled directory users) + AD `ChangePassword` primitive (`unicodePwd`) |
 | 2026-07-19 | Proxy: interactive WinRM command loop through the SSH proxy (`proxy.Config.WinRMRunner`, `PAM_PROXY_WINRM`) — each operator line runs as a WinRM command, recorded; stateless-per-line |
 | 2026-07-19 | OT: read-only observer sessions (`<login>+observe` → drop operator keystrokes, refuse exec/subsystem; `session.start … mode:observer`) |
