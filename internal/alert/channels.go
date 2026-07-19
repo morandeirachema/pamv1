@@ -2,6 +2,7 @@ package alert
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"net"
 	"net/smtp"
@@ -10,6 +11,11 @@ import (
 
 	"github.com/morandeirachema/pamv1/internal/logging"
 )
+
+// alertTimeout bounds a single alert delivery (connect + I/O) so a stalled or
+// blackholed syslog/SMTP endpoint cannot park the fire-and-forget goroutine
+// indefinitely — matching the Webhook notifier's 10s budget.
+const alertTimeout = 10 * time.Second
 
 // oneLine replaces CR and LF with spaces so an untrusted field (an actor name
 // from a directory claim) cannot inject extra lines into a syslog record or SMTP
@@ -52,7 +58,7 @@ func NewSyslog(network, addr, tag string) *Syslog {
 	if tag == "" {
 		tag = "pamv1"
 	}
-	return &Syslog{network: network, addr: addr, tag: tag, dial: net.Dial}
+	return &Syslog{network: network, addr: addr, tag: tag, dial: (&net.Dialer{Timeout: alertTimeout}).Dial}
 }
 
 // Notify formats the event as a syslog line (authpriv.alert priority) and sends
@@ -70,6 +76,9 @@ func (s *Syslog) Notify(_ context.Context, e Event) {
 			return
 		}
 		defer conn.Close()
+		// Bound the write so a connected-but-stalled TCP syslog sink cannot park
+		// this goroutine forever (the dialer already bounds the connect).
+		_ = conn.SetWriteDeadline(time.Now().Add(alertTimeout))
 		_, _ = conn.Write([]byte(msg))
 	}()
 }
@@ -94,7 +103,57 @@ func NewEmail(addr, from string, to []string, username, password string) *Email 
 		}
 		a = smtp.PlainAuth("", username, password, host)
 	}
-	return &Email{addr: addr, from: from, to: to, auth: a, send: smtp.SendMail}
+	return &Email{addr: addr, from: from, to: to, auth: a, send: sendMailBounded}
+}
+
+// sendMailBounded is smtp.SendMail with a connect timeout and an I/O deadline, so
+// a slow or blackholed relay cannot park the delivery goroutine indefinitely.
+func sendMailBounded(addr string, a smtp.Auth, from string, to []string, msg []byte) error {
+	conn, err := net.DialTimeout("tcp", addr, alertTimeout)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	if err := conn.SetDeadline(time.Now().Add(alertTimeout)); err != nil {
+		return err
+	}
+	host, _, _ := net.SplitHostPort(addr)
+	c, err := smtp.NewClient(conn, host)
+	if err != nil {
+		return err
+	}
+	defer c.Close()
+	if ok, _ := c.Extension("STARTTLS"); ok {
+		if err := c.StartTLS(&tls.Config{ServerName: host}); err != nil {
+			return err
+		}
+	}
+	if a != nil {
+		if ok, _ := c.Extension("AUTH"); ok {
+			if err := c.Auth(a); err != nil {
+				return err
+			}
+		}
+	}
+	if err := c.Mail(from); err != nil {
+		return err
+	}
+	for _, rcpt := range to {
+		if err := c.Rcpt(rcpt); err != nil {
+			return err
+		}
+	}
+	wc, err := c.Data()
+	if err != nil {
+		return err
+	}
+	if _, err := wc.Write(msg); err != nil {
+		return err
+	}
+	if err := wc.Close(); err != nil {
+		return err
+	}
+	return c.Quit()
 }
 
 // Notify formats a plain-text email and sends it from a background goroutine;

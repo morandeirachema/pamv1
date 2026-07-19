@@ -91,7 +91,11 @@ func (s *Server) rdpTunnel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ctx := withPrincipal(r.Context(), principal)
+	// Cancelable so a kill (or the handler returning) unblocks both bridge pumps:
+	// they read/write the WebSocket with this ctx, and closing gconn alone does not
+	// unblock a pump parked in ws.Read/ws.Write on a stalled browser.
+	ctx, cancel := context.WithCancel(withPrincipal(r.Context(), principal))
+	defer cancel()
 	port := target.Port
 	if port == 0 {
 		port = 3389
@@ -130,7 +134,7 @@ func (s *Server) rdpTunnel(w http.ResponseWriter, r *http.Request) {
 	if s.sessions != nil {
 		sid := s.sessions.Register(session.Info{
 			Actor: principal.Name, Target: target.Name, Protocol: "rdp", Remote: r.RemoteAddr, Started: time.Now(),
-		}, func() { gconn.Close() })
+		}, func() { cancel(); gconn.Close() })
 		defer s.sessions.Remove(sid)
 	}
 

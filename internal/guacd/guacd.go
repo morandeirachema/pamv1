@@ -135,9 +135,8 @@ func Connect(ctx context.Context, addr string, params Params) (*Conn, error) {
 		nc.Close()
 		return nil, err
 	}
-	nc.SetDeadline(time.Time{}) // clear for the (long-lived) tunnel phase
 	c.ID = id
-	nc.SetDeadline(time.Time{}) // clear handshake deadline for the interactive phase
+	nc.SetDeadline(time.Time{}) // clear the handshake deadline for the long-lived tunnel phase
 	return c, nil
 }
 

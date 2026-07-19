@@ -65,6 +65,34 @@ func TestEmailNotify(t *testing.T) {
 	}
 }
 
+// deadlineConn is a net.Conn stub that records the write deadline it was given
+// and accepts any write; only the methods Syslog.Notify calls are implemented.
+type deadlineConn struct {
+	net.Conn
+	gotDeadline chan time.Time
+}
+
+func (c *deadlineConn) SetWriteDeadline(t time.Time) error { c.gotDeadline <- t; return nil }
+func (c *deadlineConn) Write(p []byte) (int, error)        { return len(p), nil }
+func (c *deadlineConn) Close() error                       { return nil }
+
+// TestSyslogWriteIsBounded proves Notify arms a write deadline before writing, so
+// a connected-but-stalled TCP syslog sink cannot park the delivery goroutine.
+func TestSyslogWriteIsBounded(t *testing.T) {
+	dc := &deadlineConn{gotDeadline: make(chan time.Time, 1)}
+	s := NewSyslog("tcp", "203.0.113.1:514", "pamv1") // TEST-NET-3: never actually dialed
+	s.dial = func(_, _ string) (net.Conn, error) { return dc, nil }
+	s.Notify(context.Background(), Event{Type: "breakglass.access", Actor: "a"})
+	select {
+	case dl := <-dc.gotDeadline:
+		if dl.IsZero() {
+			t.Fatal("syslog write deadline is zero — the write is unbounded")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("syslog Notify never set a write deadline")
+	}
+}
+
 // captureNotifier records events for the Multi test.
 type captureNotifier struct{ ch chan Event }
 
