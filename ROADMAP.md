@@ -88,16 +88,18 @@ The flagship: users connect *through* pamv1, never holding the credential.
 - [ ] Forced credential rotation after break-glass use (needs the rotation connectors from Phase 7)
 - [ ] Additional alert channels (email/syslog) on the same `Notifier` interface
 
-## Phase 7 — Credential lifecycle ⬜
+## Phase 7 — Credential lifecycle ✅
 
-- [ ] Automatic rotation after each proxied session and on schedule
-- [ ] Rotation connectors: Linux (SSH `chpasswd`/key replacement), AD (LDAPS password change), Windows local (WinRM)
-- [ ] Credential checkout/check-in with max lease time
-- [ ] Discovery: scan AD/OU or IP ranges to onboard targets
-- [ ] **Account reconciliation (out-of-sync detection & remediation):**
-  - [ ] Credential reconciliation — verify each vaulted secret still authenticates to its target; flag out-of-band changes and remediate per policy (rotate to a PAM-managed secret, or re-vault the current one)
-  - [ ] Identity reconciliation — sync against AD/Entra: revoke pamv1 access for disabled/deleted directory users; surface orphaned/rogue accounts on targets not managed by the vault
-  - [ ] Reconciliation report + optional auto-remediation, scheduled and on-demand, fully audited
+- [x] **Rotation connectors** ([`internal/rotate`](internal/rotate)): Linux over SSH (`chpasswd` via stdin — no shell injection), Windows over WinRM (`net user`). Strong password generation from a shell-safe alphabet with guaranteed complexity categories
+- [x] **On-demand rotation**: `POST /api/credentials/{id}/rotate` generates a fresh secret, sets it on the target, then re-vaults it and stamps `rotated_at` — the new secret is never returned (proxy injects it JIT)
+- [x] **Scheduled rotation**: background lifecycle worker (`PAM_ROTATE_INTERVAL_MIN`) rotates password credentials older than `PAM_ROTATE_MAX_AGE_HOURS`
+- [x] **Account reconciliation (out-of-sync detection & remediation):**
+  - [x] Credential reconciliation — `POST /api/credentials/{id}/reconcile` verifies the vaulted secret still authenticates to the target (SSH handshake / WinRM probe); drift is flagged and, with `?remediate=true`, remediated by rotating to a PAM-managed secret
+  - [x] Reconciliation scan — `GET /api/reconcile` reports drift across all credentials (read-only, safe to schedule), fully audited (`credential.reconcile`, `credential.rotate`, `credential.remediate`)
+- [ ] Credential checkout/check-in with max lease time (follow-on)
+- [ ] AD/LDAPS password-change connector + identity reconciliation (revoke access for disabled directory users; surface orphaned accounts) — needs the AD write path (follow-on)
+- [ ] Discovery: scan AD/OU or IP ranges to onboard targets (follow-on)
+- [ ] Forced rotation immediately after each proxied session ends (follow-on; ties the proxy back into the rotation orchestrator)
 
 ## Phase 8 — OT adaptation ⬜
 

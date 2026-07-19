@@ -13,6 +13,7 @@ import (
 	"github.com/morandeirachema/pamv1/internal/auth"
 	"github.com/morandeirachema/pamv1/internal/logging"
 	"github.com/morandeirachema/pamv1/internal/oidc"
+	"github.com/morandeirachema/pamv1/internal/rotate"
 	"github.com/morandeirachema/pamv1/internal/session"
 	"github.com/morandeirachema/pamv1/internal/store"
 	"github.com/morandeirachema/pamv1/internal/vault"
@@ -88,6 +89,12 @@ type Options struct {
 	BreakGlassTTL time.Duration
 	// Alerter delivers real-time break-glass alerts (defaults to no-op).
 	Alerter alert.Notifier
+	// Rotators changes a credential's secret on the target, keyed by target
+	// protocol ("ssh", "winrm"). Defaults are built from the SSH/WinRM connectors.
+	Rotators map[string]rotate.Rotator
+	// Verifiers checks a vaulted secret still authenticates, keyed by protocol.
+	// Defaults are built from the SSH/WinRM connectors.
+	Verifiers map[string]rotate.Verifier
 }
 
 type Server struct {
@@ -112,6 +119,8 @@ type Server struct {
 	bgTTL              time.Duration
 	unseal             *unsealState
 	alerter            alert.Notifier
+	rotators           map[string]rotate.Rotator
+	verifiers          map[string]rotate.Verifier
 	log                *slog.Logger
 	mux                *http.ServeMux
 	handler            http.Handler
@@ -147,6 +156,20 @@ func New(st store.Store, v *vault.Vault, resolver *auth.Resolver, authn auth.Aut
 	if alerter == nil {
 		alerter = alert.Noop{}
 	}
+	rotators := opts.Rotators
+	if rotators == nil {
+		rotators = map[string]rotate.Rotator{
+			"ssh":   rotate.SSHConnector{},
+			"winrm": rotate.WinRMConnector{Runner: runner},
+		}
+	}
+	verifiers := opts.Verifiers
+	if verifiers == nil {
+		verifiers = map[string]rotate.Verifier{
+			"ssh":   rotate.SSHConnector{},
+			"winrm": rotate.WinRMConnector{Runner: runner},
+		}
+	}
 	s := &Server{
 		store:              st,
 		vault:              v,
@@ -169,6 +192,8 @@ func New(st store.Store, v *vault.Vault, resolver *auth.Resolver, authn auth.Aut
 		bgTTL:              bgTTL,
 		unseal:             newUnsealState(),
 		alerter:            alerter,
+		rotators:           rotators,
+		verifiers:          verifiers,
 		log:                logging.Component("api"),
 		mux:                http.NewServeMux(),
 	}
@@ -258,6 +283,9 @@ func (s *Server) routes() {
 	s.mux.Handle("POST /api/credentials", s.authz(auth.CapManageCredentials, s.createCredential))
 	s.mux.Handle("GET /api/credentials", s.authz(auth.CapReadInventory, s.listCredentials))
 	s.mux.Handle("POST /api/credentials/{id}/reveal", s.authz(auth.CapRevealSecret, s.revealCredential))
+	s.mux.Handle("POST /api/credentials/{id}/rotate", s.authz(auth.CapManageCredentials, s.rotateCredentialHandler))
+	s.mux.Handle("POST /api/credentials/{id}/reconcile", s.authz(auth.CapManageCredentials, s.reconcileCredentialHandler))
+	s.mux.Handle("GET /api/reconcile", s.authz(auth.CapManageCredentials, s.reconcileAllHandler))
 	s.mux.Handle("DELETE /api/credentials/{id}", s.authz(auth.CapManageCredentials, s.deleteCredential))
 
 	s.mux.Handle("GET /api/audit", s.authz(auth.CapReadAudit, s.listAudit))

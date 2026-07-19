@@ -175,6 +175,27 @@ endpoints arrive with the OT/approval phase).
   bridges the WebSocket ↔ guacd stream. Enabled by `PAM_GUACD_ADDR`; audited
   `rdp.connect`/`rdp.end`. The browser viewer (guacamole-common-js) is the last mile.
 
+- **Credential lifecycle** (`lifecycle_handlers.go` + `internal/rotate`, Phase 7,
+  needs `CapManageCredentials`): rotation and reconciliation run over the same
+  secure protocols as the proxy.
+  - `POST /api/credentials/{id}/rotate`: generates a strong password
+    (`rotate.GeneratePassword` — shell-safe alphabet, guaranteed complexity),
+    sets it on the target via a protocol `Rotator` (SSH `chpasswd` fed on stdin;
+    WinRM `net user`), then re-encrypts it into the vault and stamps `rotated_at`
+    (`store.RotateCredentialSecret`). The new secret is **never returned**.
+  - `POST /api/credentials/{id}/reconcile[?remediate=true]`: a `Verifier` checks
+    the vaulted secret still authenticates (SSH handshake / WinRM probe). Drift is
+    reported as `out_of_sync`; with `remediate=true` an out-of-band change is
+    healed by rotating to a PAM-managed secret.
+  - `GET /api/reconcile`: read-only drift scan over every credential (safe to
+    schedule). All three audit `credential.rotate` / `credential.reconcile` /
+    `credential.remediate`.
+  - **Background worker** (`scheduler.go`, `RunLifecycleWorker`): on
+    `PAM_ROTATE_INTERVAL_MIN` it reconciles all credentials and rotates password
+    ones older than `PAM_ROTATE_MAX_AGE_HOURS` (actor `system-scheduler`).
+  - `Rotator`/`Verifier` are interfaces keyed by protocol in `Options`; tests
+    inject fakes, and the SSH connector is proven against an in-process SSH server.
+
 ### 2.5 `proxy`  *(Phase 2, RBAC in 3a)*
 
 SSH gateway. See §3 for the wire-level flow.
@@ -281,6 +302,8 @@ the client channel closes.
 | `PAM_ENTRA_CLIENT_ID` / `_CLIENT_SECRET` / `_SCOPE` / `_AUTHORITY_HOST` | — | Entra app registration |
 | `PAM_ENTRA_ROLE_ADMIN` / `_USER` / `_AUDITOR` / `_APPROVER` | — | Entra app-role/group → role |
 | `PAM_MFA_REQUIRED` | `false` | require a confirmed TOTP factor for password login |
+| `PAM_ROTATE_INTERVAL_MIN` | `0` (off) | credential-lifecycle worker interval (minutes) |
+| `PAM_ROTATE_MAX_AGE_HOURS` | `0` (report only) | auto-rotate password credentials older than this |
 | `PAM_WINRM_HTTPS` | `true` | use HTTPS (5986) for WinRM |
 | `PAM_WINRM_INSECURE_SKIP_VERIFY` | `false` | skip WinRM TLS verify (dev only) |
 | `PAM_WINRM_AUTH` | `basic` | `basic` or `ntlm` |
@@ -308,6 +331,7 @@ secrets. Format `json` (SIEM) or `text` (humans); collect from stdout.
 `target.create` · `target.delete` · `credential.create` · `credential.reveal` ·
 `credential.delete` · `credential.reveal_denied` · `grant.create` · `grant.delete` ·
 `winrm.denied` · `session.kill` · `breakglass.unseal` · `user.create` · `user.delete` · `login` · `logout` ·
+`credential.rotate` · `credential.rotate_failed` · `credential.reconcile` · `credential.reconcile_scan` · `credential.remediate` ·
 `mfa.enroll` · `mfa.confirm` · `mfa.disable` · `mfa.recovery_generated` ·
 `mfa.recovery_used` · `winrm.run` · `winrm.error` · `rdp.connect` · `rdp.end` ·
 `rdp.error` · `authz.denied` · `breakglass.access` · `session.start` ·
@@ -362,6 +386,7 @@ secrets. Format `json` (SIEM) or `text` (humans); collect from stdout.
 
 | Date | Change |
 |---|---|
+| 2026-07-19 | Phase 7: credential lifecycle — `internal/rotate` (SSH/WinRM `Rotator`/`Verifier`, strong password gen), `POST /api/credentials/{id}/rotate`, `/reconcile[?remediate]`, `GET /api/reconcile`, background worker (`scheduler.go`), store `RotateCredentialSecret` |
 | 2026-07-19 | Phase 6: break-glass v2 — `shamir` (M-of-N quorum), `pam-server -split-key`, `POST /api/breakglass/unseal` (auto-expiring session), `alert` webhook on break-glass access/unseal; AWS KMS KEK (`awskms.go`) |
 | 2026-07-19 | Phase 5 done: embedded versioned migrations (`pgstore/migrate.go`, `schema_migrations`, `migrations/0001_init.sql`) replacing the ad-hoc startup schema |
 | 2026-07-19 | Phase 2: live session registry (`internal/session`) — `GET /api/sessions` + `DELETE /api/sessions/{id}` (kill-switch); proxy + RDP register live sessions |

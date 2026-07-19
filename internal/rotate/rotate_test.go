@@ -1,0 +1,238 @@
+package rotate
+
+import (
+	"context"
+	"crypto/ed25519"
+	"crypto/rand"
+	"io"
+	"net"
+	"strconv"
+	"strings"
+	"sync"
+	"testing"
+
+	"github.com/morandeirachema/pamv1/internal/store"
+	"github.com/morandeirachema/pamv1/internal/winrm"
+	"golang.org/x/crypto/ssh"
+)
+
+func TestGeneratePassword(t *testing.T) {
+	seen := map[string]bool{}
+	for i := 0; i < 200; i++ {
+		pw, err := GeneratePassword(24)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(pw) != 24 {
+			t.Fatalf("len = %d, want 24", len(pw))
+		}
+		if seen[pw] {
+			t.Fatalf("duplicate password generated: %q", pw)
+		}
+		seen[pw] = true
+		if !strings.ContainsAny(pw, lowers) || !strings.ContainsAny(pw, uppers) ||
+			!strings.ContainsAny(pw, digits) || !strings.ContainsAny(pw, symbols) {
+			t.Fatalf("password %q missing a required category", pw)
+		}
+		// Must be shell-safe: no spaces, quotes or newlines that could break a
+		// `net user` command line or stdin payload.
+		if strings.ContainsAny(pw, " \t\n\r\"'`\\") {
+			t.Fatalf("password %q contains an unsafe character", pw)
+		}
+	}
+}
+
+func TestGeneratePasswordMinLength(t *testing.T) {
+	pw, err := GeneratePassword(4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pw) < 12 {
+		t.Fatalf("short length was not clamped up: %d", len(pw))
+	}
+}
+
+// --- SSH connector against an in-process SSH server ---
+
+func TestSSHConnectorVerifyAndRotate(t *testing.T) {
+	const user, oldPass = "svc-pam", "old-Secret.1"
+	srv := startSSHServer(t, user, oldPass)
+
+	target := store.Target{Host: srv.host, Port: srv.port, Protocol: "ssh"}
+	conn := SSHConnector{}
+
+	// Verify: the current secret authenticates.
+	if err := conn.Verify(context.Background(), target, user, oldPass); err != nil {
+		t.Fatalf("verify with valid secret: %v", err)
+	}
+	// Verify: a wrong secret is reported as drift.
+	if err := conn.Verify(context.Background(), target, user, "wrong"); err == nil {
+		t.Fatal("verify with wrong secret should fail")
+	}
+
+	// Rotate: run chpasswd with a new password; assert the server received the
+	// exact "user:newpass" payload on stdin.
+	newPass, err := GeneratePassword(20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.Rotate(context.Background(), target, user, oldPass, newPass); err != nil {
+		t.Fatalf("rotate: %v", err)
+	}
+	got := srv.lastStdin()
+	if want := user + ":" + newPass + "\n"; got != want {
+		t.Fatalf("chpasswd stdin = %q, want %q", got, want)
+	}
+}
+
+func TestSSHConnectorRejectsUnsafeUsername(t *testing.T) {
+	conn := SSHConnector{}
+	err := conn.Rotate(context.Background(), store.Target{Host: "127.0.0.1", Port: 1}, "bad:user", "old", "new")
+	if err == nil || !strings.Contains(err.Error(), "unsafe username") {
+		t.Fatalf("expected unsafe-username error, got %v", err)
+	}
+}
+
+// --- WinRM connector via a fake runner ---
+
+type fakeRunner struct {
+	lastCmd  string
+	lastUser string
+	lastPass string
+	exit     int
+	err      error
+}
+
+func (f *fakeRunner) Run(_ context.Context, _ string, _ int, user, pass, cmd string) (winrm.Result, error) {
+	f.lastCmd, f.lastUser, f.lastPass = cmd, user, pass
+	if f.err != nil {
+		return winrm.Result{}, f.err
+	}
+	return winrm.Result{ExitCode: f.exit}, nil
+}
+
+func TestWinRMConnectorRotate(t *testing.T) {
+	fr := &fakeRunner{}
+	conn := WinRMConnector{Runner: fr}
+	target := store.Target{Host: "win01", Port: 5986, Protocol: "winrm"}
+	if err := conn.Rotate(context.Background(), target, "Administrator", "old", "N3w-Pass_1"); err != nil {
+		t.Fatalf("rotate: %v", err)
+	}
+	if fr.lastCmd != "net user Administrator N3w-Pass_1" {
+		t.Fatalf("command = %q", fr.lastCmd)
+	}
+	if fr.lastPass != "old" {
+		t.Fatalf("authenticated with %q, want old secret", fr.lastPass)
+	}
+}
+
+func TestWinRMConnectorVerify(t *testing.T) {
+	conn := WinRMConnector{Runner: &fakeRunner{exit: 0}}
+	if err := conn.Verify(context.Background(), store.Target{Protocol: "winrm"}, "u", "s"); err != nil {
+		t.Fatalf("verify exit 0: %v", err)
+	}
+	conn = WinRMConnector{Runner: &fakeRunner{exit: 5}}
+	if err := conn.Verify(context.Background(), store.Target{Protocol: "winrm"}, "u", "s"); err == nil {
+		t.Fatal("verify with non-zero exit should fail")
+	}
+}
+
+// --- in-process SSH test server ---
+
+type sshServer struct {
+	host string
+	port int
+	mu   sync.Mutex
+	last string
+}
+
+func (s *sshServer) lastStdin() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.last
+}
+
+func startSSHServer(t *testing.T, wantUser, wantPass string) *sshServer {
+	t.Helper()
+	srv := &sshServer{}
+	cfg := &ssh.ServerConfig{
+		PasswordCallback: func(c ssh.ConnMetadata, pass []byte) (*ssh.Permissions, error) {
+			if c.User() == wantUser && string(pass) == wantPass {
+				return &ssh.Permissions{}, nil
+			}
+			return nil, io.EOF
+		},
+	}
+	cfg.AddHostKey(mustSigner(t))
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ln.Close() })
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go srv.serve(conn, cfg)
+		}
+	}()
+	h, p, _ := net.SplitHostPort(ln.Addr().String())
+	srv.host = h
+	srv.port, _ = strconv.Atoi(p)
+	return srv
+}
+
+func (s *sshServer) serve(conn net.Conn, cfg *ssh.ServerConfig) {
+	sconn, chans, reqs, err := ssh.NewServerConn(conn, cfg)
+	if err != nil {
+		return
+	}
+	defer sconn.Close()
+	go ssh.DiscardRequests(reqs)
+	for nc := range chans {
+		if nc.ChannelType() != "session" {
+			nc.Reject(ssh.UnknownChannelType, "")
+			continue
+		}
+		ch, chReqs, err := nc.Accept()
+		if err != nil {
+			continue
+		}
+		go func() {
+			for req := range chReqs {
+				switch req.Type {
+				case "exec":
+					if req.WantReply {
+						req.Reply(true, nil)
+					}
+					data, _ := io.ReadAll(ch)
+					s.mu.Lock()
+					s.last = string(data)
+					s.mu.Unlock()
+					ch.SendRequest("exit-status", false, ssh.Marshal(struct{ Code uint32 }{0}))
+					ch.Close()
+				default:
+					if req.WantReply {
+						req.Reply(true, nil)
+					}
+				}
+			}
+		}()
+	}
+}
+
+func mustSigner(t *testing.T) ssh.Signer {
+	t.Helper()
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	signer, err := ssh.NewSignerFromKey(priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return signer
+}

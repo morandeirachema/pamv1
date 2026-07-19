@@ -97,13 +97,22 @@ Los componentes con línea discontinua (objetivos Windows) llegan en la [Fase 4]
   intercambiable**: una clave `local` para desarrollo/pruebas, o **[HashiCorp Vault Transit](https://developer.hashicorp.com/vault/docs/secrets/transit)**
   en producción para que la clave raíz nunca salga del KMS. El AAD liga cada token a su
   objetivo; tokens versionados `v2:`.
+- **Ciclo de vida de credenciales (rotación + reconciliación)** — `POST /api/credentials/{id}/rotate`
+  genera un secreto fuerte, lo aplica **en el objetivo** (SSH `chpasswd` / WinRM `net user`) y lo
+  vuelve a cifrar en el vault — la nueva contraseña nunca se muestra. `POST /api/credentials/{id}/reconcile`
+  verifica que el secreto guardado siga autenticando y detecta **desincronización (drift)**
+  (`?remediate=true` la corrige rotando); `GET /api/reconcile` escanea todo. Un worker en segundo
+  plano rota secretos antiguos y reconcilia según un intervalo (`PAM_ROTATE_INTERVAL_MIN`).
 - **Registro de auditoría** — de solo adición, para cada acción sensible, con atribución de actor.
 - **Registros operativos (logs)** — [slog](https://pkg.go.dev/log/slog) estructurado a stdout,
   una línea por petición HTTP y por sesión del proxy, etiquetado por servicio
   (`server`/`api`/`proxy`/`store`); JSON para un SIEM o texto para humanos (`PAM_LOG_LEVEL`,
   `PAM_LOG_FORMAT`). Separado de la auditoría; los secretos nunca se registran.
-- **Break-glass** — una clave de emergencia sellada de la que solo su SHA-256 vive en la
-  configuración. Funciona al instante pero grita: actor `break-glass` en cada fila de auditoría.
+- **Break-glass (v2)** — una clave de emergencia sellada, o apertura por **quórum M-de-N**
+  ([shares de Shamir](https://en.wikipedia.org/wiki/Shamir%27s_secret_sharing) repartidos con
+  `-split-key`; los custodios envían shares para reconstruirla). En ambos casos obtienes una sesión
+  de admin **de corta duración con autoexpiración**, y cada acceso/apertura se audita y se **alerta
+  en tiempo real** a un webhook.
 - **Portal AS/400** — interfaz de terminal 5250 en fósforo verde (Sign On, pantallas por menú,
   teclas F), deliberatamente austera para que los administradores sientan el peso del sistema.
 - **Almacenamiento PostgreSQL** vía [pgx](https://github.com/jackc/pgx); almacén en memoria

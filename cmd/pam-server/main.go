@@ -324,6 +324,13 @@ func run() error {
 		log.Info("MFA is required for password logins")
 	}
 
+	if cfg.RotateInterval > 0 {
+		go handler.RunLifecycleWorker(ctx, api.RotationPolicy{
+			Interval: cfg.RotateInterval,
+			MaxAge:   cfg.RotateMaxAge,
+		})
+	}
+
 	if cfg.SSHAddr != "off" {
 		hostKey, err := proxy.LoadOrCreateHostKey(cfg.SSHHostKeyPath)
 		if err != nil {

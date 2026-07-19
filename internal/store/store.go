@@ -114,8 +114,13 @@ type Store interface {
 	ListCredentials(ctx context.Context, targetID int64) ([]Credential, error)
 	GetCredential(ctx context.Context, id int64) (*Credential, error)
 	// UpdateCredentialSecretEnc replaces a credential's encrypted secret (used
-	// by vault key rotation).
+	// by vault key rotation). It deliberately does NOT touch rotated_at — a KEK
+	// re-wrap is not a credential rotation.
 	UpdateCredentialSecretEnc(ctx context.Context, id int64, secretEnc string) error
+	// RotateCredentialSecret replaces the encrypted secret AND stamps rotated_at
+	// (used by the credential-lifecycle rotation, where the secret on the target
+	// actually changed).
+	RotateCredentialSecret(ctx context.Context, id int64, secretEnc string, rotatedAt time.Time) error
 	DeleteCredential(ctx context.Context, id int64) error
 
 	CreateTargetGrant(ctx context.Context, g *TargetGrant) error

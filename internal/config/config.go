@@ -49,6 +49,12 @@ type Config struct {
 	// MFARequired makes password login require a confirmed TOTP second factor.
 	MFARequired bool
 
+	// RotateInterval enables the background credential-lifecycle worker (reconcile
+	// + max-age rotation); 0 disables it. RotateMaxAge rotates password
+	// credentials older than this (0 = reconcile/report only).
+	RotateInterval time.Duration
+	RotateMaxAge   time.Duration
+
 	// WinRMHTTPS uses HTTPS (5986) for WinRM; WinRMInsecure skips TLS verify (dev).
 	WinRMHTTPS    bool
 	WinRMInsecure bool
@@ -130,6 +136,8 @@ func Load() (*Config, error) {
 		BreakGlassTTL:       time.Duration(getenvInt("PAM_BREAK_GLASS_TTL_MIN", 15)) * time.Minute,
 		AlertWebhook:        os.Getenv("PAM_ALERT_WEBHOOK"),
 		MFARequired:         os.Getenv("PAM_MFA_REQUIRED") == "true",
+		RotateInterval:      time.Duration(getenvInt("PAM_ROTATE_INTERVAL_MIN", 0)) * time.Minute,
+		RotateMaxAge:        time.Duration(getenvInt("PAM_ROTATE_MAX_AGE_HOURS", 0)) * time.Hour,
 		WinRMHTTPS:          os.Getenv("PAM_WINRM_HTTPS") != "false", // default HTTPS
 		WinRMInsecure:       os.Getenv("PAM_WINRM_INSECURE_SKIP_VERIFY") == "true",
 		WinRMNTLM:           os.Getenv("PAM_WINRM_AUTH") == "ntlm",

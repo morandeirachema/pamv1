@@ -149,6 +149,8 @@ All configuration is environment variables (12-factor). Full descriptions in
 | `PAM_RECORDING_DIR` | | `recordings` | Where session recordings are written. |
 | `PAM_LOG_LEVEL` | | `info` | `debug` \| `info` \| `warn` \| `error`. |
 | `PAM_LOG_FORMAT` | | `json` | `json` (for SIEM) \| `text` (for humans). |
+| `PAM_ROTATE_INTERVAL_MIN` | | `0` (off) | Credential-lifecycle worker interval (minutes). |
+| `PAM_ROTATE_MAX_AGE_HOURS` | | `0` (report) | Auto-rotate password credentials older than this. |
 
 The examples below use `-H "X-API-Key: $PAM_API_KEY"`; in production call the
 HTTPS endpoint of your ingress instead of `http://localhost:8080`.
@@ -202,6 +204,46 @@ curl -H "X-API-Key: $PAM_API_KEY" -X DELETE http://localhost:8080/api/credential
 `secret_type` is `password` or `ssh_key` (paste the PEM private key as `secret`).
 Once the proxy is your normal path, **`reveal` should be the exception** — prefer
 brokered sessions so the secret is never shown.
+
+### Rotation & reconciliation (credential lifecycle)
+
+pamv1 can change the password **on the target** and re-vault it, so the account's
+secret is one only pamv1 knows — and can prove is current. Rotation and
+reconciliation run over the same secure protocols as the proxy: SSH (`chpasswd`,
+fed on stdin so the new password never hits a shell command line) and WinRM
+(`net user`). The rotating account must be able to set its own password (root /
+a sudoer on Linux; a suitably privileged account on Windows).
+
+```bash
+# Rotate now: generate a strong secret, set it on the target, re-vault it.
+# The new secret is NEVER returned — the proxy injects it just-in-time.
+curl -H "X-API-Key: $PAM_API_KEY" -X POST http://localhost:8080/api/credentials/1/rotate
+# → {"id":1,"target":"web-01","username":"root","rotated":true,"rotated_at":"..."}
+
+# Reconcile one credential: does the vaulted secret still authenticate?
+curl -H "X-API-Key: $PAM_API_KEY" -X POST http://localhost:8080/api/credentials/1/reconcile
+# → {"credential_id":1,...,"status":"in_sync"}   (or "out_of_sync" on drift)
+
+# Reconcile + heal drift by rotating to a fresh PAM-managed secret
+curl -H "X-API-Key: $PAM_API_KEY" -X POST "http://localhost:8080/api/credentials/1/reconcile?remediate=true"
+
+# Read-only drift scan across every credential (safe to run on a schedule)
+curl -H "X-API-Key: $PAM_API_KEY" http://localhost:8080/api/reconcile
+# → {"checked":12,"out_of_sync":1,"results":[...]}
+```
+
+To automate it, enable the background lifecycle worker: it reconciles every
+credential on each pass and rotates password credentials older than a max age.
+
+```bash
+PAM_ROTATE_INTERVAL_MIN=60       # run hourly
+PAM_ROTATE_MAX_AGE_HOURS=168     # rotate secrets older than 7 days (0 = report only)
+```
+
+Every action is audited (`credential.rotate`, `credential.reconcile`,
+`credential.remediate`; the worker acts as `system-scheduler`). Only `password`
+credentials are rotated; `ssh_key` rotation and the AD/LDAPS password-change and
+identity-reconciliation connectors are on the roadmap.
 
 ### Windows targets (WinRM)
 
@@ -524,6 +566,8 @@ evidence). Replay with [asciinema](https://asciinema.org/): `asciinema play <fil
 
 | Date | Change |
 |---|---|
+| 2026-07-19 | Phase 7: credential lifecycle — rotation (`/api/credentials/{id}/rotate`), reconciliation (`/reconcile`, `?remediate`, `GET /api/reconcile`), scheduled worker (`PAM_ROTATE_*`) |
+| 2026-07-19 | Phase 6: break-glass v2 (M-of-N quorum unseal, auto-expiring sessions, alerting); AWS KMS KEK |
 | 2026-07-18 | Phase 4: NTLM WinRM auth; RDP brokering via Guacamole guacd |
 | 2026-07-18 | Phase 3b: OIDC single sign-on (Authorization Code + PKCE, JWKS validation) |
 | 2026-07-18 | Phase 4: Windows targets — WinRM command execution with JIT credentials |

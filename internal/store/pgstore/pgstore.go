@@ -184,6 +184,15 @@ func (s *PGStore) UpdateCredentialSecretEnc(ctx context.Context, id int64, secre
 	return err
 }
 
+func (s *PGStore) RotateCredentialSecret(ctx context.Context, id int64, secretEnc string, rotatedAt time.Time) error {
+	tag, err := s.pool.Exec(ctx,
+		`UPDATE credentials SET secret_enc = $1, rotated_at = $2 WHERE id = $3`, secretEnc, rotatedAt.UTC(), id)
+	if err == nil && tag.RowsAffected() == 0 {
+		return store.ErrNotFound
+	}
+	return err
+}
+
 func (s *PGStore) CreateTargetGrant(ctx context.Context, g *store.TargetGrant) error {
 	err := s.pool.QueryRow(ctx,
 		`INSERT INTO target_grants (target_id, subject_type, subject) VALUES ($1, $2, $3) RETURNING id`,

@@ -182,6 +182,20 @@ func (m *Memstore) UpdateCredentialSecretEnc(_ context.Context, id int64, secret
 	return nil
 }
 
+func (m *Memstore) RotateCredentialSecret(_ context.Context, id int64, secretEnc string, rotatedAt time.Time) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	c, ok := m.creds[id]
+	if !ok {
+		return store.ErrNotFound
+	}
+	c.SecretEnc = secretEnc
+	at := rotatedAt.UTC()
+	c.RotatedAt = &at
+	m.creds[id] = c
+	return nil
+}
+
 func (m *Memstore) DeleteCredential(_ context.Context, id int64) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
