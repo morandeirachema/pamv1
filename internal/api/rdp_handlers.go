@@ -103,8 +103,8 @@ func (s *Server) rdpTunnel(w http.ResponseWriter, r *http.Request) {
 	gconn, err := guacd.Connect(ctx, s.guacdAddr, guacd.Params{
 		Protocol: "rdp", Hostname: target.Host, Port: strconv.Itoa(port),
 		Username: cred.Username, Password: secret,
-		Width:         atoiOr(r.URL.Query().Get("width"), 1024),
-		Height:        atoiOr(r.URL.Query().Get("height"), 768),
+		Width:         clampDim(atoiOr(r.URL.Query().Get("width"), 1024)),
+		Height:        clampDim(atoiOr(r.URL.Query().Get("height"), 768)),
 		RecordingPath: s.guacdRecordingPath,
 		RecordingName: recName,
 		Extra:         rdpExtra(s.guacdRDPSecurity, s.guacdIgnoreCert),
@@ -178,6 +178,16 @@ func atoiOr(s string, def int) int {
 		return n
 	}
 	return def
+}
+
+// clampDim caps a client-supplied RDP display dimension so a connect-capable user
+// can't ask guacd to allocate an enormous framebuffer.
+func clampDim(n int) int {
+	const max = 4096
+	if n > max {
+		return max
+	}
+	return n
 }
 
 // rdpExtra builds the guacd RDP security parameters. By default (security == ""

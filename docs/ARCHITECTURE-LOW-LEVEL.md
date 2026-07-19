@@ -257,9 +257,15 @@ SSH gateway. See §3 for the wire-level flow.
 - **Authz**: after the handshake, a connection whose role lacks `CapConnect`
   (e.g. `auditor`, `approver`) is rejected with a `session.denied` audit before
   any target is resolved.
-- **Resolve** (`resolve`): after handshake, look up target by name (must be
-  `protocol=ssh`), pick the credential (matching `creduser` or first), and
-  **decrypt the secret** — this is the JIT moment; plaintext lives only here.
+- **Gates** (in order, each denial audited): protocol allowlist
+  (`PAM_ALLOWED_PROTOCOLS`), per-target grants (`CanConnectTarget`), and the
+  4-eyes approval gate (`HasActiveApproval`; break-glass bypasses). Non-`ssh`
+  targets branch to the WinRM loop (`serveWinRM`) when a runner is configured.
+- **Resolve + JIT decrypt** (`resolveTarget` → `decryptSecret`): look up target
+  by name and pick the credential (matching `creduser` or first) *without*
+  decrypting, then **decrypt the secret only after every gate passes** — plaintext
+  never exists for a denied session. The AAD binds the ciphertext to
+  `(target, credential)` (`store.CredentialAAD`).
 - **Upstream** (`dialUpstream`): `ssh.Dial` to `host:port` as the credential
   user, `ssh.Password` or `ssh.PublicKeys` (for `secret_type=ssh_key`). The
   `HostKeyCallback` verifies the target's host key against `PAM_SSH_KNOWN_HOSTS`
@@ -276,6 +282,14 @@ SSH gateway. See §3 for the wire-level flow.
   so recordings are tamper-evident as a sequence, not just individually.
 - **Host key** (`hostkey.go`): `PAM_SSH_HOST_KEY` PEM path (persisted, generated
   if missing) or ephemeral ed25519.
+- **Also**: a `+observe` login suffix opens a read-only session (operator
+  keystrokes dropped, output still streamed/recorded); `Config.Jump` reaches
+  targets through an SSH bastion (`direct-tcpip`); `Config.WinRMRunner` brokers an
+  interactive WinRM command loop; `Config.OnSessionEnd` fires post-session
+  credential rotation; `Config.RequireRecording` refuses a session that can't be
+  recorded. Shutdown is a **bounded drain**: `Serve` force-closes active
+  connections on `ctx` cancel and waits for handlers, and closing audits are
+  written detached from the cancelled context.
 
 ### 2.6 `web`
 

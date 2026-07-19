@@ -60,7 +60,7 @@ func (s *Server) exportAudit(w http.ResponseWriter, r *http.Request) {
 		for _, e := range events {
 			_ = cw.Write([]string{
 				strconv.FormatInt(e.ID, 10), e.TS.UTC().Format(time.RFC3339Nano),
-				e.Actor, e.Action, e.Detail,
+				csvSafe(e.Actor), csvSafe(e.Action), csvSafe(e.Detail),
 			})
 		}
 		cw.Flush()
@@ -74,6 +74,20 @@ func (s *Server) exportAudit(w http.ResponseWriter, r *http.Request) {
 		"sha256":       digest,
 		"events":       events,
 	})
+}
+
+// csvSafe defuses spreadsheet formula injection: a cell that a spreadsheet would
+// evaluate (leading =, +, -, @, tab or CR) is prefixed with a single quote, so a
+// target name or reason in this compliance export can't run as a formula.
+func csvSafe(s string) string {
+	if s == "" {
+		return s
+	}
+	switch s[0] {
+	case '=', '+', '-', '@', '\t', '\r':
+		return "'" + s
+	}
+	return s
 }
 
 // parseTimeParam parses an RFC3339 timestamp, treating the empty string as the

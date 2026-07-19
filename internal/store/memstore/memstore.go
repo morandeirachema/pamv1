@@ -188,6 +188,7 @@ func (m *Memstore) GetAccessRequest(_ context.Context, id int64) (*store.AccessR
 	if !ok {
 		return nil, store.ErrNotFound
 	}
+	ar.DecidedAt = cloneTimePtr(ar.DecidedAt)
 	return &ar, nil
 }
 
@@ -199,6 +200,7 @@ func (m *Memstore) ListAccessRequests(_ context.Context, status string) ([]store
 	out := make([]store.AccessRequest, 0, len(m.accessReq))
 	for _, ar := range m.accessReq {
 		if status == "" || ar.Status == status {
+			ar.DecidedAt = cloneTimePtr(ar.DecidedAt)
 			out = append(out, ar)
 		}
 	}
@@ -270,6 +272,7 @@ func (m *Memstore) GetActiveCheckout(_ context.Context, credentialID int64, now 
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if co, active := m.activeCheckoutLocked(credentialID, now); active {
+		co.ReturnedAt = cloneTimePtr(co.ReturnedAt)
 		return &co, nil
 	}
 	return nil, store.ErrNotFound
@@ -299,6 +302,7 @@ func (m *Memstore) ListCheckouts(_ context.Context, activeOnly bool, now time.Ti
 		if activeOnly && (co.ReturnedAt != nil || !now.Before(co.ExpiresAt)) {
 			continue
 		}
+		co.ReturnedAt = cloneTimePtr(co.ReturnedAt)
 		out = append(out, co)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
@@ -327,6 +331,7 @@ func (m *Memstore) ListCredentials(_ context.Context, targetID int64) ([]store.C
 	out := make([]store.Credential, 0, len(m.creds))
 	for _, c := range m.creds {
 		if targetID == 0 || c.TargetID == targetID {
+			c.RotatedAt = cloneTimePtr(c.RotatedAt)
 			out = append(out, c)
 		}
 	}
@@ -342,7 +347,18 @@ func (m *Memstore) GetCredential(_ context.Context, id int64) (*store.Credential
 	if !ok {
 		return nil, store.ErrNotFound
 	}
+	c.RotatedAt = cloneTimePtr(c.RotatedAt)
 	return &c, nil
+}
+
+// cloneTimePtr returns a fresh copy of a *time.Time so a caller can't mutate the
+// value the store still holds in its map (pgstore hands back independent values).
+func cloneTimePtr(p *time.Time) *time.Time {
+	if p == nil {
+		return nil
+	}
+	v := *p
+	return &v
 }
 
 // UpdateCredentialSecretEnc replaces a credential's encrypted secret without
