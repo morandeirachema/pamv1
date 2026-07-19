@@ -8,52 +8,43 @@ import (
 	"errors"
 )
 
-// GF(2^8) log/exp tables with generator 3 and the AES reduction polynomial.
-var logTable, expTable [256]byte
+// GF(2^8) arithmetic with the AES reduction polynomial. mul and inv are
+// branch-free and table-free, so their timing and memory-access pattern do not
+// depend on the operands — the shares are secret during break-glass
+// reconstruction, and a data-dependent table lookup or branch would leak them.
 
-// init builds the GF(2^8) log/exp lookup tables used by mul and div.
-func init() {
-	x := byte(1)
-	for i := 0; i < 255; i++ {
-		expTable[i] = x
-		logTable[x] = byte(i)
-		x = mulNoTable(x, 3)
-	}
-	expTable[255] = 1 // exp has period 255; wrap for index arithmetic
-}
-
-// mulNoTable multiplies in GF(2^8) without tables (used only to build them).
-func mulNoTable(a, b byte) byte {
+// mul multiplies two field elements in GF(2^8), constant-time (Russian-peasant
+// multiplication with a masked reduction; correct for zero operands).
+func mul(a, b byte) byte {
 	var p byte
 	for i := 0; i < 8; i++ {
-		if b&1 != 0 {
-			p ^= a
-		}
-		hi := a & 0x80
+		p ^= a & (byte(0) - (b & 1)) // add a when the low bit of b is set
+		carry := byte(0) - (a >> 7)  // 0xFF when the high bit is set, else 0x00
 		a <<= 1
-		if hi != 0 {
-			a ^= 0x1b
-		}
+		a ^= 0x1b & carry // reduce by x^8 + x^4 + x^3 + x + 1
 		b >>= 1
 	}
 	return p
 }
 
-// mul multiplies two field elements in GF(2^8) via the log/exp tables.
-func mul(a, b byte) byte {
-	if a == 0 || b == 0 {
-		return 0
+// inv returns the multiplicative inverse in GF(2^8) (0 for 0), constant-time via
+// a^254 (= a^-1 since a^255 = 1 for a != 0) with a fixed exponentiation schedule.
+func inv(a byte) byte {
+	result := byte(1)
+	base := a
+	for e := 254; e > 0; e >>= 1 { // e is a fixed public schedule, not secret
+		if e&1 == 1 {
+			result = mul(result, base)
+		}
+		base = mul(base, base)
 	}
-	return expTable[(int(logTable[a])+int(logTable[b]))%255]
+	return result
 }
 
-// div divides a by b in GF(2^8) via the log/exp tables.
+// div divides a by b in GF(2^8), constant-time (b != 0 by construction — the
+// x-coordinates are distinct).
 func div(a, b byte) byte {
-	// b != 0 by construction (distinct x-coordinates)
-	if a == 0 {
-		return 0
-	}
-	return expTable[(int(logTable[a])-int(logTable[b])+255)%255]
+	return mul(a, inv(b))
 }
 
 // evaluate computes the polynomial (coeffs low→high) at x.
