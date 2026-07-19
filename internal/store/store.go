@@ -16,10 +16,14 @@ var (
 )
 
 // CredentialAAD is the additional-authenticated-data string that binds a
-// vaulted secret to its owning target. The API and the session proxy must
-// use the same value or decryption fails.
-func CredentialAAD(targetID int64) string {
-	return fmt.Sprintf("target:%d", targetID)
+// vaulted secret to its owning target AND its specific credential row, so a
+// ciphertext copied onto another credential (even on the same target) fails to
+// decrypt. The API, the session proxy and the rotation/maintenance paths must
+// all use the same value or decryption fails. Because it needs the credential's
+// ID, a newly created credential is inserted first (to assign the ID) and its
+// secret encrypted and stored in a second step.
+func CredentialAAD(targetID, credentialID int64) string {
+	return fmt.Sprintf("target:%d/cred:%d", targetID, credentialID)
 }
 
 // MFAAAD binds a vaulted TOTP secret to its owning user.

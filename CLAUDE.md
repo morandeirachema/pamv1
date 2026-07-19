@@ -51,7 +51,7 @@ Single binary `cmd/pam-server` wires everything; packages under `internal/`:
 
 The two most load-bearing cross-package couplings:
 
-1. **Vault AAD parity.** `store.CredentialAAD(targetID)` produces the AAD used to encrypt a secret in `api` and to decrypt it in `proxy`. Both sides must call it — if they diverge, decryption silently fails. Never inline the AAD string.
+1. **Vault AAD parity.** `store.CredentialAAD(targetID, credentialID)` produces the AAD used to encrypt a secret in `api` and to decrypt it in `proxy`. Both sides must call it — if they diverge, decryption silently fails. Because it binds the credential's row ID, a new credential is inserted first (to assign the ID) and its secret encrypted + stored in a second step. Never inline the AAD string.
 2. **Secrets never leave as data.** `Credential.SecretEnc` is `json:"-"` and must never be serialized to any client. Plaintext exists only transiently inside `proxy.resolve → dialUpstream` and the audited `api` reveal path; never log it.
 
 ## Conventions specific to this repo

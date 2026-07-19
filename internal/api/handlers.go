@@ -250,16 +250,25 @@ func (s *Server) createCredential(w http.ResponseWriter, r *http.Request) {
 		storeError(w, err)
 		return
 	}
-	enc, err := s.vault.Encrypt(r.Context(), in.Secret, store.CredentialAAD(target.ID))
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "encryption failed")
-		return
-	}
-	c := store.Credential{TargetID: target.ID, Username: in.Username, SecretType: in.SecretType, SecretEnc: enc}
+	// Insert first so the row has an ID, then bind the ciphertext to (target,
+	// credential) via the AAD and store it. Roll the row back if either fails.
+	c := store.Credential{TargetID: target.ID, Username: in.Username, SecretType: in.SecretType}
 	if err := s.store.CreateCredential(r.Context(), &c); err != nil {
 		storeError(w, err)
 		return
 	}
+	enc, err := s.vault.Encrypt(r.Context(), in.Secret, store.CredentialAAD(c.TargetID, c.ID))
+	if err != nil {
+		_ = s.store.DeleteCredential(r.Context(), c.ID)
+		writeError(w, http.StatusInternalServerError, "encryption failed")
+		return
+	}
+	if err := s.store.UpdateCredentialSecretEnc(r.Context(), c.ID, enc); err != nil {
+		_ = s.store.DeleteCredential(r.Context(), c.ID)
+		storeError(w, err)
+		return
+	}
+	c.SecretEnc = enc
 	s.audit(r.Context(), "credential.create", fmt.Sprintf("%s/%s", target.Name, c.Username))
 	writeJSON(w, http.StatusCreated, c)
 }
@@ -304,7 +313,7 @@ func (s *Server) revealCredential(w http.ResponseWriter, r *http.Request) {
 		storeError(w, err)
 		return
 	}
-	secret, err := s.vault.Decrypt(r.Context(), c.SecretEnc, store.CredentialAAD(c.TargetID))
+	secret, err := s.vault.Decrypt(r.Context(), c.SecretEnc, store.CredentialAAD(c.TargetID, c.ID))
 	if err != nil {
 		s.audit(r.Context(), "credential.decrypt_failed", fmt.Sprintf("credential:%d target:%d op:reveal", c.ID, c.TargetID))
 		writeError(w, http.StatusInternalServerError, "decryption failed")
@@ -397,7 +406,7 @@ func (s *Server) runWinRM(w http.ResponseWriter, r *http.Request) {
 	cred := creds[0]
 
 	// Just-in-time: the secret exists only for this call.
-	secret, err := s.vault.Decrypt(r.Context(), cred.SecretEnc, store.CredentialAAD(target.ID))
+	secret, err := s.vault.Decrypt(r.Context(), cred.SecretEnc, store.CredentialAAD(target.ID, cred.ID))
 	if err != nil {
 		s.audit(r.Context(), "credential.decrypt_failed", fmt.Sprintf("credential:%d target:%s op:winrm", cred.ID, target.Name))
 		writeError(w, http.StatusInternalServerError, "decryption failed")

@@ -55,14 +55,18 @@ func newSchedTestServer(t *testing.T, fc *schedFake) (*Server, *store.Credential
 	if err := st.CreateTarget(ctx, target); err != nil {
 		t.Fatal(err)
 	}
-	enc, err := v.Encrypt(ctx, "orig", store.CredentialAAD(target.ID))
-	if err != nil {
-		t.Fatal(err)
-	}
-	cred := &store.Credential{TargetID: target.ID, Username: "root", SecretType: "password", SecretEnc: enc}
+	cred := &store.Credential{TargetID: target.ID, Username: "root", SecretType: "password"}
 	if err := st.CreateCredential(ctx, cred); err != nil {
 		t.Fatal(err)
 	}
+	enc, err := v.Encrypt(ctx, "orig", store.CredentialAAD(target.ID, cred.ID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.UpdateCredentialSecretEnc(ctx, cred.ID, enc); err != nil {
+		t.Fatal(err)
+	}
+	cred.SecretEnc = enc
 	resolver, err := auth.NewResolver(st, "testkey", "")
 	if err != nil {
 		t.Fatal(err)
@@ -123,7 +127,7 @@ func TestLifecycleWorkerRotatesByMaxAge(t *testing.T) {
 	if got.RotatedAt == nil {
 		t.Fatal("rotated_at not stamped by the worker")
 	}
-	secret, err := srv.vault.Decrypt(context.Background(), got.SecretEnc, store.CredentialAAD(got.TargetID))
+	secret, err := srv.vault.Decrypt(context.Background(), got.SecretEnc, store.CredentialAAD(got.TargetID, got.ID))
 	if err != nil {
 		t.Fatal(err)
 	}

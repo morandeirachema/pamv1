@@ -57,7 +57,7 @@ func (s *Server) rotateCredential(ctx context.Context, cred *store.Credential, t
 	if !ok {
 		return time.Time{}, fmt.Errorf("%w: no rotator for protocol %q", ErrUnsupported, target.Protocol)
 	}
-	oldSecret, err := s.vault.Decrypt(ctx, cred.SecretEnc, store.CredentialAAD(target.ID))
+	oldSecret, err := s.vault.Decrypt(ctx, cred.SecretEnc, store.CredentialAAD(target.ID, cred.ID))
 	if err != nil {
 		return time.Time{}, fmt.Errorf("vault decrypt failed")
 	}
@@ -99,7 +99,7 @@ func (s *Server) rotateCredential(ctx context.Context, cred *store.Credential, t
 	// detached from cancellation: a client disconnect or graceful shutdown here
 	// must not lose the new secret, which would lock PAM out of the target.
 	pctx := context.WithoutCancel(ctx)
-	enc, err := s.vault.Encrypt(pctx, newSecret, store.CredentialAAD(target.ID))
+	enc, err := s.vault.Encrypt(pctx, newSecret, store.CredentialAAD(target.ID, cred.ID))
 	if err != nil {
 		return time.Time{}, fmt.Errorf("re-encrypt after rotation failed: %w", err)
 	}
@@ -154,7 +154,7 @@ func (s *Server) checkoutCredential(w http.ResponseWriter, r *http.Request) {
 		storeError(w, err)
 		return
 	}
-	secret, err := s.vault.Decrypt(r.Context(), cred.SecretEnc, store.CredentialAAD(target.ID))
+	secret, err := s.vault.Decrypt(r.Context(), cred.SecretEnc, store.CredentialAAD(target.ID, cred.ID))
 	if err != nil {
 		// The lease was created but the secret can't be revealed — roll it back so
 		// the credential isn't blocked from checkout for the whole TTL.
@@ -294,7 +294,7 @@ func (s *Server) reconcileOne(ctx context.Context, cred *store.Credential, targe
 		res.Detail = "no verifier for protocol " + target.Protocol
 		return res
 	}
-	secret, err := s.vault.Decrypt(ctx, cred.SecretEnc, store.CredentialAAD(target.ID))
+	secret, err := s.vault.Decrypt(ctx, cred.SecretEnc, store.CredentialAAD(target.ID, cred.ID))
 	if err != nil {
 		res.Status = "out_of_sync"
 		res.Detail = "vault decrypt failed"

@@ -194,13 +194,16 @@ func seedTarget(t *testing.T, st store.Store, v *vault.Vault, host string, port 
 	if err := st.CreateTarget(ctx, target); err != nil {
 		t.Fatal(err)
 	}
-	enc, err := v.Encrypt(context.Background(), upstreamSecret, store.CredentialAAD(target.ID))
+	// Insert first to get the credential ID, then encrypt bound to (target, cred).
+	cred := &store.Credential{TargetID: target.ID, Username: upstreamUser, SecretType: "password"}
+	if err := st.CreateCredential(ctx, cred); err != nil {
+		t.Fatal(err)
+	}
+	enc, err := v.Encrypt(ctx, upstreamSecret, store.CredentialAAD(target.ID, cred.ID))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := st.CreateCredential(ctx, &store.Credential{
-		TargetID: target.ID, Username: upstreamUser, SecretType: "password", SecretEnc: enc,
-	}); err != nil {
+	if err := st.UpdateCredentialSecretEnc(ctx, cred.ID, enc); err != nil {
 		t.Fatal(err)
 	}
 	return target

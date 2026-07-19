@@ -535,7 +535,7 @@ func (p *Proxy) resolveTarget(ctx context.Context, targetName, credUser string) 
 // It must be called only after every authorization gate has passed — plaintext
 // must never be materialized for a session that will be denied.
 func (p *Proxy) decryptSecret(ctx context.Context, target *store.Target, cred *store.Credential) (string, error) {
-	secret, err := p.vault.Decrypt(ctx, cred.SecretEnc, store.CredentialAAD(target.ID))
+	secret, err := p.vault.Decrypt(ctx, cred.SecretEnc, store.CredentialAAD(target.ID, cred.ID))
 	if err != nil {
 		return "", errors.New("credential decryption failed")
 	}

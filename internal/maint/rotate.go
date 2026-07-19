@@ -21,7 +21,7 @@ func RotateVaultKEK(ctx context.Context, st store.Store, from, to *vault.Vault) 
 		return n, fmt.Errorf("list credentials: %w", err)
 	}
 	for _, c := range creds {
-		aad := store.CredentialAAD(c.TargetID)
+		aad := store.CredentialAAD(c.TargetID, c.ID)
 		// Idempotent/resumable: if this secret already decrypts under the new KEK
 		// (a prior run rotated it before crashing), skip it rather than failing on
 		// the `from` decrypt and stranding the store in a mixed-key state.

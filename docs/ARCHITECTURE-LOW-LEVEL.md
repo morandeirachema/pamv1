@@ -74,7 +74,7 @@ Selected by `PAM_KEK_PROVIDER` (`local` | `vault-transit` | `aws-kms` | `pkcs11`
 Interface `Store` with `memstore` and `pgstore` implementations. Domain types:
 `Target`, `Credential` (field `SecretEnc` is `json:"-"` — **never serialized**),
 `AuditEvent`. Sentinel errors `ErrNotFound`, `ErrConflict`.
-`CredentialAAD(targetID) = "target:<id>"` — shared by `api` and `proxy` so vault
+`CredentialAAD(targetID, credID) = "target:<id>/cred:<id>"` — shared by `api` and `proxy` so vault
 AAD matches on both encrypt and decrypt paths.
 
 Schema is applied by an embedded **migration runner** (`pgstore/migrate.go`):
