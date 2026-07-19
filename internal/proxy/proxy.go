@@ -325,7 +325,7 @@ func (p *Proxy) handleConn(ctx context.Context, nConn net.Conn) {
 		return
 	}
 
-	target, cred, secret, err := p.resolve(ctx, ext["target"], ext["cred_user"])
+	target, cred, err := p.resolveTarget(ctx, ext["target"], ext["cred_user"])
 	if err != nil {
 		p.log.Warn("session denied", "actor", actor, "login", login, "reason", err.Error(), "remote", remote)
 		p.audit(ctx, actor, "session.denied", fmt.Sprintf("login:%s reason:%v", login, err))
@@ -369,6 +369,17 @@ func (p *Proxy) handleConn(ctx context.Context, nConn net.Conn) {
 			rejectAll(chans, ssh.Prohibited, "pamv1: connection requires an approved access request")
 			return
 		}
+	}
+
+	// Every authorization gate has passed — decrypt the secret just-in-time.
+	// Plaintext exists only from here on, never for a session that was denied.
+	secret, err := p.decryptSecret(ctx, target, cred)
+	if err != nil {
+		p.log.Error("credential decryption failed", "actor", actor, "target", target.Name, "err", err)
+		p.audit(ctx, actor, "credential.decrypt_failed",
+			fmt.Sprintf("target:%s cred_user:%s op:connect", target.Name, cred.Username))
+		rejectAll(chans, ssh.ConnectionFailed, "pamv1: credential unavailable")
+		return
 	}
 
 	observeMode := ext["observe"] == "true"
@@ -436,16 +447,17 @@ func (p *Proxy) handleConn(ctx context.Context, nConn net.Conn) {
 	wg.Wait()
 }
 
-// resolve looks up the target and credential and decrypts the secret — this
-// decryption is the "just-in-time" moment: plaintext exists only for the
-// lifetime of the upstream dial, never in the DB response or on the client.
-func (p *Proxy) resolve(ctx context.Context, targetName, credUser string) (*store.Target, *store.Credential, string, error) {
+// resolveTarget looks up the target and the credential to inject WITHOUT
+// decrypting the secret, so every authorization gate can run before any
+// plaintext exists. The just-in-time decryption is a separate step
+// (decryptSecret) taken only once the session is authorized.
+func (p *Proxy) resolveTarget(ctx context.Context, targetName, credUser string) (*store.Target, *store.Credential, error) {
 	if targetName == "" {
-		return nil, nil, "", errors.New("no target specified")
+		return nil, nil, errors.New("no target specified")
 	}
 	targets, err := p.store.ListTargets(ctx)
 	if err != nil {
-		return nil, nil, "", errors.New("target lookup failed")
+		return nil, nil, errors.New("target lookup failed")
 	}
 	var target *store.Target
 	for i := range targets {
@@ -455,11 +467,11 @@ func (p *Proxy) resolve(ctx context.Context, targetName, credUser string) (*stor
 		}
 	}
 	if target == nil {
-		return nil, nil, "", fmt.Errorf("unknown target %q", targetName)
+		return nil, nil, fmt.Errorf("unknown target %q", targetName)
 	}
 	creds, err := p.store.ListCredentials(ctx, target.ID)
 	if err != nil {
-		return nil, nil, "", errors.New("credential lookup failed")
+		return nil, nil, errors.New("credential lookup failed")
 	}
 	var cred *store.Credential
 	for i := range creds {
@@ -469,13 +481,20 @@ func (p *Proxy) resolve(ctx context.Context, targetName, credUser string) (*stor
 		}
 	}
 	if cred == nil {
-		return nil, nil, "", fmt.Errorf("no matching credential for target %q", targetName)
+		return nil, nil, fmt.Errorf("no matching credential for target %q", targetName)
 	}
+	return target, cred, nil
+}
+
+// decryptSecret performs the just-in-time decryption of a credential's secret.
+// It must be called only after every authorization gate has passed — plaintext
+// must never be materialized for a session that will be denied.
+func (p *Proxy) decryptSecret(ctx context.Context, target *store.Target, cred *store.Credential) (string, error) {
 	secret, err := p.vault.Decrypt(ctx, cred.SecretEnc, store.CredentialAAD(target.ID))
 	if err != nil {
-		return nil, nil, "", errors.New("credential decryption failed")
+		return "", errors.New("credential decryption failed")
 	}
-	return target, cred, secret, nil
+	return secret, nil
 }
 
 // dialUpstream opens an SSH client to the target, authenticating with the
