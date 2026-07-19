@@ -97,6 +97,37 @@ func pgCode(err error) string {
 	return ""
 }
 
+// getOne runs a single-row query, scanning with scan, and maps pgx.ErrNoRows to
+// store.ErrNotFound — the shared shape of every Get* lookup.
+func getOne[T any](ctx context.Context, pool *pgxpool.Pool, scan func(pgx.CollectableRow) (T, error), sql string, args ...any) (*T, error) {
+	rows, err := pool.Query(ctx, sql, args...)
+	if err != nil {
+		return nil, err
+	}
+	v, err := pgx.CollectExactlyOneRow(rows, scan)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, store.ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &v, nil
+}
+
+// execExpectingRow runs an Exec that must affect a row, returning
+// store.ErrNotFound when it affects none — the shared shape of Delete* and
+// single-row Update* methods.
+func execExpectingRow(ctx context.Context, pool *pgxpool.Pool, sql string, args ...any) error {
+	tag, err := pool.Exec(ctx, sql, args...)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return store.ErrNotFound
+	}
+	return nil
+}
+
 // CreateTarget inserts a target, populating its ID and CreatedAt; ErrConflict if the name is taken.
 func (s *PGStore) CreateTarget(ctx context.Context, t *store.Target) error {
 	err := s.pool.QueryRow(ctx,
@@ -123,29 +154,14 @@ func (s *PGStore) ListTargets(ctx context.Context) ([]store.Target, error) {
 
 // GetTarget returns the target with the given ID, or ErrNotFound.
 func (s *PGStore) GetTarget(ctx context.Context, id int64) (*store.Target, error) {
-	rows, err := s.pool.Query(ctx,
+	return getOne(ctx, s.pool, scanTarget,
 		`SELECT id, name, host, port, os_type, protocol, require_approval, created_at
 		 FROM targets WHERE id = $1`, id)
-	if err != nil {
-		return nil, err
-	}
-	t, err := pgx.CollectExactlyOneRow(rows, scanTarget)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, store.ErrNotFound
-	}
-	if err != nil {
-		return nil, err
-	}
-	return &t, nil
 }
 
 // DeleteTarget removes a target by ID (cascading via FK constraints); ErrNotFound if absent.
 func (s *PGStore) DeleteTarget(ctx context.Context, id int64) error {
-	tag, err := s.pool.Exec(ctx, `DELETE FROM targets WHERE id = $1`, id)
-	if err == nil && tag.RowsAffected() == 0 {
-		return store.ErrNotFound
-	}
-	return err
+	return execExpectingRow(ctx, s.pool, `DELETE FROM targets WHERE id = $1`, id)
 }
 
 // CreateCredential inserts a credential, populating its ID and CreatedAt;
@@ -176,41 +192,22 @@ func (s *PGStore) ListCredentials(ctx context.Context, targetID int64) ([]store.
 
 // GetCredential returns the credential with the given ID, or ErrNotFound.
 func (s *PGStore) GetCredential(ctx context.Context, id int64) (*store.Credential, error) {
-	rows, err := s.pool.Query(ctx,
+	return getOne(ctx, s.pool, scanCredential,
 		`SELECT id, target_id, username, secret_type, secret_enc, created_at, rotated_at
 		 FROM credentials WHERE id = $1`, id)
-	if err != nil {
-		return nil, err
-	}
-	c, err := pgx.CollectExactlyOneRow(rows, scanCredential)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, store.ErrNotFound
-	}
-	if err != nil {
-		return nil, err
-	}
-	return &c, nil
 }
 
 // UpdateCredentialSecretEnc replaces a credential's encrypted secret without
 // touching rotated_at; ErrNotFound if absent.
 func (s *PGStore) UpdateCredentialSecretEnc(ctx context.Context, id int64, secretEnc string) error {
-	tag, err := s.pool.Exec(ctx, `UPDATE credentials SET secret_enc = $1 WHERE id = $2`, secretEnc, id)
-	if err == nil && tag.RowsAffected() == 0 {
-		return store.ErrNotFound
-	}
-	return err
+	return execExpectingRow(ctx, s.pool, `UPDATE credentials SET secret_enc = $1 WHERE id = $2`, secretEnc, id)
 }
 
 // RotateCredentialSecret replaces the encrypted secret and stamps rotated_at;
 // ErrNotFound if absent.
 func (s *PGStore) RotateCredentialSecret(ctx context.Context, id int64, secretEnc string, rotatedAt time.Time) error {
-	tag, err := s.pool.Exec(ctx,
+	return execExpectingRow(ctx, s.pool,
 		`UPDATE credentials SET secret_enc = $1, rotated_at = $2 WHERE id = $3`, secretEnc, rotatedAt.UTC(), id)
-	if err == nil && tag.RowsAffected() == 0 {
-		return store.ErrNotFound
-	}
-	return err
 }
 
 // CreateTargetGrant adds a grant, populating its ID; ErrConflict if an identical
@@ -245,20 +242,12 @@ func (s *PGStore) ListTargetGrants(ctx context.Context, targetID int64) ([]store
 
 // DeleteTargetGrant removes a grant by ID; ErrNotFound if absent.
 func (s *PGStore) DeleteTargetGrant(ctx context.Context, id int64) error {
-	tag, err := s.pool.Exec(ctx, `DELETE FROM target_grants WHERE id = $1`, id)
-	if err == nil && tag.RowsAffected() == 0 {
-		return store.ErrNotFound
-	}
-	return err
+	return execExpectingRow(ctx, s.pool, `DELETE FROM target_grants WHERE id = $1`, id)
 }
 
 // DeleteCredential removes a credential by ID; ErrNotFound if absent.
 func (s *PGStore) DeleteCredential(ctx context.Context, id int64) error {
-	tag, err := s.pool.Exec(ctx, `DELETE FROM credentials WHERE id = $1`, id)
-	if err == nil && tag.RowsAffected() == 0 {
-		return store.ErrNotFound
-	}
-	return err
+	return execExpectingRow(ctx, s.pool, `DELETE FROM credentials WHERE id = $1`, id)
 }
 
 // CreateAccessRequest inserts a request (defaulting status to pending),
@@ -280,20 +269,9 @@ func (s *PGStore) CreateAccessRequest(ctx context.Context, ar *store.AccessReque
 
 // GetAccessRequest returns the access request with the given ID, or ErrNotFound.
 func (s *PGStore) GetAccessRequest(ctx context.Context, id int64) (*store.AccessRequest, error) {
-	rows, err := s.pool.Query(ctx,
+	return getOne(ctx, s.pool, scanAccessRequest,
 		`SELECT id, requester, target_id, reason, status, approver, created_at, decided_at, expires_at
 		 FROM access_requests WHERE id = $1`, id)
-	if err != nil {
-		return nil, err
-	}
-	ar, err := pgx.CollectExactlyOneRow(rows, scanAccessRequest)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, store.ErrNotFound
-	}
-	if err != nil {
-		return nil, err
-	}
-	return &ar, nil
 }
 
 // ListAccessRequests returns requests with the given status (all when status is
@@ -311,13 +289,9 @@ func (s *PGStore) ListAccessRequests(ctx context.Context, status string) ([]stor
 // DecideAccessRequest records an approve/deny decision, approver, and decision
 // time; ErrNotFound if the request is missing.
 func (s *PGStore) DecideAccessRequest(ctx context.Context, id int64, status, approver string, decidedAt time.Time) error {
-	tag, err := s.pool.Exec(ctx,
+	return execExpectingRow(ctx, s.pool,
 		`UPDATE access_requests SET status = $1, approver = $2, decided_at = $3 WHERE id = $4`,
 		status, approver, decidedAt.UTC(), id)
-	if err == nil && tag.RowsAffected() == 0 {
-		return store.ErrNotFound
-	}
-	return err
 }
 
 // HasActiveApproval reports whether requester has an approved, unexpired request
@@ -400,32 +374,17 @@ func (s *PGStore) CreateCheckout(ctx context.Context, co *store.Checkout, now ti
 // GetActiveCheckout returns the credential's active (unreturned, unexpired)
 // checkout as of now, or ErrNotFound.
 func (s *PGStore) GetActiveCheckout(ctx context.Context, credentialID int64, now time.Time) (*store.Checkout, error) {
-	rows, err := s.pool.Query(ctx,
+	return getOne(ctx, s.pool, scanCheckout,
 		`SELECT id, credential_id, target_id, holder, reason, checked_out_at, expires_at, returned_at
 		 FROM checkouts
 		 WHERE credential_id = $1 AND returned_at IS NULL AND expires_at > $2
 		 ORDER BY id DESC LIMIT 1`, credentialID, now.UTC())
-	if err != nil {
-		return nil, err
-	}
-	co, err := pgx.CollectExactlyOneRow(rows, scanCheckout)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, store.ErrNotFound
-	}
-	if err != nil {
-		return nil, err
-	}
-	return &co, nil
 }
 
 // CheckinCheckout marks a checkout returned; ErrNotFound if missing or already returned.
 func (s *PGStore) CheckinCheckout(ctx context.Context, id int64, at time.Time) error {
-	tag, err := s.pool.Exec(ctx,
+	return execExpectingRow(ctx, s.pool,
 		`UPDATE checkouts SET returned_at = $1 WHERE id = $2 AND returned_at IS NULL`, at.UTC(), id)
-	if err == nil && tag.RowsAffected() == 0 {
-		return store.ErrNotFound
-	}
-	return err
 }
 
 // ListCheckouts returns checkouts ordered by ID; activeOnly limits to
@@ -505,29 +464,14 @@ func (s *PGStore) ListUsers(ctx context.Context) ([]store.User, error) {
 
 // GetUserByTokenHash returns the user whose token hash matches, or ErrNotFound.
 func (s *PGStore) GetUserByTokenHash(ctx context.Context, tokenHashHex string) (*store.User, error) {
-	rows, err := s.pool.Query(ctx,
+	return getOne(ctx, s.pool, scanUser,
 		`SELECT id, username, role, token_hash, created_at FROM users WHERE token_hash = $1`,
 		tokenHashHex)
-	if err != nil {
-		return nil, err
-	}
-	u, err := pgx.CollectExactlyOneRow(rows, scanUser)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, store.ErrNotFound
-	}
-	if err != nil {
-		return nil, err
-	}
-	return &u, nil
 }
 
 // DeleteUser removes a user by ID; ErrNotFound if absent.
 func (s *PGStore) DeleteUser(ctx context.Context, id int64) error {
-	tag, err := s.pool.Exec(ctx, `DELETE FROM users WHERE id = $1`, id)
-	if err == nil && tag.RowsAffected() == 0 {
-		return store.ErrNotFound
-	}
-	return err
+	return execExpectingRow(ctx, s.pool, `DELETE FROM users WHERE id = $1`, id)
 }
 
 // CreateSession inserts a session, populating its ID and CreatedAt.
@@ -546,29 +490,14 @@ func (s *PGStore) CreateSession(ctx context.Context, sess *store.Session) error 
 // GetSessionByTokenHash returns a non-expired session matching the token hash,
 // or ErrNotFound.
 func (s *PGStore) GetSessionByTokenHash(ctx context.Context, tokenHashHex string) (*store.Session, error) {
-	rows, err := s.pool.Query(ctx,
+	return getOne(ctx, s.pool, scanSession,
 		`SELECT id, username, role, scope, token_hash, created_at, expires_at
 		 FROM sessions WHERE token_hash = $1 AND expires_at > now()`, tokenHashHex)
-	if err != nil {
-		return nil, err
-	}
-	sess, err := pgx.CollectExactlyOneRow(rows, scanSession)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, store.ErrNotFound
-	}
-	if err != nil {
-		return nil, err
-	}
-	return &sess, nil
 }
 
 // DeleteSession removes the session with the given token hash; ErrNotFound if absent.
 func (s *PGStore) DeleteSession(ctx context.Context, tokenHashHex string) error {
-	tag, err := s.pool.Exec(ctx, `DELETE FROM sessions WHERE token_hash = $1`, tokenHashHex)
-	if err == nil && tag.RowsAffected() == 0 {
-		return store.ErrNotFound
-	}
-	return err
+	return execExpectingRow(ctx, s.pool, `DELETE FROM sessions WHERE token_hash = $1`, tokenHashHex)
 }
 
 // UpsertMFAEnrollment creates or replaces a user's TOTP enrollment, populating CreatedAt.
