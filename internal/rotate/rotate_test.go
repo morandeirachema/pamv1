@@ -125,6 +125,25 @@ func TestSSHConnectorRotateKey(t *testing.T) {
 	}
 }
 
+// TestSSHConnectorVerifySSHKey proves Verify authenticates an ssh_key credential
+// with public-key auth (not by presenting the PEM as a password), so key
+// credentials reconcile as in-sync instead of reporting false drift.
+func TestSSHConnectorVerifySSHKey(t *testing.T) {
+	priv, err := GenerateSSHKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	signer, err := ssh.ParsePrivateKey([]byte(priv))
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := startSSHServerPubkey(t, "svc-pam", signer.PublicKey())
+	target := store.Target{Host: srv.host, Port: srv.port, Protocol: "ssh"}
+	if err := (SSHConnector{}).Verify(context.Background(), target, "svc-pam", priv); err != nil {
+		t.Fatalf("Verify with ssh_key credential: %v", err)
+	}
+}
+
 func TestSSHConnectorRejectsUnsafeUsername(t *testing.T) {
 	conn := SSHConnector{}
 	err := conn.Rotate(context.Background(), store.Target{Host: "127.0.0.1", Port: 1}, "bad:user", "old", "new")
@@ -162,8 +181,8 @@ func TestWinRMConnectorRotate(t *testing.T) {
 	if err := conn.Rotate(context.Background(), target, "Administrator", "old", "N3w-Pass_1"); err != nil {
 		t.Fatalf("rotate: %v", err)
 	}
-	if fr.lastCmd != "net user Administrator N3w-Pass_1" {
-		t.Fatalf("command = %q", fr.lastCmd)
+	if fr.lastCmd != "net user Administrator N3w-Pass_1 /y" {
+		t.Fatalf("command = %q (missing /y auto-confirm?)", fr.lastCmd)
 	}
 	if fr.lastPass != "old" {
 		t.Fatalf("authenticated with %q, want old secret", fr.lastPass)

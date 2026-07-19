@@ -16,6 +16,7 @@ import (
 	"crypto/rand"
 	"encoding/pem"
 	"fmt"
+	"io"
 	"math/big"
 	"strings"
 	"time"
@@ -165,10 +166,49 @@ func (c SSHConnector) dial(target store.Target, username, secret string) (*ssh.C
 	return c.dialAuth(target, username, ssh.Password(secret))
 }
 
-// Verify dials the target and completes an SSH handshake with secret; success
-// means the credential still authenticates.
+// authMethod picks public-key auth when secret is a PEM private key (an ssh_key
+// credential) and password auth otherwise, so Verify works for both credential
+// types instead of always presenting an ssh_key as a password.
+func authMethod(secret string) (ssh.AuthMethod, error) {
+	if strings.Contains(secret, "PRIVATE KEY") {
+		signer, err := ssh.ParsePrivateKey([]byte(secret))
+		if err != nil {
+			return nil, fmt.Errorf("parse ssh key: %w", err)
+		}
+		return ssh.PublicKeys(signer), nil
+	}
+	return ssh.Password(secret), nil
+}
+
+// execGuard bounds a remote command by c.timeout() (and honors ctx), closing the
+// session to unblock a CombinedOutput that a wedged target would otherwise hang
+// on forever. The returned func stops the guard and must be deferred.
+func (c SSHConnector) execGuard(ctx context.Context, sess io.Closer) func() {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(ctx, c.timeout())
+	done := make(chan struct{})
+	go func() {
+		select {
+		case <-ctx.Done():
+			if ctx.Err() == context.DeadlineExceeded {
+				sess.Close()
+			}
+		case <-done:
+		}
+	}()
+	return func() { cancel(); close(done) }
+}
+
+// Verify dials the target and completes an SSH handshake with secret (a password
+// or an ssh_key PEM); success means the credential still authenticates.
 func (c SSHConnector) Verify(_ context.Context, target store.Target, username, secret string) error {
-	client, err := c.dial(target, username, secret)
+	auth, err := authMethod(secret)
+	if err != nil {
+		return err
+	}
+	client, err := c.dialAuth(target, username, auth)
 	if err != nil {
 		return fmt.Errorf("ssh auth failed: %w", err)
 	}
@@ -178,7 +218,7 @@ func (c SSHConnector) Verify(_ context.Context, target store.Target, username, s
 
 // Rotate connects with oldSecret and sets the password to newSecret via
 // RotateCommand.
-func (c SSHConnector) Rotate(_ context.Context, target store.Target, username, oldSecret, newSecret string) error {
+func (c SSHConnector) Rotate(ctx context.Context, target store.Target, username, oldSecret, newSecret string) error {
 	if strings.ContainsAny(username, ":\n\r") {
 		return fmt.Errorf("rotate: unsafe username")
 	}
@@ -193,6 +233,7 @@ func (c SSHConnector) Rotate(_ context.Context, target store.Target, username, o
 		return fmt.Errorf("ssh session: %w", err)
 	}
 	defer sess.Close()
+	defer c.execGuard(ctx, sess)()
 
 	cmd := c.RotateCommand
 	if cmd == "" {
@@ -215,7 +256,7 @@ type KeyRotator interface {
 // RotateKey connects with the old private key and replaces the account's
 // authorized_keys with the public key derived from newPrivPEM (the new private
 // key is what the vault will store). The old key no longer authenticates.
-func (c SSHConnector) RotateKey(_ context.Context, target store.Target, username, oldPrivPEM, newPrivPEM string) error {
+func (c SSHConnector) RotateKey(ctx context.Context, target store.Target, username, oldPrivPEM, newPrivPEM string) error {
 	oldSigner, err := ssh.ParsePrivateKey([]byte(oldPrivPEM))
 	if err != nil {
 		return fmt.Errorf("parse current ssh key: %w", err)
@@ -224,7 +265,8 @@ func (c SSHConnector) RotateKey(_ context.Context, target store.Target, username
 	if err != nil {
 		return fmt.Errorf("parse new ssh key: %w", err)
 	}
-	authLine := ssh.MarshalAuthorizedKey(newSigner.PublicKey()) // "ssh-ed25519 AAAA...\n"
+	authLine := ssh.MarshalAuthorizedKey(newSigner.PublicKey())                           // "ssh-ed25519 AAAA...\n"
+	oldLine := strings.TrimSpace(string(ssh.MarshalAuthorizedKey(oldSigner.PublicKey()))) // base64 blob only alphabet — shell-safe in single quotes
 
 	client, err := c.dialAuth(target, username, ssh.PublicKeys(oldSigner))
 	if err != nil {
@@ -237,11 +279,14 @@ func (c SSHConnector) RotateKey(_ context.Context, target store.Target, username
 		return fmt.Errorf("ssh session: %w", err)
 	}
 	defer sess.Close()
+	defer c.execGuard(ctx, sess)()
 
-	// Write the new key from stdin (no shell interpolation of key material) and
-	// replace authorized_keys with exactly it.
+	// Remove only the OLD PAM key line and append the new one from stdin, so any
+	// other keys on the account (operator, emergency, automation) are preserved.
 	sess.Stdin = strings.NewReader(string(authLine))
-	const cmd = "mkdir -p ~/.ssh && chmod 700 ~/.ssh && cat > ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys"
+	cmd := fmt.Sprintf("mkdir -p ~/.ssh && chmod 700 ~/.ssh && touch ~/.ssh/authorized_keys && "+
+		"{ grep -vF '%s' ~/.ssh/authorized_keys; cat; } > ~/.ssh/authorized_keys.pamnew && "+
+		"mv ~/.ssh/authorized_keys.pamnew ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys", oldLine)
 	if out, err := sess.CombinedOutput(cmd); err != nil {
 		return fmt.Errorf("install authorized_keys failed: %w: %s", err, strings.TrimSpace(string(out)))
 	}
@@ -275,7 +320,10 @@ func (c WinRMConnector) Rotate(ctx context.Context, target store.Target, usernam
 	if strings.ContainsAny(username, " \"\n\r") {
 		return fmt.Errorf("rotate: unsafe username")
 	}
-	cmd := fmt.Sprintf("net user %s %s", username, newSecret)
+	// /y auto-confirms net.exe's ">14 characters ... continue? (Y/N)" prompt,
+	// which a 24-char generated password always triggers and which would otherwise
+	// hang a non-interactive WinRM session.
+	cmd := fmt.Sprintf("net user %s %s /y", username, newSecret)
 	res, err := c.Runner.Run(ctx, target.Host, target.Port, username, oldSecret, cmd)
 	if err != nil {
 		return fmt.Errorf("winrm rotate failed: %w", err)
