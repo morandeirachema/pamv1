@@ -148,13 +148,29 @@ func startProxy(t *testing.T, st store.Store, v *vault.Vault, recDir string) str
 	if err != nil {
 		t.Fatal(err)
 	}
+	return serveProxy(t, px)
+}
+
+// serveProxy listens on an ephemeral port, serves px, and — crucially — waits in
+// cleanup for Serve to fully return before the next test runs, so a cancelled
+// proxy can never linger and cross-wire with a later test (avoids ephemeral-port
+// reuse flakiness). Returns the proxy's address.
+func serveProxy(t *testing.T, px *proxy.Proxy) string {
+	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
-	go px.Serve(ctx, ln)
+	done := make(chan struct{})
+	go func() {
+		_ = px.Serve(ctx, ln)
+		close(done)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		<-done
+	})
 	return ln.Addr().String()
 }
 
@@ -432,14 +448,7 @@ func TestApprovalGateProxy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
-	go px.Serve(ctx, ln)
-	addr := ln.Addr().String()
+	addr := serveProxy(t, px)
 
 	// No approval yet: authentication passes but the session is denied.
 	client, err := dialProxy(t, addr, "web-01", proxyAPIKey)

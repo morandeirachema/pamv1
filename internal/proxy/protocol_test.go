@@ -1,8 +1,6 @@
 package proxy_test
 
 import (
-	"context"
-	"net"
 	"testing"
 	"time"
 
@@ -30,15 +28,9 @@ func TestProxyProtocolAllowlist(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
-	go px.Serve(ctx, ln)
+	addr := serveProxy(t, px)
 
-	client, err := dialProxy(t, ln.Addr().String(), "web-01", proxyAPIKey)
+	client, err := dialProxy(t, addr, "web-01", proxyAPIKey)
 	if err != nil {
 		t.Fatalf("auth should pass: %v", err)
 	}

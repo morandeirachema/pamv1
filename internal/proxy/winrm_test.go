@@ -3,7 +3,6 @@ package proxy_test
 import (
 	"context"
 	"io"
-	"net"
 	"strings"
 	"testing"
 	"time"
@@ -65,15 +64,9 @@ func TestWinRMShellThroughProxy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
-	go px.Serve(ctx, ln)
+	addr := serveProxy(t, px)
 
-	client, err := dialProxy(t, ln.Addr().String(), "win-01", proxyAPIKey)
+	client, err := dialProxy(t, addr, "win-01", proxyAPIKey)
 	if err != nil {
 		t.Fatalf("auth: %v", err)
 	}

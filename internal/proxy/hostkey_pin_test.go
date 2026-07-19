@@ -1,7 +1,6 @@
 package proxy_test
 
 import (
-	"context"
 	"fmt"
 	"net"
 	"os"
@@ -65,14 +64,7 @@ func startProxyPinned(t *testing.T, st store.Store, v *vault.Vault, cb ssh.HostK
 	if err != nil {
 		t.Fatal(err)
 	}
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
-	go px.Serve(ctx, ln)
-	return ln.Addr().String()
+	return serveProxy(t, px)
 }
 
 // writeKnownHosts writes a known_hosts file pinning key for host:port and
