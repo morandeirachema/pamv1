@@ -42,7 +42,7 @@ CI (`.github/workflows/ci.yml`) gates on: `gofmt -l`, `go vet`, `go build`, `go 
 
 Single binary `cmd/pam-server` wires everything; packages under `internal/`:
 
-- **`vault`** — at-rest secret crypto. `Encrypt(plaintext, aad)` → `"v1:"+base64(nonce||ciphertext)` with AES-256-GCM, random nonce per call. The `"v1:"` prefix is a **versioned token format** for future key rotation — preserve it.
+- **`vault`** — at-rest secret crypto. `Encrypt(ctx, plaintext, aad)` → `"v2:"+base64(...)` envelope: a per-secret AES-256-GCM data key (random nonce per call) wrapped by a pluggable KEK (`local`/Vault-Transit/AWS-KMS/PKCS#11). The `"v2:"` prefix is a **versioned token format** for key rotation — preserve it.
 - **`store`** — `Store` interface + domain types (`Target`, `Credential`, `AuditEvent`, …). Two implementations: `memstore` (tests/demo) and `pgstore` (Postgres via pgx, with embedded versioned migrations in `pgstore/migrations/` applied on startup). Sentinel errors `ErrNotFound`/`ErrConflict` map to HTTP/SSH errors upstream.
 - **`api`** — REST (`http.ServeMux` method patterns) + the `auth` middleware, which accepts the `X-API-Key` **or** the break-glass key and sets an actor for audit.
 - **`proxy`** — the SSH gateway and the heart of the system (Phase 2). Operator runs `ssh -p 2222 <creduser>@<target>@pam-host` with the PAM API key as the SSH password. The proxy authenticates, resolves the target's credential, **decrypts the secret just-in-time**, dials the real target injecting that secret, records the session (asciicast v2, SHA-256 into audit), and brokers I/O. The operator never sees the credential.

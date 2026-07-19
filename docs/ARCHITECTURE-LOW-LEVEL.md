@@ -5,7 +5,7 @@
 > the codebase; the conceptual view lives in
 > [ARCHITECTURE-HIGH-LEVEL.md](ARCHITECTURE-HIGH-LEVEL.md).
 >
-> Last updated: 2026-07-18 · Reflects: **Phase 3a** (RBAC + four profiles). Commit the doc update with the code change.
+> Last updated: 2026-07-19 · Reflects: **all 10 phases shipped** plus the security/correctness hardening pass. Commit the doc update with the code change.
 
 ## 1. Language, layout, dependencies
 
@@ -24,10 +24,13 @@ internal/
   guacd/       # Apache Guacamole protocol client (RDP handshake + JIT injection)
   oidc/        # OIDC Authorization Code + PKCE, RS256 JWKS validation
   maint/       # offline maintenance (vault KEK rotation)
+  rotate/      # credential rotation/verify connectors (SSH chpasswd, ssh_key, WinRM)
+  discovery/   # TCP port scan → onboard targets (ssh/winrm/rdp)
+  metrics/     # dependency-free Prometheus /metrics
   session/     # live-session registry (list + kill), shared proxy↔api
   shamir/      # Shamir secret sharing (GF(2^8)) for break-glass quorum
-  alert/       # real-time alert delivery (webhook), break-glass events
-  auth/        # roles, capabilities, Principal, Resolver (RBAC)
+  alert/       # real-time alert delivery (webhook, syslog, email), break-glass events
+  auth/        # roles, capabilities, Principal, Resolver (RBAC), LDAP/Entra/OIDC
   store/       # Store interface + domain types + CredentialAAD
     memstore/  # in-memory impl (tests, demo)
     pgstore/   # PostgreSQL impl + embedded versioned migrations
@@ -77,9 +80,12 @@ AAD matches on both encrypt and decrypt paths.
 Schema is applied by an embedded **migration runner** (`pgstore/migrate.go`):
 ordered `migrations/*.sql` files run once each in a transaction, tracked in a
 `schema_migrations` table. `0001_init.sql` is the idempotent baseline (safe on a
-pre-migrations database); later changes are new numbered files. Tables: `targets`,
-`credentials` (FK `ON DELETE CASCADE`), `target_grants`, `audit_events`, `users`,
-`sessions`, `mfa_enrollments`, `mfa_recovery_codes`.
+pre-migrations database); later changes are new numbered files (through
+`0005_hardening.sql`), applied under a `pg_advisory_lock` so concurrent replicas
+don't race. Tables: `targets`, `credentials` (FK `ON DELETE CASCADE`),
+`target_grants`, `audit_events`, `users`, `sessions`, `mfa_enrollments`,
+`mfa_recovery_codes`, `access_requests`, `checkouts` (partial UNIQUE index — one
+active lease per credential), `oidc_states`.
 
 ### 2.3 `auth` *(Phase 3a)*
 
@@ -330,7 +336,7 @@ cancelled shutdown context so they are not dropped mid-drain.
 
 | Var | Default | Used by |
 |---|---|---|
-| `PAM_MASTER_KEY` | — (required) | vault |
+| `PAM_MASTER_KEY` | — (required for local KEK) | local KEK key (base64, dev/test); see `PAM_KEK_PROVIDER` |
 | `PAM_API_KEY` | — (required) | api auth, proxy auth |
 | `PAM_DATABASE_URL` | — (required); `memory` for demo | store |
 | `PAM_BREAK_GLASS_KEY_HASH` | "" (disabled) | api auth |
@@ -348,9 +354,11 @@ cancelled shutdown context so they are not dropped mid-drain.
 | `PAM_BREAK_GLASS_THRESHOLD` / `_SHARES` | `0` / `5` | quorum M / N (M≥2 enables unseal) |
 | `PAM_BREAK_GLASS_TTL_MIN` | `15` | break-glass session lifetime (minutes) |
 | `PAM_ALERT_WEBHOOK` | — | JSON POST target for break-glass alerts |
+| `PAM_ALERT_SYSLOG` | — | syslog alert channel, `udp://host:port` or `tcp://host:port` |
+| `PAM_ALERT_EMAIL_SMTP` / `_FROM` / `_TO` / `_USER` / `_PASS` | — | SMTP alert channel (comma-separated `_TO`) |
 | `PAM_KEK_PROVIDER` | `local` | vault KEK: `local` \| `vault-transit` \| `aws-kms` \| `pkcs11` |
-| `PAM_MASTER_KEY` | — (local only) | local KEK key (base64, dev/test) |
-| `PAM_KEK_TRANSIT_ADDR` / `_TOKEN` / `_KEY` | — | HashiCorp Vault Transit KEK (production) |
+| `PAM_KEK_TRANSIT_ADDR` / `_TOKEN` / `_KEY` | — | HashiCorp Vault Transit KEK (production; `https://` required off-loopback) |
+| `PAM_NEW_MASTER_KEY` | — | target key for the `-rotate-kek` maintenance run |
 | `PAM_KEK_AWS_KEY_ID` / `_AWS_REGION` | — | AWS KMS KEK (`aws-kms` provider) |
 | `PAM_KEK_PKCS11_MODULE` / `_PIN` / `_KEY_LABEL` / `_TOKEN_LABEL` | — | on-prem HSM KEK (`pkcs11` provider; **only in the `pkcs11`-tagged build**) |
 | `PAM_LDAP_URL` | — (disabled) | AD/LDAP login; `ldaps://…` enables `/api/login` |
@@ -364,6 +372,8 @@ cancelled shutdown context so they are not dropped mid-drain.
 | `PAM_MFA_REQUIRED` | `false` | require a confirmed TOTP factor for password login |
 | `PAM_ROTATE_INTERVAL_MIN` | `0` (off) | credential-lifecycle worker interval (minutes) |
 | `PAM_ROTATE_MAX_AGE_HOURS` | `0` (report only) | auto-rotate password credentials older than this |
+| `PAM_ROTATE_AFTER_SESSION` | `false` | rotate a credential as soon as a proxied session using it ends |
+| `PAM_ALLOWED_PROTOCOLS` | — (all) | OT: comma-separated protocol allowlist (e.g. `ssh,winrm`) enforced at create + connect |
 | `PAM_REQUIRE_APPROVAL` | `false` | OT: gate every target behind an approved access request (4-eyes) |
 | `PAM_REQUIRE_RECORDING` | `false` | refuse a proxied session if its recording cannot be created (fail-closed audit) |
 | `PAM_APPROVAL_WINDOW_MIN` | `60` | how long an approved access request stays valid |
@@ -373,6 +383,7 @@ cancelled shutdown context so they are not dropped mid-drain.
 | `PAM_WINRM_INSECURE_SKIP_VERIFY` | `false` | skip WinRM TLS verify (dev only) |
 | `PAM_WINRM_AUTH` | `basic` | `basic` or `ntlm` |
 | `PAM_GUACD_ADDR` | — (RDP off) | Guacamole guacd address, e.g. `127.0.0.1:4822` |
+| `PAM_GUACD_RECORDING_PATH` | — | server-side path for guacd to record RDP sessions |
 | `PAM_PROXY_WINRM` | `false` | broker an interactive WinRM command loop through the SSH proxy |
 | `PAM_GUACD_RDP_SECURITY` / `PAM_GUACD_IGNORE_CERT` | negotiate / `false` (verify) | RDP security mode; cert verification (opt-out for dev) |
 | `PAM_OIDC_ISSUER` | — (disabled) | OIDC login; set to enable the auth-code flow |
@@ -456,6 +467,7 @@ secrets. Format `json` (SIEM) or `text` (humans); collect from stdout.
 
 | Date | Change |
 |---|---|
+| 2026-07-19 | Security/correctness hardening pass (repo-wide audit): strict config parsing (fail-loud booleans/ints, TLS all-or-nothing, quorum-threshold validation); login/MFA fixes (MFA fail-closed on store error, step-up to change a confirmed factor, `login.failed` audit, target-scoped grant delete, rate-limited oidc/start); Entra tenant (`tid`) pinning, required token `exp`, LDAPS enforced; rotation robustness (`rotate_started` on all paths, detached persist, worker panic-recover + failure audit, ssh_key reconcile via key auth, non-clobbering `RotateKey`, WinRM `net user /y`, exec deadline); resumable KEK rotation + Vault-Transit HTTPS; atomic checkout exclusivity (partial UNIQUE index + expired-lease auto-close) and store parity fixes; migrations under advisory lock + `audit_events(ts)` index; guacd handshake deadline + bounded alloc; alert CR/LF sanitization; `PAM_REQUIRE_RECORDING`, stderr recorded |
 | 2026-07-19 | Proxy: post-session rotation callbacks are tracked so a graceful shutdown drains them (not killed mid-rotation); `RotateCredentialByID` audits `credential.rotate_started` before the external password change so a crash leaves a trail |
 | 2026-07-19 | Proxy: `Serve` retries transient `Accept` errors (e.g. fd exhaustion) with capped backoff instead of tearing the listener down permanently |
 | 2026-07-19 | Proxy hardening: decrypt the JIT secret only after all authz gates; record target stderr into the asciicast (hash now covers stderr); audit `session.record_failed` and optionally refuse (`PAM_REQUIRE_RECORDING`) when a session can't be recorded |

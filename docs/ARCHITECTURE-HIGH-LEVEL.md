@@ -102,7 +102,7 @@ sequenceDiagram
     participant DB
     Admin->>API: POST /api/credentials (secret)
     API->>Vault: Encrypt(secret, AAD=target:ID)
-    Vault-->>API: v1:ciphertext
+    Vault-->>API: v2:ciphertext
     API->>DB: store ciphertext only
     API->>DB: append audit (credential.create)
     API-->>Admin: 201 (no secret echoed)
