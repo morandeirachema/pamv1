@@ -162,9 +162,12 @@ func getenvInt(key string, def int) int {
 }
 
 // buildAuthenticator wires the enabled password identity sources (on-prem AD via
-// LDAP and/or Microsoft Entra ID) into a single Authenticator, or nil if none.
-func buildAuthenticator(cfg *config.Config, log *slog.Logger) (auth.Authenticator, error) {
+// LDAP and/or Microsoft Entra ID) into a single Authenticator (nil if none), and
+// returns the LDAP directory source (for identity reconciliation) when LDAP is
+// configured.
+func buildAuthenticator(cfg *config.Config, log *slog.Logger) (auth.Authenticator, auth.DirectorySource, error) {
 	var sources []auth.Authenticator
+	var directory auth.DirectorySource
 
 	if cfg.LDAPURL != "" {
 		ldapAuth, err := auth.NewLDAPAuthenticator(auth.LDAPConfig{
@@ -177,9 +180,10 @@ func buildAuthenticator(cfg *config.Config, log *slog.Logger) (auth.Authenticato
 			GroupRoleMap:       roleMap(cfg.LDAPGroupAdmin, cfg.LDAPGroupUser, cfg.LDAPGroupAuditor, cfg.LDAPGroupApprover),
 		})
 		if err != nil {
-			return nil, fmt.Errorf("ldap: %w", err)
+			return nil, nil, fmt.Errorf("ldap: %w", err)
 		}
 		sources = append(sources, ldapAuth)
+		directory = ldapAuth
 		log.Info("active directory login enabled", "url", cfg.LDAPURL, "insecure_skip_verify", cfg.LDAPInsecureSkipVerify)
 	}
 
@@ -193,13 +197,13 @@ func buildAuthenticator(cfg *config.Config, log *slog.Logger) (auth.Authenticato
 			RoleMap:       roleMap(cfg.EntraRoleAdmin, cfg.EntraRoleUser, cfg.EntraRoleAuditor, cfg.EntraRoleApprover),
 		})
 		if err != nil {
-			return nil, fmt.Errorf("entra: %w", err)
+			return nil, nil, fmt.Errorf("entra: %w", err)
 		}
 		sources = append(sources, entraAuth)
 		log.Info("entra id login enabled", "tenant", cfg.EntraTenantID)
 	}
 
-	return auth.NewChain(sources...), nil
+	return auth.NewChain(sources...), directory, nil
 }
 
 // buildOIDC constructs the OIDC provider when PAM_OIDC_ISSUER is set, filling in
@@ -302,7 +306,7 @@ func run() error {
 		return err
 	}
 
-	authn, err := buildAuthenticator(cfg, log)
+	authn, directory, err := buildAuthenticator(cfg, log)
 	if err != nil {
 		return err
 	}
@@ -354,6 +358,7 @@ func run() error {
 		AirGap:              cfg.AirGap,
 		CheckoutTTL:         cfg.CheckoutTTL,
 		AllowedProtocols:    splitAndTrim(cfg.AllowedProtocols),
+		Directory:           directory,
 	})
 	if err != nil {
 		return err

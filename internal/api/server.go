@@ -131,6 +131,9 @@ type Options struct {
 	// AllowedProtocols, when non-empty, restricts which target protocols may be
 	// created and connected to (e.g. {"ssh","winrm"}); empty allows all.
 	AllowedProtocols []string
+	// Directory (optional) backs identity reconciliation: pamv1 revokes access for
+	// users the directory reports as disabled. nil disables the reconcile endpoint.
+	Directory auth.DirectorySource
 }
 
 type Server struct {
@@ -164,6 +167,7 @@ type Server struct {
 	airGap             bool
 	discoveryDial      func(ctx context.Context, network, addr string) (net.Conn, error)
 	allowedProtocols   map[string]bool
+	directory          auth.DirectorySource
 	metrics            *metrics.Metrics
 	log                *slog.Logger
 	mux                *http.ServeMux
@@ -255,6 +259,7 @@ func New(st store.Store, v *vault.Vault, resolver *auth.Resolver, authn auth.Aut
 		airGap:             opts.AirGap,
 		discoveryDial:      opts.DiscoveryDial,
 		allowedProtocols:   protocolSet(opts.AllowedProtocols),
+		directory:          opts.Directory,
 		metrics:            metrics.New(),
 		log:                logging.Component("api"),
 		mux:                http.NewServeMux(),
@@ -384,6 +389,7 @@ func (s *Server) routes() {
 	s.mux.Handle("POST /api/users", s.authz(auth.CapManageUsers, s.createUser))
 	s.mux.Handle("GET /api/users", s.authz(auth.CapManageUsers, s.listUsers))
 	s.mux.Handle("DELETE /api/users/{id}", s.authz(auth.CapManageUsers, s.deleteUser))
+	s.mux.Handle("POST /api/identity/reconcile", s.authz(auth.CapManageUsers, s.reconcileIdentities))
 }
 
 // authz resolves the caller into a Principal and enforces that its role holds

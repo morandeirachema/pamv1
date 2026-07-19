@@ -391,6 +391,20 @@ works in the portal and the SSH proxy exactly like a per-user token. A user in n
 mapped group is rejected. Keep the bootstrap `PAM_API_KEY` and break-glass key as
 the local emergency path if AD is unreachable.
 
+**Identity reconciliation.** With LDAP configured, revoke pamv1 access for users
+the directory has **disabled** (AD `userAccountControl`), and surface local-only
+accounts:
+
+```bash
+curl -H "X-API-Key: $PAM_API_KEY" -X POST "http://localhost:8080/api/identity/reconcile?dry_run=true"
+# → {"checked":12,"disabled":1,"dry_run":true,"results":[{"username":"bob","status":"disabled"},…]}
+curl -H "X-API-Key: $PAM_API_KEY" -X POST http://localhost:8080/api/identity/reconcile   # actually revoke
+```
+
+Disabled directory users are deleted (`user.revoked`); users absent from the
+directory are reported `not_in_directory` but **never auto-revoked** (they may be
+local service accounts). A directory error never revokes.
+
 ### Microsoft Entra ID (Azure AD) login (optional)
 
 For cloud identities, enable Entra ID login alongside or instead of on-prem AD.

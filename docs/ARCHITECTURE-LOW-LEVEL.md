@@ -385,7 +385,7 @@ secrets. Format `json` (SIEM) or `text` (humans); collect from stdout.
 `winrm.denied` · `session.kill` · `breakglass.unseal` · `user.create` · `user.delete` · `login` · `logout` ·
 `credential.rotate` · `credential.rotate_failed` · `credential.reconcile` · `credential.reconcile_scan` · `credential.remediate` ·
 `credential.checkout` · `credential.checkin` · `credential.checkout_denied` · `credential.checkin_rotate_failed` · `credential.decrypt_failed` · `discovery.scan` ·
-`access.request` · `access.approve` · `access.deny` · `access.denied` · `access.decision_denied` · `audit.export` ·
+`access.request` · `access.approve` · `access.deny` · `access.denied` · `access.decision_denied` · `audit.export` · `identity.reconcile` · `user.revoked` ·
 `mfa.enroll` · `mfa.confirm` · `mfa.disable` · `mfa.recovery_generated` ·
 `mfa.recovery_used` · `winrm.run` · `winrm.error` · `rdp.connect` · `rdp.end` ·
 `rdp.error` · `authz.denied` · `breakglass.access` · `session.start` ·
@@ -441,6 +441,7 @@ secrets. Format `json` (SIEM) or `text` (humans); collect from stdout.
 
 | Date | Change |
 |---|---|
+| 2026-07-19 | Phase 7: identity reconciliation (`POST /api/identity/reconcile`, `auth.DirectorySource.UserStatus`, revokes disabled directory users) + AD `ChangePassword` primitive (`unicodePwd`) |
 | 2026-07-19 | Proxy: interactive WinRM command loop through the SSH proxy (`proxy.Config.WinRMRunner`, `PAM_PROXY_WINRM`) — each operator line runs as a WinRM command, recorded; stateless-per-line |
 | 2026-07-19 | OT: read-only observer sessions (`<login>+observe` → drop operator keystrokes, refuse exec/subsystem; `session.start … mode:observer`) |
 | 2026-07-19 | OT: protocol allowlist (`PAM_ALLOWED_PROTOCOLS`) enforced at create-target and every connect path (WinRM/RDP handlers + SSH proxy) |

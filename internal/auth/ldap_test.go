@@ -10,11 +10,13 @@ import (
 
 // fakeLDAP implements ldapConn for tests.
 type fakeLDAP struct {
-	binds     map[string]string // dn -> password that succeeds
-	userDN    string
-	memberOf  []string
-	searchErr error
-	notFound  bool
+	binds      map[string]string // dn -> password that succeeds
+	userDN     string
+	memberOf   []string
+	uac        string // userAccountControl value returned by Search
+	searchErr  error
+	notFound   bool
+	lastModify *ldap.ModifyRequest
 }
 
 // Bind succeeds when dn/password match a seeded entry, else returns an error.
@@ -38,9 +40,16 @@ func (f *fakeLDAP) Search(_ *ldap.SearchRequest) (*ldap.SearchResult, error) {
 		DN: f.userDN,
 		Attributes: []*ldap.EntryAttribute{
 			{Name: "memberOf", Values: f.memberOf},
+			{Name: "userAccountControl", Values: []string{f.uac}},
 		},
 	}
 	return &ldap.SearchResult{Entries: []*ldap.Entry{entry}}, nil
+}
+
+// Modify records the modify request for assertions.
+func (f *fakeLDAP) Modify(req *ldap.ModifyRequest) error {
+	f.lastModify = req
+	return nil
 }
 
 // Close is a no-op for the fake connection.
@@ -160,5 +169,48 @@ func TestNewLDAPAuthenticatorValidation(t *testing.T) {
 		URL: "ldaps://x", BaseDN: "DC=x", GroupRoleMap: map[string]Role{"g": RoleUser},
 	}); err != nil {
 		t.Fatalf("valid config: %v", err)
+	}
+}
+
+// TestUserStatus proves enabled/disabled/missing directory accounts are reported
+// correctly (AD userAccountControl ACCOUNTDISABLE bit); missing is distinguished
+// from disabled so orphaned local accounts aren't mistaken for revoked users.
+func TestUserStatus(t *testing.T) {
+	ctx := context.Background()
+
+	enabled := newLDAPAuth(t, &fakeLDAP{binds: map[string]string{"CN=svc,DC=example,DC=com": "svc-pw"}, userDN: "CN=alice,DC=example,DC=com", uac: "512"})
+	if exists, en, err := enabled.UserStatus(ctx, "alice"); err != nil || !exists || !en {
+		t.Fatalf("enabled: exists=%v enabled=%v err=%v", exists, en, err)
+	}
+
+	disabled := newLDAPAuth(t, &fakeLDAP{binds: map[string]string{"CN=svc,DC=example,DC=com": "svc-pw"}, userDN: "CN=bob,DC=example,DC=com", uac: "514"}) // 512|2
+	if exists, en, _ := disabled.UserStatus(ctx, "bob"); !exists || en {
+		t.Fatalf("disabled: exists=%v enabled=%v (want exists,disabled)", exists, en)
+	}
+
+	missing := newLDAPAuth(t, &fakeLDAP{binds: map[string]string{"CN=svc,DC=example,DC=com": "svc-pw"}, notFound: true})
+	if exists, _, _ := missing.UserStatus(ctx, "ghost"); exists {
+		t.Fatal("missing account must report not-exists")
+	}
+}
+
+// TestChangePassword proves the AD unicodePwd modify carries the UTF-16LE,
+// double-quoted password for the resolved DN.
+func TestChangePassword(t *testing.T) {
+	f := &fakeLDAP{binds: map[string]string{"CN=svc,DC=example,DC=com": "svc-pw"}, userDN: "CN=carol,DC=example,DC=com"}
+	a := newLDAPAuth(t, f)
+	if err := a.ChangePassword(context.Background(), "carol", "N3w-Pass"); err != nil {
+		t.Fatalf("change password: %v", err)
+	}
+	if f.lastModify == nil || f.lastModify.DN != "CN=carol,DC=example,DC=com" {
+		t.Fatalf("modify DN wrong: %+v", f.lastModify)
+	}
+	got := f.lastModify.Changes[0].Modification
+	if got.Type != "unicodePwd" || got.Vals[0] != encodeADPassword("N3w-Pass") {
+		t.Fatalf("unexpected modify: type=%q", got.Type)
+	}
+	// Sanity: the encoding is quoted + UTF-16LE (2 bytes per rune).
+	if want := 2 * len(`"N3w-Pass"`); len(encodeADPassword("N3w-Pass")) != want {
+		t.Fatalf("encoded length = %d, want %d", len(encodeADPassword("N3w-Pass")), want)
 	}
 }

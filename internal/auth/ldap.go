@@ -5,10 +5,22 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
+	"unicode/utf16"
 
 	"github.com/go-ldap/ldap/v3"
 )
+
+// DirectorySource reports a directory account's status, so pamv1 can revoke
+// access for disabled users and surface orphaned local accounts (identity
+// reconciliation).
+type DirectorySource interface {
+	// UserStatus reports whether username exists in the directory and, if so,
+	// whether it is enabled. This lets the caller revoke disabled directory users
+	// while leaving absent local-only accounts untouched.
+	UserStatus(ctx context.Context, username string) (exists, enabled bool, err error)
+}
 
 // Authenticator verifies a username + password and returns a Principal. The
 // Active Directory / LDAP implementation is the production identity source;
@@ -35,6 +47,7 @@ type LDAPConfig struct {
 type ldapConn interface {
 	Bind(username, password string) error
 	Search(req *ldap.SearchRequest) (*ldap.SearchResult, error)
+	Modify(req *ldap.ModifyRequest) error
 	Close() error
 }
 
@@ -137,4 +150,86 @@ func (a *LDAPAuthenticator) Authenticate(ctx context.Context, username, password
 // roleForGroups returns the highest-privilege role among the user's groups.
 func (a *LDAPAuthenticator) roleForGroups(groups []string) (Role, bool) {
 	return HighestRole(groups, a.cfg.GroupRoleMap)
+}
+
+// adAccountDisable is the ACCOUNTDISABLE bit in AD's userAccountControl.
+const adAccountDisable = 0x0002
+
+// UserStatus reports whether username exists in the directory and, if so, whether
+// it is enabled (AD userAccountControl without the ACCOUNTDISABLE bit). A missing
+// user returns (false, false, nil); a directory that omits userAccountControl is
+// treated as enabled.
+func (a *LDAPAuthenticator) UserStatus(ctx context.Context, username string) (bool, bool, error) {
+	c, err := a.dial(ctx)
+	if err != nil {
+		return false, false, fmt.Errorf("ldap: dial: %w", err)
+	}
+	defer c.Close()
+	if err := c.Bind(a.cfg.BindDN, a.cfg.BindPassword); err != nil {
+		return false, false, fmt.Errorf("ldap: service bind failed: %w", err)
+	}
+	req := ldap.NewSearchRequest(
+		a.cfg.BaseDN, ldap.ScopeWholeSubtree, ldap.NeverDerefAliases, 1, 0, false,
+		fmt.Sprintf(a.cfg.UserFilter, ldap.EscapeFilter(username)),
+		[]string{"userAccountControl"}, nil,
+	)
+	res, err := c.Search(req)
+	if err != nil {
+		return false, false, fmt.Errorf("ldap: search: %w", err)
+	}
+	if len(res.Entries) != 1 {
+		return false, false, nil // deleted or ambiguous
+	}
+	uac := res.Entries[0].GetAttributeValue("userAccountControl")
+	if uac == "" {
+		return true, true, nil
+	}
+	n, err := strconv.Atoi(uac)
+	if err != nil {
+		return true, true, nil
+	}
+	return true, n&adAccountDisable == 0, nil
+}
+
+// ChangePassword sets username's AD password to newPassword over LDAPS (a Modify
+// of unicodePwd). AD rejects password changes over plain LDAP, so the URL must be
+// ldaps://. A missing/ambiguous user returns ErrUnauthorized.
+func (a *LDAPAuthenticator) ChangePassword(ctx context.Context, username, newPassword string) error {
+	c, err := a.dial(ctx)
+	if err != nil {
+		return fmt.Errorf("ldap: dial: %w", err)
+	}
+	defer c.Close()
+	if err := c.Bind(a.cfg.BindDN, a.cfg.BindPassword); err != nil {
+		return fmt.Errorf("ldap: service bind failed: %w", err)
+	}
+	req := ldap.NewSearchRequest(
+		a.cfg.BaseDN, ldap.ScopeWholeSubtree, ldap.NeverDerefAliases, 1, 0, false,
+		fmt.Sprintf(a.cfg.UserFilter, ldap.EscapeFilter(username)),
+		[]string{"distinguishedName"}, nil,
+	)
+	res, err := c.Search(req)
+	if err != nil {
+		return fmt.Errorf("ldap: search: %w", err)
+	}
+	if len(res.Entries) != 1 {
+		return fmt.Errorf("%w: user not found", ErrUnauthorized)
+	}
+	mod := ldap.NewModifyRequest(res.Entries[0].DN, nil)
+	mod.Replace("unicodePwd", []string{encodeADPassword(newPassword)})
+	if err := c.Modify(mod); err != nil {
+		return fmt.Errorf("ldap: password change failed: %w", err)
+	}
+	return nil
+}
+
+// encodeADPassword formats a password as AD's unicodePwd requires: wrapped in
+// double quotes and UTF-16LE encoded, returned as a raw byte string.
+func encodeADPassword(pw string) string {
+	u := utf16.Encode([]rune(`"` + pw + `"`))
+	b := make([]byte, 0, len(u)*2)
+	for _, r := range u {
+		b = append(b, byte(r), byte(r>>8))
+	}
+	return string(b)
 }
