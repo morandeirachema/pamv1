@@ -1,0 +1,271 @@
+package api
+
+import (
+	"fmt"
+	"net/http"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/morandeirachema/pamv1/internal/store"
+	"github.com/morandeirachema/pamv1/internal/winrm"
+)
+
+type credentialIn struct {
+	TargetID   int64  `json:"target_id"`
+	Username   string `json:"username"`
+	Secret     string `json:"secret"`
+	SecretType string `json:"secret_type"`
+}
+
+// createCredential vaults a secret for a target, encrypting it under the target's
+// AAD (defaulting the type to password), and audits it. The stored ciphertext is
+// never returned to the client.
+func (s *Server) createCredential(w http.ResponseWriter, r *http.Request) {
+	var in credentialIn
+	if !readJSON(w, r, &in) {
+		return
+	}
+	if in.SecretType == "" {
+		in.SecretType = "password"
+	}
+	switch {
+	case in.Username == "" || in.Secret == "":
+		writeError(w, http.StatusUnprocessableEntity, "username and secret are required")
+		return
+	case !validSecret[in.SecretType]:
+		writeError(w, http.StatusUnprocessableEntity, `secret_type must be "password" or "ssh_key"`)
+		return
+	}
+	target, err := s.store.GetTarget(r.Context(), in.TargetID)
+	if err != nil {
+		storeError(w, err)
+		return
+	}
+	// Insert first so the row has an ID, then bind the ciphertext to (target,
+	// credential) via the AAD and store it. Roll the row back if either fails.
+	c := store.Credential{TargetID: target.ID, Username: in.Username, SecretType: in.SecretType}
+	if err := s.store.CreateCredential(r.Context(), &c); err != nil {
+		storeError(w, err)
+		return
+	}
+	enc, err := s.vault.Encrypt(r.Context(), in.Secret, store.CredentialAAD(c.TargetID, c.ID))
+	if err != nil {
+		_ = s.store.DeleteCredential(r.Context(), c.ID)
+		writeError(w, http.StatusInternalServerError, "encryption failed")
+		return
+	}
+	if err := s.store.UpdateCredentialSecretEnc(r.Context(), c.ID, enc); err != nil {
+		_ = s.store.DeleteCredential(r.Context(), c.ID)
+		storeError(w, err)
+		return
+	}
+	c.SecretEnc = enc
+	s.audit(r.Context(), "credential.create", fmt.Sprintf("%s/%s", target.Name, c.Username))
+	writeJSON(w, http.StatusCreated, c)
+}
+
+// listCredentials returns credentials, optionally scoped to ?target_id=. Secret
+// material is never included in the response.
+func (s *Server) listCredentials(w http.ResponseWriter, r *http.Request) {
+	var targetID int64
+	if q := r.URL.Query().Get("target_id"); q != "" {
+		id, err := strconv.ParseInt(q, 10, 64)
+		if err != nil {
+			writeError(w, http.StatusUnprocessableEntity, "target_id must be an integer")
+			return
+		}
+		targetID = id
+	}
+	creds, err := s.store.ListCredentials(r.Context(), targetID)
+	if err != nil {
+		storeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, creds)
+}
+
+// revealCredential decrypts a secret on demand and audits who asked for it.
+// Once the JIT-injection proxy lands, reveal becomes the exception (recorded
+// proxy sessions inject the secret without ever showing it).
+func (s *Server) revealCredential(w http.ResponseWriter, r *http.Request) {
+	// When reveal is disabled by policy, only break-glass may still reveal —
+	// everyone else must go through the recorded, JIT-injecting proxy.
+	if s.revealDisabled && !principalFrom(r.Context()).BreakGlass {
+		s.audit(r.Context(), "credential.reveal_denied", "reason:reveal-disabled-by-policy")
+		writeError(w, http.StatusForbidden, "credential reveal is disabled by policy; connect through the proxy")
+		return
+	}
+	id, ok := idParam(w, r)
+	if !ok {
+		return
+	}
+	c, err := s.store.GetCredential(r.Context(), id)
+	if err != nil {
+		storeError(w, err)
+		return
+	}
+	secret, err := s.vault.Decrypt(r.Context(), c.SecretEnc, store.CredentialAAD(c.TargetID, c.ID))
+	if err != nil {
+		s.audit(r.Context(), "credential.decrypt_failed", fmt.Sprintf("credential:%d target:%d op:reveal", c.ID, c.TargetID))
+		writeError(w, http.StatusInternalServerError, "decryption failed")
+		return
+	}
+	s.audit(r.Context(), "credential.reveal", fmt.Sprintf("credential:%d target:%d user:%s", c.ID, c.TargetID, c.Username))
+	writeJSON(w, http.StatusOK, map[string]any{
+		"id":          c.ID,
+		"target_id":   c.TargetID,
+		"username":    c.Username,
+		"secret_type": c.SecretType,
+		"secret":      secret,
+	})
+}
+
+// deleteCredential removes a credential by id and audits it.
+func (s *Server) deleteCredential(w http.ResponseWriter, r *http.Request) {
+	id, ok := idParam(w, r)
+	if !ok {
+		return
+	}
+	if err := s.store.DeleteCredential(r.Context(), id); err != nil {
+		storeError(w, err)
+		return
+	}
+	s.audit(r.Context(), "credential.delete", strconv.FormatInt(id, 10))
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// --- Windows targets (WinRM command execution) ---
+
+type winrmRunIn struct {
+	Command string `json:"command"`
+}
+
+// runWinRM executes a command on a Windows target over WinRM, injecting the
+// target's vaulted credential just-in-time (the caller never sees it). The
+// command + output are recorded and the run is audited.
+func (s *Server) runWinRM(w http.ResponseWriter, r *http.Request) {
+	id, ok := idParam(w, r)
+	if !ok {
+		return
+	}
+	var in winrmRunIn
+	if !readJSON(w, r, &in) {
+		return
+	}
+	if in.Command == "" {
+		writeError(w, http.StatusUnprocessableEntity, "command is required")
+		return
+	}
+	target, err := s.store.GetTarget(r.Context(), id)
+	if err != nil {
+		storeError(w, err)
+		return
+	}
+	if target.Protocol != "winrm" {
+		writeError(w, http.StatusUnprocessableEntity, "target protocol is not winrm")
+		return
+	}
+	if !s.protocolAllowed("winrm") {
+		writeError(w, http.StatusForbidden, "winrm is not allowed by policy")
+		return
+	}
+	if ok, err := s.authorizedForTarget(r.Context(), target.ID); err != nil {
+		storeError(w, err)
+		return
+	} else if !ok {
+		s.audit(r.Context(), "winrm.denied", "target:"+target.Name+" reason:target-policy")
+		writeError(w, http.StatusForbidden, "not authorized for this target")
+		return
+	}
+	if ok, err := s.enforceApproval(r.Context(), target); err != nil {
+		storeError(w, err)
+		return
+	} else if !ok {
+		s.audit(r.Context(), "access.denied", "target:"+target.Name+" reason:approval-required")
+		writeError(w, http.StatusForbidden, "connection requires an approved access request")
+		return
+	}
+	creds, err := s.store.ListCredentials(r.Context(), target.ID)
+	if err != nil {
+		storeError(w, err)
+		return
+	}
+	if len(creds) == 0 {
+		writeError(w, http.StatusUnprocessableEntity, "target has no credential")
+		return
+	}
+	cred := creds[0]
+
+	// Just-in-time: the secret exists only for this call.
+	secret, err := s.vault.Decrypt(r.Context(), cred.SecretEnc, store.CredentialAAD(target.ID, cred.ID))
+	if err != nil {
+		s.audit(r.Context(), "credential.decrypt_failed", fmt.Sprintf("credential:%d target:%s op:winrm", cred.ID, target.Name))
+		writeError(w, http.StatusInternalServerError, "decryption failed")
+		return
+	}
+	res, err := s.winrm.Run(r.Context(), target.Host, target.Port, cred.Username, secret, in.Command)
+	if err != nil {
+		s.log.Error("winrm run failed", "target", target.Name, "err", err)
+		s.audit(r.Context(), "winrm.error", fmt.Sprintf("target:%s cred_user:%s error:%v", target.Name, cred.Username, err))
+		writeError(w, http.StatusBadGateway, "winrm execution failed")
+		return
+	}
+
+	file, sum := s.recordWinRM(target, cred.Username, actorFrom(r.Context()), in.Command, res)
+	s.audit(r.Context(), "winrm.run",
+		fmt.Sprintf("target:%s cred_user:%s exit:%d file:%s sha256:%s", target.Name, cred.Username, res.ExitCode, file, sum))
+	writeJSON(w, http.StatusOK, map[string]any{
+		"target":    target.Name,
+		"exit_code": res.ExitCode,
+		"stdout":    res.Stdout,
+		"stderr":    res.Stderr,
+	})
+}
+
+// recordWinRM writes a transcript of the command and its output, returning the
+// file path and its SHA-256 (tamper evidence in the audit trail). Best-effort:
+// a recording failure is logged but does not fail the request.
+func (s *Server) recordWinRM(target *store.Target, credUser, actor, command string, res winrm.Result) (string, string) {
+	if s.recordingDir == "" {
+		return "", ""
+	}
+	if err := os.MkdirAll(s.recordingDir, 0o700); err != nil {
+		s.log.Error("winrm recording dir", "err", err)
+		return "", ""
+	}
+	ts := time.Now()
+	name := fmt.Sprintf("%d_%s_%s.winrm.log", ts.UnixNano(), sanitizeName(target.Name), sanitizeName(actor))
+	path := filepath.Join(s.recordingDir, name)
+	transcript := fmt.Sprintf(
+		"# pamv1 WinRM session\n# target: %s (%s:%d)\n# user: %s\n# actor: %s\n# time: %s\n\n$ %s\n\n--- stdout ---\n%s\n--- stderr ---\n%s\n--- exit: %d ---\n",
+		target.Name, target.Host, target.Port, credUser, actor, ts.Format(time.RFC3339),
+		command, res.Stdout, res.Stderr, res.ExitCode)
+	data := []byte(transcript)
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		s.log.Error("winrm recording write", "err", err)
+		return "", ""
+	}
+	return path, hashHex(transcript)
+}
+
+// sanitizeName reduces a string to filename-safe characters (alphanumerics and
+// -_.@), replacing anything else with a dash.
+func sanitizeName(s string) string {
+	var b strings.Builder
+	for _, c := range s {
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9', c == '-', c == '_', c == '.', c == '@':
+			b.WriteRune(c)
+		default:
+			b.WriteByte('-')
+		}
+	}
+	return b.String()
+}
+
+// --- login sessions (Active Directory / password identities) ---
+
+// sessionTTL is how long a login session token is valid.
