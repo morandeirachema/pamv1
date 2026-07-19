@@ -195,6 +195,15 @@ endpoints arrive with the OT/approval phase).
     ones older than `PAM_ROTATE_MAX_AGE_HOURS` (actor `system-scheduler`).
   - `Rotator`/`Verifier` are interfaces keyed by protocol in `Options`; tests
     inject fakes, and the SSH connector is proven against an in-process SSH server.
+  - **Checkout/check-in** (`store.Checkout`, migration `0003`): `POST
+    /api/credentials/{id}/checkout` (needs `CapRevealSecret`) grants an exclusive
+    lease (`PAM_CHECKOUT_TTL_MIN`) and returns the secret; a second holder gets
+    409. `/checkin` ends the lease and rotates the credential so the seen password
+    is dead. `GET /api/checkouts` lists them. Honors `PAM_REVEAL_DISABLED`.
+  - **Discovery** (`internal/discovery`, `POST /api/discovery/scan`, needs
+    `CapManageTargets`): TCP-probes hosts for known management ports
+    (22→ssh, 5985/5986→winrm, 3389→rdp) and, with `create:true`, onboards new
+    targets. Reachability only — no credentials are used.
 
 - **Access-request approval** (`approval_handlers.go`, Phase 8 — OT 4-eyes):
   `POST /api/access-requests` (needs `CapConnect`) files a request; `GET
@@ -331,6 +340,7 @@ the client channel closes.
 | `PAM_ROTATE_MAX_AGE_HOURS` | `0` (report only) | auto-rotate password credentials older than this |
 | `PAM_REQUIRE_APPROVAL` | `false` | OT: gate every target behind an approved access request (4-eyes) |
 | `PAM_APPROVAL_WINDOW_MIN` | `60` | how long an approved access request stays valid |
+| `PAM_CHECKOUT_TTL_MIN` | `30` | credential checkout lease lifetime (minutes) |
 | `PAM_OT_AIRGAP` | `false` | disable all outbound calls (alert webhooks) for air-gapped sites |
 | `PAM_WINRM_HTTPS` | `true` | use HTTPS (5986) for WinRM |
 | `PAM_WINRM_INSECURE_SKIP_VERIFY` | `false` | skip WinRM TLS verify (dev only) |
@@ -360,6 +370,7 @@ secrets. Format `json` (SIEM) or `text` (humans); collect from stdout.
 `credential.delete` · `credential.reveal_denied` · `grant.create` · `grant.delete` ·
 `winrm.denied` · `session.kill` · `breakglass.unseal` · `user.create` · `user.delete` · `login` · `logout` ·
 `credential.rotate` · `credential.rotate_failed` · `credential.reconcile` · `credential.reconcile_scan` · `credential.remediate` ·
+`credential.checkout` · `credential.checkin` · `credential.checkout_denied` · `credential.checkin_rotate_failed` · `discovery.scan` ·
 `access.request` · `access.approve` · `access.deny` · `access.denied` · `access.decision_denied` · `audit.export` ·
 `mfa.enroll` · `mfa.confirm` · `mfa.disable` · `mfa.recovery_generated` ·
 `mfa.recovery_used` · `winrm.run` · `winrm.error` · `rdp.connect` · `rdp.end` ·
@@ -415,6 +426,7 @@ secrets. Format `json` (SIEM) or `text` (humans); collect from stdout.
 
 | Date | Change |
 |---|---|
+| 2026-07-19 | Phase 7 follow-ons: credential checkout/check-in leases (`store.Checkout`, migration `0003`, auto-rotate on return) + discovery (`internal/discovery`, `POST /api/discovery/scan`); `docs/REQUIREMENTS.md` (run specs) |
 | 2026-07-19 | Phase 10: scale & ops — `internal/metrics` + `GET /metrics` (Prometheus), `GET /readyz` (`store.Ping`), `deploy/helm/pamv1` chart, `release.yml` (SBOM + cosign signing) |
 | 2026-07-19 | Phase 9: NIS2 pack — `GET /api/audit/export` (`compliance_handlers.go`, `store.ExportAudit`, JSON/CSV, SHA-256 tamper digest), `docs/NIS2-COMPLIANCE.md` (Art. 21 matrix + Art. 23 export) |
 | 2026-07-19 | Phase 8: OT adaptation — access-request approval workflow (`approval_handlers.go`, `store.AccessRequest`, migration `0002`, 4-eyes, enforced on proxy/WinRM/RDP), air-gap mode (`PAM_OT_AIRGAP`), `docs/OT-DEPLOYMENT.md` |

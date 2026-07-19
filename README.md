@@ -71,7 +71,7 @@ flowchart LR
 - **Hardened vault (envelope encryption)** — each secret is sealed with a per-secret [AES-256-GCM](https://pkg.go.dev/crypto/cipher) data key that is wrapped by a **pluggable Key Encryption Key (KEK)**: a `local` key for dev/test, or **[HashiCorp Vault Transit](https://developer.hashicorp.com/vault/docs/secrets/transit)** in production so the root key never leaves the KMS. AAD binds each ciphertext to its owning target (a copied token fails to decrypt); versioned `v2:` tokens.
 - **Target inventory** — Linux/Windows machines with ssh/winrm/rdp endpoints.
 - **Credentials API** — vault, list (never returns secret material), audited on-demand `reveal`, delete. The JSON model *cannot* serialize the ciphertext (`json:"-"`).
-- **Credential lifecycle (rotation + reconciliation)** — `POST /api/credentials/{id}/rotate` generates a strong secret, sets it **on the target** (SSH `chpasswd` / WinRM `net user`), and re-vaults it — the new password is never shown. `POST /api/credentials/{id}/reconcile` verifies the vaulted secret still authenticates and flags **out-of-sync drift** (`?remediate=true` heals it by rotating); `GET /api/reconcile` scans everything. A background worker rotates aged secrets and reconciles on a schedule (`PAM_ROTATE_INTERVAL_MIN`).
+- **Credential lifecycle (rotation · reconciliation · checkout · discovery)** — `POST /api/credentials/{id}/rotate` generates a strong secret, sets it **on the target** (SSH `chpasswd` / WinRM `net user`), and re-vaults it — the new password is never shown. `/reconcile` verifies the vaulted secret still authenticates and flags **out-of-sync drift** (`?remediate=true` heals it). **Checkout/check-in** grants an exclusive time-boxed lease and rotates the secret on return, so a revealed password is dead once you're done. **Discovery** (`/api/discovery/scan`) probes hosts for SSH/WinRM/RDP ports and can auto-onboard targets. A background worker rotates aged secrets and reconciles on a schedule.
 - **Audit trail** — append-only record of every sensitive action, with actor attribution.
 - **Operational logs** — structured [slog](https://pkg.go.dev/log/slog) to stdout, one line per HTTP request and per proxy session, tagged by service (`server`/`api`/`proxy`/`store`); JSON for a SIEM or text for humans (`PAM_LOG_LEVEL`, `PAM_LOG_FORMAT`). Separate from the audit trail; secrets are never logged.
 - **Break-glass (v2)** — a sealed emergency key, or **M-of-N quorum unseal** ([Shamir shares](https://en.wikipedia.org/wiki/Shamir%27s_secret_sharing) split with `-split-key`; custodians POST shares to reconstruct it). Either way you get a **short-lived, auto-expiring** admin session, and every break-glass access/unseal is loudly audited and **alerted in real time** to a webhook.
@@ -124,6 +124,8 @@ trail, and proxies your I/O. You never see the credential. Recordings go to
 `PAM_RECORDING_DIR`; disable the proxy with `PAM_SSH_ADDR=off`.
 
 ## Quickstart
+
+> **Run specs** (ports, resource requests/limits, Docker/Kubernetes versions, PostgreSQL, storage, sizing) live in **[docs/REQUIREMENTS.md](docs/REQUIREMENTS.md)**.
 
 ### Local demo (no database)
 

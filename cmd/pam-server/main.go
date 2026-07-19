@@ -322,6 +322,7 @@ func run() error {
 		RequireApproval:     cfg.RequireApproval,
 		ApprovalWindow:      cfg.ApprovalWindow,
 		AirGap:              cfg.AirGap,
+		CheckoutTTL:         cfg.CheckoutTTL,
 	})
 	if err != nil {
 		return err

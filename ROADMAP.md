@@ -96,10 +96,10 @@ The flagship: users connect *through* pamv1, never holding the credential.
 - [x] **Account reconciliation (out-of-sync detection & remediation):**
   - [x] Credential reconciliation — `POST /api/credentials/{id}/reconcile` verifies the vaulted secret still authenticates to the target (SSH handshake / WinRM probe); drift is flagged and, with `?remediate=true`, remediated by rotating to a PAM-managed secret
   - [x] Reconciliation scan — `GET /api/reconcile` reports drift across all credentials (read-only, safe to schedule), fully audited (`credential.reconcile`, `credential.rotate`, `credential.remediate`)
-- [ ] Credential checkout/check-in with max lease time (follow-on)
+- [x] **Credential checkout/check-in with lease** — `POST /api/credentials/{id}/checkout` grants an exclusive, time-boxed lease (`PAM_CHECKOUT_TTL_MIN`) and returns the secret; `/checkin` ends it and **rotates** the credential so the seen password is invalidated. Enforced single-holder; honors the reveal-disabled policy
+- [x] **Discovery** — `POST /api/discovery/scan` probes hosts for reachable management ports (SSH/WinRM/RDP) and can auto-onboard new targets (`internal/discovery`, reachability only — no credentials used)
 - [ ] AD/LDAPS password-change connector + identity reconciliation (revoke access for disabled directory users; surface orphaned accounts) — needs the AD write path (follow-on)
-- [ ] Discovery: scan AD/OU or IP ranges to onboard targets (follow-on)
-- [ ] Forced rotation immediately after each proxied session ends (follow-on; ties the proxy back into the rotation orchestrator)
+- [ ] Forced rotation immediately after each proxied *SSH* session ends (follow-on; ties the proxy back into the rotation orchestrator — checkout already covers the reveal path)
 
 ## Phase 8 — OT adaptation ✅
 

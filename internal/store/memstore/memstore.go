@@ -22,6 +22,7 @@ type Memstore struct {
 	recovery  map[string]map[string]bool // username -> set of code hashes
 	grants    map[int64]store.TargetGrant
 	accessReq map[int64]store.AccessRequest
+	checkouts map[int64]store.Checkout
 	audit     []store.AuditEvent
 }
 
@@ -35,6 +36,7 @@ func New() *Memstore {
 		recovery:  make(map[string]map[string]bool),
 		grants:    make(map[int64]store.TargetGrant),
 		accessReq: make(map[int64]store.AccessRequest),
+		checkouts: make(map[int64]store.Checkout),
 	}
 }
 
@@ -205,6 +207,66 @@ func (m *Memstore) HasActiveApproval(_ context.Context, requester string, target
 		}
 	}
 	return false, nil
+}
+
+func (m *Memstore) activeCheckoutLocked(credentialID int64, now time.Time) (store.Checkout, bool) {
+	for _, co := range m.checkouts {
+		if co.CredentialID == credentialID && co.ReturnedAt == nil && now.Before(co.ExpiresAt) {
+			return co, true
+		}
+	}
+	return store.Checkout{}, false
+}
+
+func (m *Memstore) CreateCheckout(_ context.Context, co *store.Checkout, now time.Time) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.creds[co.CredentialID]; !ok {
+		return store.ErrNotFound
+	}
+	if _, active := m.activeCheckoutLocked(co.CredentialID, now); active {
+		return store.ErrConflict
+	}
+	co.ID = m.id()
+	co.CheckedOutAt = now.UTC()
+	m.checkouts[co.ID] = *co
+	return nil
+}
+
+func (m *Memstore) GetActiveCheckout(_ context.Context, credentialID int64, now time.Time) (*store.Checkout, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if co, active := m.activeCheckoutLocked(credentialID, now); active {
+		return &co, nil
+	}
+	return nil, store.ErrNotFound
+}
+
+func (m *Memstore) CheckinCheckout(_ context.Context, id int64, at time.Time) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	co, ok := m.checkouts[id]
+	if !ok || co.ReturnedAt != nil {
+		return store.ErrNotFound
+	}
+	t := at.UTC()
+	co.ReturnedAt = &t
+	m.checkouts[id] = co
+	return nil
+}
+
+func (m *Memstore) ListCheckouts(_ context.Context, activeOnly bool, now time.Time) ([]store.Checkout, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]store.Checkout, 0, len(m.checkouts))
+	for _, co := range m.checkouts {
+		if activeOnly && (co.ReturnedAt != nil || !now.Before(co.ExpiresAt)) {
+			continue
+		}
+		out = append(out, co)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out, nil
 }
 
 func (m *Memstore) CreateCredential(_ context.Context, c *store.Credential) error {

@@ -323,6 +323,84 @@ func (s *PGStore) ListAudit(ctx context.Context, limit int) ([]store.AuditEvent,
 	})
 }
 
+func (s *PGStore) CreateCheckout(ctx context.Context, co *store.Checkout, now time.Time) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	var active bool
+	if err := tx.QueryRow(ctx,
+		`SELECT EXISTS(SELECT 1 FROM checkouts
+		 WHERE credential_id = $1 AND returned_at IS NULL AND expires_at > $2)`,
+		co.CredentialID, now.UTC()).Scan(&active); err != nil {
+		return err
+	}
+	if active {
+		return store.ErrConflict
+	}
+	err = tx.QueryRow(ctx,
+		`INSERT INTO checkouts (credential_id, target_id, holder, reason, expires_at)
+		 VALUES ($1, $2, $3, $4, $5) RETURNING id, checked_out_at`,
+		co.CredentialID, co.TargetID, co.Holder, co.Reason, co.ExpiresAt,
+	).Scan(&co.ID, &co.CheckedOutAt)
+	if pgCode(err) == pgForeignKeyViolation {
+		return store.ErrNotFound
+	}
+	if err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func (s *PGStore) GetActiveCheckout(ctx context.Context, credentialID int64, now time.Time) (*store.Checkout, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT id, credential_id, target_id, holder, reason, checked_out_at, expires_at, returned_at
+		 FROM checkouts
+		 WHERE credential_id = $1 AND returned_at IS NULL AND expires_at > $2
+		 ORDER BY id DESC LIMIT 1`, credentialID, now.UTC())
+	if err != nil {
+		return nil, err
+	}
+	co, err := pgx.CollectExactlyOneRow(rows, scanCheckout)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, store.ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &co, nil
+}
+
+func (s *PGStore) CheckinCheckout(ctx context.Context, id int64, at time.Time) error {
+	tag, err := s.pool.Exec(ctx,
+		`UPDATE checkouts SET returned_at = $1 WHERE id = $2 AND returned_at IS NULL`, at.UTC(), id)
+	if err == nil && tag.RowsAffected() == 0 {
+		return store.ErrNotFound
+	}
+	return err
+}
+
+func (s *PGStore) ListCheckouts(ctx context.Context, activeOnly bool, now time.Time) ([]store.Checkout, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT id, credential_id, target_id, holder, reason, checked_out_at, expires_at, returned_at
+		 FROM checkouts
+		 WHERE (NOT $1) OR (returned_at IS NULL AND expires_at > $2)
+		 ORDER BY id`, activeOnly, now.UTC())
+	if err != nil {
+		return nil, err
+	}
+	return pgx.CollectRows(rows, scanCheckout)
+}
+
+func scanCheckout(row pgx.CollectableRow) (store.Checkout, error) {
+	var co store.Checkout
+	err := row.Scan(&co.ID, &co.CredentialID, &co.TargetID, &co.Holder, &co.Reason,
+		&co.CheckedOutAt, &co.ExpiresAt, &co.ReturnedAt)
+	return co, err
+}
+
 func (s *PGStore) ExportAudit(ctx context.Context, since, until time.Time) ([]store.AuditEvent, error) {
 	if until.IsZero() {
 		until = time.Now()

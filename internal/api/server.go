@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"log/slog"
+	"net"
 	"net/http"
 	"time"
 
@@ -103,9 +104,14 @@ type Options struct {
 	// ApprovalWindow is how long an approved access request stays valid
 	// (default 60m).
 	ApprovalWindow time.Duration
+	// CheckoutTTL is the lifetime of a credential checkout lease (default 30m).
+	CheckoutTTL time.Duration
 	// AirGap disables all outbound network calls (alert webhooks) for isolated
 	// OT/air-gapped deployments.
 	AirGap bool
+	// DiscoveryDial overrides the TCP dialer used by the discovery scanner
+	// (tests inject a dialer; nil uses the default net.Dialer).
+	DiscoveryDial func(ctx context.Context, network, addr string) (net.Conn, error)
 }
 
 type Server struct {
@@ -134,7 +140,9 @@ type Server struct {
 	verifiers          map[string]rotate.Verifier
 	approvalRequired   bool
 	approvalWindow     time.Duration
+	checkoutTTL        time.Duration
 	airGap             bool
+	discoveryDial      func(ctx context.Context, network, addr string) (net.Conn, error)
 	metrics            *metrics.Metrics
 	log                *slog.Logger
 	mux                *http.ServeMux
@@ -176,6 +184,10 @@ func New(st store.Store, v *vault.Vault, resolver *auth.Resolver, authn auth.Aut
 	if approvalWindow <= 0 {
 		approvalWindow = 60 * time.Minute
 	}
+	checkoutTTL := opts.CheckoutTTL
+	if checkoutTTL <= 0 {
+		checkoutTTL = 30 * time.Minute
+	}
 	rotators := opts.Rotators
 	if rotators == nil {
 		rotators = map[string]rotate.Rotator{
@@ -216,7 +228,9 @@ func New(st store.Store, v *vault.Vault, resolver *auth.Resolver, authn auth.Aut
 		verifiers:          verifiers,
 		approvalRequired:   opts.RequireApproval,
 		approvalWindow:     approvalWindow,
+		checkoutTTL:        checkoutTTL,
 		airGap:             opts.AirGap,
+		discoveryDial:      opts.DiscoveryDial,
 		metrics:            metrics.New(),
 		log:                logging.Component("api"),
 		mux:                http.NewServeMux(),
@@ -319,6 +333,10 @@ func (s *Server) routes() {
 	s.mux.Handle("POST /api/credentials/{id}/rotate", s.authz(auth.CapManageCredentials, s.rotateCredentialHandler))
 	s.mux.Handle("POST /api/credentials/{id}/reconcile", s.authz(auth.CapManageCredentials, s.reconcileCredentialHandler))
 	s.mux.Handle("GET /api/reconcile", s.authz(auth.CapManageCredentials, s.reconcileAllHandler))
+	s.mux.Handle("POST /api/credentials/{id}/checkout", s.authz(auth.CapRevealSecret, s.checkoutCredential))
+	s.mux.Handle("POST /api/credentials/{id}/checkin", s.authz(auth.CapRevealSecret, s.checkinCredential))
+	s.mux.Handle("GET /api/checkouts", s.authz(auth.CapReadAudit, s.listCheckouts))
+	s.mux.Handle("POST /api/discovery/scan", s.authz(auth.CapManageTargets, s.discoveryScan))
 	s.mux.Handle("DELETE /api/credentials/{id}", s.authz(auth.CapManageCredentials, s.deleteCredential))
 
 	// Access-request approval workflow (4-eyes). A connect-capable user files a

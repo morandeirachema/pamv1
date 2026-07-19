@@ -47,8 +47,11 @@ flowchart LR
 ## 2. Prerequisites
 
 - [Go 1.26+](https://go.dev/dl/) (to build from source), or [Docker](https://docs.docker.com/) / [Kubernetes](https://kubernetes.io/) to run the image.
-- A PostgreSQL 16/17 database (bundled in docker-compose), or `memory` mode for a throwaway demo.
+- A PostgreSQL 14+ database (16/17 recommended; bundled in docker-compose), or `memory` mode for a throwaway demo.
 - `openssl` (to generate keys), an SSH client for operators.
+
+Full run specs — ports, resource requests/limits, Docker/Kubernetes versions,
+storage and sizing — are in **[REQUIREMENTS.md](REQUIREMENTS.md)**.
 
 ---
 
@@ -167,6 +170,7 @@ All configuration is environment variables (12-factor). Full descriptions in
 | `PAM_ROTATE_MAX_AGE_HOURS` | | `0` (report) | Auto-rotate password credentials older than this. |
 | `PAM_REQUIRE_APPROVAL` | | `false` | OT: gate every target behind an approved access request (4-eyes). |
 | `PAM_APPROVAL_WINDOW_MIN` | | `60` | How long an approved access request stays valid. |
+| `PAM_CHECKOUT_TTL_MIN` | | `30` | Credential checkout lease lifetime (minutes). |
 | `PAM_OT_AIRGAP` | | `false` | Disable all outbound calls (alert webhooks) for air-gapped sites. |
 
 The examples below use `-H "X-API-Key: $PAM_API_KEY"`; in production call the
@@ -261,6 +265,29 @@ Every action is audited (`credential.rotate`, `credential.reconcile`,
 `credential.remediate`; the worker acts as `system-scheduler`). Only `password`
 credentials are rotated; `ssh_key` rotation and the AD/LDAPS password-change and
 identity-reconciliation connectors are on the roadmap.
+
+**Checkout / check-in (exclusive lease).** For accounts a person or app must use
+the password directly, check it out: you get the secret exclusively for a lease
+(`PAM_CHECKOUT_TTL_MIN`, default 30 min), and on check-in the credential is
+**rotated** so the password you saw is dead. Only one holder at a time.
+
+```bash
+curl -H "X-API-Key: $PAM_API_KEY" -X POST http://localhost:8080/api/credentials/1/checkout \
+  -d '{"reason":"deploy hotfix"}'
+# → {"checkout_id":7,"username":"root","secret":"...","expires_at":"..."}
+curl -H "X-API-Key: $PAM_API_KEY" -X POST http://localhost:8080/api/credentials/1/checkin
+# → {"returned":true,"rotated":true}          # the seen secret is now invalid
+curl -H "X-API-Key: $PAM_API_KEY" "http://localhost:8080/api/checkouts?active=true"
+```
+
+**Discovery.** Probe hosts for reachable management ports and optionally onboard
+them (reachability only — no credentials are tried):
+
+```bash
+curl -H "X-API-Key: $PAM_API_KEY" -X POST http://localhost:8080/api/discovery/scan \
+  -d '{"hosts":["10.0.0.5","10.0.0.6"],"ports":[22,3389,5986],"create":true}'
+# → {"candidates":[{"host":"10.0.0.5","port":22,"protocol":"ssh",...}],"created":[...]}
+```
 
 ### Windows targets (WinRM)
 
@@ -611,6 +638,7 @@ evidence). Replay with [asciinema](https://asciinema.org/): `asciinema play <fil
 
 | Date | Change |
 |---|---|
+| 2026-07-19 | Phase 7 follow-ons: credential checkout/check-in leases (auto-rotate on return), discovery scan; system requirements ([REQUIREMENTS.md](REQUIREMENTS.md)) |
 | 2026-07-19 | Phase 10: scale & ops — Prometheus `/metrics`, `/readyz` readiness, Helm chart (`deploy/helm/pamv1`), SBOM + cosign-signed release workflow |
 | 2026-07-19 | Phase 9: NIS2 pack — tamper-evident audit export (`GET /api/audit/export`, JSON/CSV + SHA-256) for Art. 23; see [NIS2-COMPLIANCE.md](NIS2-COMPLIANCE.md) |
 | 2026-07-19 | Phase 8: OT adaptation — 4-eyes access-request approval (`/api/access-requests`), per-target/global gate (`PAM_REQUIRE_APPROVAL`), air-gap mode (`PAM_OT_AIRGAP`); see [OT-DEPLOYMENT.md](OT-DEPLOYMENT.md) |

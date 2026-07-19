@@ -62,6 +62,8 @@ type Config struct {
 	RequireApproval bool
 	ApprovalWindow  time.Duration
 	AirGap          bool
+	// CheckoutTTL is the lifetime of a credential checkout lease.
+	CheckoutTTL time.Duration
 
 	// WinRMHTTPS uses HTTPS (5986) for WinRM; WinRMInsecure skips TLS verify (dev).
 	WinRMHTTPS    bool
@@ -149,6 +151,7 @@ func Load() (*Config, error) {
 		RequireApproval:     os.Getenv("PAM_REQUIRE_APPROVAL") == "true",
 		ApprovalWindow:      time.Duration(getenvInt("PAM_APPROVAL_WINDOW_MIN", 60)) * time.Minute,
 		AirGap:              os.Getenv("PAM_OT_AIRGAP") == "true",
+		CheckoutTTL:         time.Duration(getenvInt("PAM_CHECKOUT_TTL_MIN", 30)) * time.Minute,
 		WinRMHTTPS:          os.Getenv("PAM_WINRM_HTTPS") != "false", // default HTTPS
 		WinRMInsecure:       os.Getenv("PAM_WINRM_INSECURE_SKIP_VERIFY") == "true",
 		WinRMNTLM:           os.Getenv("PAM_WINRM_AUTH") == "ntlm",

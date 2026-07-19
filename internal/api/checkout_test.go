@@ -1,0 +1,91 @@
+package api_test
+
+import (
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"testing"
+
+	"github.com/morandeirachema/pamv1/internal/api"
+	"github.com/morandeirachema/pamv1/internal/rotate"
+)
+
+func TestCredentialCheckoutLifecycle(t *testing.T) {
+	fc := &fakeConnector{}
+	srv, _ := newTestServerOpts(t, nil, api.Options{
+		Rotators:  map[string]rotate.Rotator{"ssh": fc},
+		Verifiers: map[string]rotate.Verifier{"ssh": fc},
+	})
+	credID := seedTargetCred(t, srv, "ssh", "", "original-secret")
+
+	// Checkout returns the secret and opens an exclusive lease.
+	status, data := do(t, srv, http.MethodPost, fmt.Sprintf("/api/credentials/%d/checkout", credID), testAPIKey, map[string]any{"reason": "debug prod"})
+	if status != http.StatusCreated {
+		t.Fatalf("checkout: %d %s", status, data)
+	}
+	if jsonMap(t, data)["secret"].(string) != "original-secret" {
+		t.Fatalf("checkout did not return the secret: %s", data)
+	}
+
+	// A second checkout is refused while one is active.
+	if status, _ := do(t, srv, http.MethodPost, fmt.Sprintf("/api/credentials/%d/checkout", credID), testAPIKey, nil); status != http.StatusConflict {
+		t.Fatalf("double checkout: want 409, got %d", status)
+	}
+
+	// It shows up in the active list.
+	_, data = do(t, srv, http.MethodGet, "/api/checkouts?active=true", testAPIKey, nil)
+	var active []map[string]any
+	if err := json.Unmarshal(data, &active); err != nil {
+		t.Fatal(err)
+	}
+	if len(active) != 1 {
+		t.Fatalf("expected 1 active checkout, got %s", data)
+	}
+
+	// Check-in rotates the credential (the seen secret is invalidated).
+	status, data = do(t, srv, http.MethodPost, fmt.Sprintf("/api/credentials/%d/checkin", credID), testAPIKey, nil)
+	if status != http.StatusOK {
+		t.Fatalf("checkin: %d %s", status, data)
+	}
+	if jsonMap(t, data)["rotated"] != true {
+		t.Fatalf("checkin did not rotate: %s", data)
+	}
+	if fc.newSecret() == "" || fc.newSecret() == "original-secret" {
+		t.Fatalf("secret was not rotated on check-in: %q", fc.newSecret())
+	}
+
+	// After check-in a fresh checkout is possible again, and returns the NEW secret.
+	status, data = do(t, srv, http.MethodPost, fmt.Sprintf("/api/credentials/%d/checkout", credID), testAPIKey, nil)
+	if status != http.StatusCreated {
+		t.Fatalf("re-checkout: %d %s", status, data)
+	}
+	if jsonMap(t, data)["secret"].(string) != fc.newSecret() {
+		t.Fatalf("re-checkout returned a stale secret")
+	}
+}
+
+func TestCheckinWithoutCheckout(t *testing.T) {
+	fc := &fakeConnector{}
+	srv, _ := newTestServerOpts(t, nil, api.Options{Rotators: map[string]rotate.Rotator{"ssh": fc}})
+	credID := seedTargetCred(t, srv, "ssh", "", "s")
+	if status, _ := do(t, srv, http.MethodPost, fmt.Sprintf("/api/credentials/%d/checkin", credID), testAPIKey, nil); status != http.StatusConflict {
+		t.Fatalf("checkin without checkout: want 409, got %d", status)
+	}
+}
+
+func TestCheckoutRespectsRevealDisabled(t *testing.T) {
+	fc := &fakeConnector{}
+	srv, _ := newTestServerOpts(t, nil, api.Options{
+		RevealDisabled: true,
+		Rotators:       map[string]rotate.Rotator{"ssh": fc},
+	})
+	credID := seedTargetCred(t, srv, "ssh", "", "s")
+	// A normal admin cannot check out when reveal is disabled by policy.
+	if status, _ := do(t, srv, http.MethodPost, fmt.Sprintf("/api/credentials/%d/checkout", credID), testAPIKey, nil); status != http.StatusForbidden {
+		t.Fatalf("checkout under reveal-disabled: want 403, got %d", status)
+	}
+	// Break-glass may still check out.
+	if status, _ := do(t, srv, http.MethodPost, fmt.Sprintf("/api/credentials/%d/checkout", credID), breakGlassKey, nil); status != http.StatusCreated {
+		t.Fatalf("break-glass checkout: want 201, got %d", status)
+	}
+}

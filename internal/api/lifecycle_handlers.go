@@ -83,6 +83,117 @@ func (s *Server) rotateCredential(ctx context.Context, cred *store.Credential, t
 	return now, nil
 }
 
+// --- credential checkout / check-in (exclusive time-boxed lease) ---
+
+type checkoutIn struct {
+	Reason string `json:"reason"`
+}
+
+// checkoutCredential grants an exclusive, time-boxed lease on a credential and
+// returns the secret to the holder. Only one holder may have a credential
+// checked out at a time. On check-in the credential is rotated, so the password
+// the holder saw can no longer be used. Honors the reveal-disabled policy
+// (break-glass excepted), since a checkout reveals the secret.
+func (s *Server) checkoutCredential(w http.ResponseWriter, r *http.Request) {
+	if s.revealDisabled && !principalFrom(r.Context()).BreakGlass {
+		s.audit(r.Context(), "credential.checkout_denied", "reason:reveal-disabled-by-policy")
+		writeError(w, http.StatusForbidden, "credential checkout is disabled by policy; connect through the proxy")
+		return
+	}
+	id, ok := idParam(w, r)
+	if !ok {
+		return
+	}
+	cred, target, ok := s.loadCredentialTarget(w, r, id)
+	if !ok {
+		return
+	}
+	var in checkoutIn
+	if r.ContentLength != 0 {
+		if !readJSON(w, r, &in) {
+			return
+		}
+	}
+	now := time.Now()
+	co := store.Checkout{
+		CredentialID: cred.ID, TargetID: target.ID, Holder: actorFrom(r.Context()),
+		Reason: in.Reason, ExpiresAt: now.Add(s.checkoutTTL).UTC(),
+	}
+	if err := s.store.CreateCheckout(r.Context(), &co, now); err != nil {
+		if errors.Is(err, store.ErrConflict) {
+			writeError(w, http.StatusConflict, "credential is already checked out")
+			return
+		}
+		storeError(w, err)
+		return
+	}
+	secret, err := s.vault.Decrypt(r.Context(), cred.SecretEnc, store.CredentialAAD(target.ID))
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "decryption failed")
+		return
+	}
+	s.audit(r.Context(), "credential.checkout",
+		fmt.Sprintf("checkout:%d credential:%d target:%s until:%s", co.ID, cred.ID, target.Name, co.ExpiresAt.Format(time.RFC3339)))
+	writeJSON(w, http.StatusCreated, map[string]any{
+		"checkout_id": co.ID, "credential_id": cred.ID, "target": target.Name,
+		"username": cred.Username, "secret": secret, "expires_at": co.ExpiresAt,
+		"note": "Returned automatically on check-in, which rotates this secret.",
+	})
+}
+
+// checkinCredential ends a checkout and rotates the credential so the revealed
+// secret is invalidated. If rotation is unsupported/fails the check-in still
+// succeeds but the response flags that the secret was not rotated.
+func (s *Server) checkinCredential(w http.ResponseWriter, r *http.Request) {
+	id, ok := idParam(w, r)
+	if !ok {
+		return
+	}
+	cred, target, ok := s.loadCredentialTarget(w, r, id)
+	if !ok {
+		return
+	}
+	co, err := s.store.GetActiveCheckout(r.Context(), cred.ID, time.Now())
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			writeError(w, http.StatusConflict, "credential is not checked out")
+			return
+		}
+		storeError(w, err)
+		return
+	}
+	if err := s.store.CheckinCheckout(r.Context(), co.ID, time.Now()); err != nil {
+		storeError(w, err)
+		return
+	}
+	s.audit(r.Context(), "credential.checkin", fmt.Sprintf("checkout:%d credential:%d target:%s", co.ID, cred.ID, target.Name))
+
+	rotated := true
+	rotateNote := "secret rotated on check-in"
+	if _, rerr := s.rotateCredential(r.Context(), cred, target); rerr != nil {
+		rotated = false
+		rotateNote = "WARNING: secret was NOT rotated on check-in (" + rerr.Error() + ") — rotate it manually"
+		s.audit(r.Context(), "credential.checkin_rotate_failed", fmt.Sprintf("credential:%d error:%v", cred.ID, rerr))
+	} else {
+		s.audit(r.Context(), "credential.rotate", fmt.Sprintf("credential:%d target:%s reason:checkin", cred.ID, target.Name))
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"checkout_id": co.ID, "credential_id": cred.ID, "returned": true,
+		"rotated": rotated, "note": rotateNote,
+	})
+}
+
+// listCheckouts reports checkouts (activeOnly via ?active=true).
+func (s *Server) listCheckouts(w http.ResponseWriter, r *http.Request) {
+	activeOnly := r.URL.Query().Get("active") == "true"
+	cos, err := s.store.ListCheckouts(r.Context(), activeOnly, time.Now())
+	if err != nil {
+		storeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, cos)
+}
+
 // --- account reconciliation (out-of-sync detection & remediation) ---
 
 type reconcileResult struct {

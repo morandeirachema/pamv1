@@ -97,12 +97,14 @@ Los componentes con línea discontinua (objetivos Windows) llegan en la [Fase 4]
   intercambiable**: una clave `local` para desarrollo/pruebas, o **[HashiCorp Vault Transit](https://developer.hashicorp.com/vault/docs/secrets/transit)**
   en producción para que la clave raíz nunca salga del KMS. El AAD liga cada token a su
   objetivo; tokens versionados `v2:`.
-- **Ciclo de vida de credenciales (rotación + reconciliación)** — `POST /api/credentials/{id}/rotate`
-  genera un secreto fuerte, lo aplica **en el objetivo** (SSH `chpasswd` / WinRM `net user`) y lo
-  vuelve a cifrar en el vault — la nueva contraseña nunca se muestra. `POST /api/credentials/{id}/reconcile`
-  verifica que el secreto guardado siga autenticando y detecta **desincronización (drift)**
-  (`?remediate=true` la corrige rotando); `GET /api/reconcile` escanea todo. Un worker en segundo
-  plano rota secretos antiguos y reconcilia según un intervalo (`PAM_ROTATE_INTERVAL_MIN`).
+- **Ciclo de vida de credenciales (rotación · reconciliación · checkout · descubrimiento)** —
+  `POST /api/credentials/{id}/rotate` genera un secreto fuerte, lo aplica **en el objetivo** (SSH
+  `chpasswd` / WinRM `net user`) y lo re-cifra — la nueva contraseña nunca se muestra. `/reconcile`
+  verifica que el secreto siga autenticando y detecta **drift** (`?remediate=true` lo corrige).
+  **Checkout/check-in** concede un préstamo exclusivo con caducidad y **rota** el secreto al
+  devolverlo, de modo que una contraseña revelada queda inservible. **Descubrimiento**
+  (`/api/discovery/scan`) sondea puertos SSH/WinRM/RDP y puede dar de alta objetivos. Un worker en
+  segundo plano rota secretos antiguos y reconcilia según un intervalo.
 - **Registro de auditoría** — de solo adición, para cada acción sensible, con atribución de actor.
 - **Registros operativos (logs)** — [slog](https://pkg.go.dev/log/slog) estructurado a stdout,
   una línea por petición HTTP y por sesión del proxy, etiquetado por servicio
@@ -142,6 +144,8 @@ Todos son documentos vivos, actualizados junto con el código (existen en inglé
 - **[Arquitectura](docs/ARCHITECTURE-HIGH-LEVEL.md)** ([bajo nivel](docs/ARCHITECTURE-LOW-LEVEL.md)) y la **[matriz de puertos y flujos](docs/PORTS-AND-FLOWS.md)** para cortafuegos y segmentación.
 
 ## Inicio rápido
+
+> **Especificaciones de ejecución** (puertos, requests/limits de recursos, versiones de Docker/Kubernetes, PostgreSQL, almacenamiento, dimensionamiento) en **[docs/REQUIREMENTS.md](docs/REQUIREMENTS.md)**.
 
 ### Demo local (sin base de datos)
 

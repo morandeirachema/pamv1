@@ -81,6 +81,20 @@ type TargetGrant struct {
 	Subject     string `json:"subject"`
 }
 
+// Checkout is an exclusive, time-boxed lease on a credential. While a checkout
+// is active no other holder may check the same credential out; on check-in the
+// credential is rotated so the password the holder saw can no longer be used.
+type Checkout struct {
+	ID           int64      `json:"id"`
+	CredentialID int64      `json:"credential_id"`
+	TargetID     int64      `json:"target_id"`
+	Holder       string     `json:"holder"`
+	Reason       string     `json:"reason"`
+	CheckedOutAt time.Time  `json:"checked_out_at"`
+	ExpiresAt    time.Time  `json:"expires_at"`
+	ReturnedAt   *time.Time `json:"returned_at,omitempty"`
+}
+
 type AuditEvent struct {
 	ID     int64     `json:"id"`
 	TS     time.Time `json:"ts"`
@@ -157,6 +171,17 @@ type Store interface {
 	// HasActiveApproval reports whether requester has an approved, unexpired
 	// request for targetID as of now.
 	HasActiveApproval(ctx context.Context, requester string, targetID int64, now time.Time) (bool, error)
+
+	// Credential checkout/check-in (exclusive time-boxed leases).
+	// CreateCheckout fails with ErrConflict if the credential already has an
+	// active (unreturned, unexpired) checkout as of now.
+	CreateCheckout(ctx context.Context, co *Checkout, now time.Time) error
+	// GetActiveCheckout returns the active checkout for a credential, or ErrNotFound.
+	GetActiveCheckout(ctx context.Context, credentialID int64, now time.Time) (*Checkout, error)
+	// CheckinCheckout marks a checkout returned; ErrNotFound if missing or already returned.
+	CheckinCheckout(ctx context.Context, id int64, at time.Time) error
+	// ListCheckouts lists checkouts; activeOnly limits to unreturned, unexpired ones.
+	ListCheckouts(ctx context.Context, activeOnly bool, now time.Time) ([]Checkout, error)
 
 	AppendAudit(ctx context.Context, e *AuditEvent) error
 	ListAudit(ctx context.Context, limit int) ([]AuditEvent, error)
