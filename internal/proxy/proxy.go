@@ -88,8 +88,9 @@ type Proxy struct {
 	upstreamDial func(addr string) (net.Conn, error)
 	chain        *recordChain
 
-	mu sync.Mutex
-	ln net.Listener
+	mu    sync.Mutex
+	ln    net.Listener
+	conns map[net.Conn]struct{} // accepted client connections, for shutdown force-close
 }
 
 // New constructs a Proxy from the store, vault, auth resolver and cfg. It
@@ -124,6 +125,7 @@ func New(st store.Store, v *vault.Vault, resolver *auth.Resolver, cfg Config) (*
 		allowedProto: protocolSet(cfg.AllowedProtocols),
 		winrm:        cfg.WinRMRunner,
 		chain:        newRecordChain(cfg.RecordingDir),
+		conns:        make(map[net.Conn]struct{}),
 	}
 	if p.upstreamHKCB == nil {
 		p.log.Warn("upstream SSH host keys are NOT verified (set PAM_SSH_KNOWN_HOSTS to pin them)")
@@ -197,12 +199,13 @@ func (p *Proxy) ListenAndServe(ctx context.Context, addr string) error {
 	return p.Serve(ctx, ln)
 }
 
-// Serve accepts connections on ln until ctx is cancelled, then closes the
-// listener and waits for in-flight connection handlers to return before it
-// returns — so no handler goroutine outlives Serve. (Active sessions end when
-// their client disconnects; the process-level shutdown does not block on them.)
-// Exposed separately so tests can supply a 127.0.0.1:0 listener and read the
-// address back.
+// Serve accepts connections on ln until ctx is cancelled. On cancellation it
+// closes the listener and force-closes every active client connection, then
+// waits for the in-flight handlers to return — so the drain is bounded (it does
+// not wait for operators to voluntarily disconnect) and no handler goroutine
+// outlives Serve. A fatal Accept error (not caused by cancellation) is returned
+// promptly without waiting on active handlers. Exposed separately so tests can
+// supply a 127.0.0.1:0 listener and read the address back.
 func (p *Proxy) Serve(ctx context.Context, ln net.Listener) error {
 	p.mu.Lock()
 	p.ln = ln
@@ -211,6 +214,7 @@ func (p *Proxy) Serve(ctx context.Context, ln net.Listener) error {
 	go func() {
 		<-ctx.Done()
 		ln.Close()
+		p.closeActiveConns() // unblock in-flight handlers so the drain is bounded
 	}()
 
 	p.log.Info("ssh proxy listening",
@@ -220,17 +224,48 @@ func (p *Proxy) Serve(ctx context.Context, ln net.Listener) error {
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
-			wg.Wait() // let in-flight handlers finish before returning
 			if ctx.Err() != nil {
+				wg.Wait() // graceful shutdown: active conns already force-closed
 				return nil
 			}
-			return err
+			return err // fatal listener error: report it without blocking on sessions
 		}
+		p.trackConn(conn)
 		wg.Add(1)
 		go func(c net.Conn) {
 			defer wg.Done()
+			defer p.untrackConn(c)
 			p.handleConn(ctx, c)
 		}(conn)
+	}
+}
+
+// trackConn records an accepted client connection so shutdown can force-close it.
+func (p *Proxy) trackConn(c net.Conn) {
+	p.mu.Lock()
+	p.conns[c] = struct{}{}
+	p.mu.Unlock()
+}
+
+// untrackConn drops a client connection once its handler has returned.
+func (p *Proxy) untrackConn(c net.Conn) {
+	p.mu.Lock()
+	delete(p.conns, c)
+	p.mu.Unlock()
+}
+
+// closeActiveConns force-closes every tracked client connection. Closing the
+// client transport tears down its SSH mux, which ends the handler's channel loop
+// and unblocks the session copies — bounding Serve's shutdown drain.
+func (p *Proxy) closeActiveConns() {
+	p.mu.Lock()
+	conns := make([]net.Conn, 0, len(p.conns))
+	for c := range p.conns {
+		conns = append(conns, c)
+	}
+	p.mu.Unlock()
+	for _, c := range conns {
+		c.Close()
 	}
 }
 
@@ -383,6 +418,11 @@ func (p *Proxy) handleConn(ctx context.Context, nConn net.Conn) {
 			p.handleSession(ctx, nc, upstream, target, cred, actor, observe)
 		}(nc)
 	}
+	// The chans range ends when the client connection closes — the true
+	// "client is gone" signal. Close the upstream now (before waiting) so any
+	// session still blocked copying idle or wedged upstream output unblocks;
+	// otherwise the deferred upstream.Close() below would sit behind this Wait.
+	upstream.Close()
 	wg.Wait()
 }
 
@@ -544,30 +584,41 @@ func (p *Proxy) handleSession(ctx context.Context, nc ssh.NewChannel, upstream *
 	// window-change from the client; exit-status from upstream). In observer mode
 	// the client→upstream pump refuses exec/subsystem, and operator keystrokes are
 	// dropped — the session is view-only.
-	if observe {
-		go pumpRequestsObserver(clientReqs, upChan)
-	} else {
-		go pumpRequests(clientReqs, upChan)
-	}
+	// The client→upstream request pump is joined so its in-flight reply (notably
+	// the exec/shell reply the client's Session.Start blocks on) is guaranteed to
+	// reach clientChan before the deferred clientChan.Close() below tears it down.
+	clientReqDone := make(chan struct{}) // stops the pump between requests
+	var clientReqPump sync.WaitGroup
+	clientReqPump.Add(1)
+	go func() {
+		defer clientReqPump.Done()
+		if observe {
+			pumpRequestsObserver(clientReqs, upChan, clientReqDone)
+		} else {
+			pumpRequests(clientReqs, upChan, clientReqDone)
+		}
+	}()
 	var upReqDone sync.WaitGroup
 	upReqDone.Add(1)
 	go func() {
 		defer upReqDone.Done()
-		pumpRequests(upReqs, clientChan)
+		pumpRequests(upReqs, clientChan, nil) // exits when the upstream channel closes
 	}()
 
 	go io.Copy(clientChan.Stderr(), upChan.Stderr())
-	go func() {
-		if observe {
-			io.Copy(io.Discard, clientChan) // drop operator keystrokes
-		} else {
+	if observe {
+		// Read-only: drop operator keystrokes; never touch the upstream channel.
+		go io.Copy(io.Discard, clientChan)
+	} else {
+		go func() {
 			io.Copy(upChan, clientChan) // operator keystrokes -> target
-		}
-		// The client is gone (or read-only): tear down the upstream channel so the
-		// target-output copy below unblocks even if the upstream is idle.
-		upChan.CloseWrite()
-		upChan.Close()
-	}()
+			// Propagate a client stdin half-close (CHANNEL_EOF) upstream, but keep
+			// the channel open so the command's remaining output and exit-status
+			// still flow back. Full upstream teardown happens in handleConn when the
+			// client connection actually closes.
+			upChan.CloseWrite()
+		}()
+	}
 
 	// Target output -> operator, tee'd into the recording.
 	var out io.Writer = clientChan
@@ -576,6 +627,12 @@ func (p *Proxy) handleSession(ctx context.Context, nc ssh.NewChannel, upstream *
 	}
 	io.Copy(out, upChan)
 	upReqDone.Wait() // make sure exit-status reached the client
+
+	// Upstream is done and exit-status is delivered; stop the client-request pump
+	// and wait for it to park, so any reply it is mid-way through delivering
+	// flushes to clientChan before the deferred clientChan.Close() runs.
+	close(clientReqDone)
+	clientReqPump.Wait()
 
 	if rec != nil {
 		path, sum, n := rec.Close()
@@ -746,12 +803,25 @@ func crlf(s string) string {
 	return strings.ReplaceAll(strings.ReplaceAll(s, "\r\n", "\n"), "\n", "\r\n")
 }
 
-// pumpRequests forwards SSH channel requests from in to dst, relaying replies.
-func pumpRequests(in <-chan *ssh.Request, dst ssh.Channel) {
-	for req := range in {
-		ok, err := dst.SendRequest(req.Type, req.WantReply, req.Payload)
-		if req.WantReply {
-			req.Reply(ok && err == nil, nil)
+// pumpRequests forwards SSH channel requests from in to dst, relaying replies,
+// until in closes or done fires. Closing done stops the pump only between
+// requests — a request already dequeued is forwarded and its reply delivered
+// before the pump returns, so a caller can join it to guarantee an in-flight
+// reply (e.g. the exec/shell reply) reaches its channel before that channel is
+// torn down. A nil done means "run until in closes".
+func pumpRequests(in <-chan *ssh.Request, dst ssh.Channel, done <-chan struct{}) {
+	for {
+		select {
+		case req, ok := <-in:
+			if !ok {
+				return
+			}
+			okr, err := dst.SendRequest(req.Type, req.WantReply, req.Payload)
+			if req.WantReply {
+				req.Reply(okr && err == nil, nil)
+			}
+		case <-done:
+			return
 		}
 	}
 }
@@ -759,17 +829,25 @@ func pumpRequests(in <-chan *ssh.Request, dst ssh.Channel) {
 // pumpRequestsObserver forwards channel requests like pumpRequests but refuses
 // anything that would run a command (exec, subsystem), so a read-only session
 // cannot execute — the operator may open a shell/pty and watch, nothing more.
-func pumpRequestsObserver(in <-chan *ssh.Request, dst ssh.Channel) {
-	for req := range in {
-		if req.Type == "exec" || req.Type == "subsystem" {
-			if req.WantReply {
-				req.Reply(false, nil)
+func pumpRequestsObserver(in <-chan *ssh.Request, dst ssh.Channel, done <-chan struct{}) {
+	for {
+		select {
+		case req, ok := <-in:
+			if !ok {
+				return
 			}
-			continue
-		}
-		ok, err := dst.SendRequest(req.Type, req.WantReply, req.Payload)
-		if req.WantReply {
-			req.Reply(ok && err == nil, nil)
+			if req.Type == "exec" || req.Type == "subsystem" {
+				if req.WantReply {
+					req.Reply(false, nil)
+				}
+				continue
+			}
+			okr, err := dst.SendRequest(req.Type, req.WantReply, req.Payload)
+			if req.WantReply {
+				req.Reply(okr && err == nil, nil)
+			}
+		case <-done:
+			return
 		}
 	}
 }
