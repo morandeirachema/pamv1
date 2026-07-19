@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -169,6 +170,36 @@ type Config struct {
 // defaults, and returns an error if a required variable (API key, database URL,
 // or the master key when the local KEK provider is used) is missing.
 func Load() (*Config, error) {
+	var errs []string
+	// boolean parses a strict bool (true/false/1/0/t/f/…) and records an error for
+	// any other value rather than silently falling back — a garbage value on a
+	// security toggle (MFA, recording, air-gap) must fail loud, not fail open.
+	boolean := func(key string, def bool) bool {
+		v := os.Getenv(key)
+		if v == "" {
+			return def
+		}
+		b, err := strconv.ParseBool(v)
+		if err != nil {
+			errs = append(errs, fmt.Sprintf("%s: invalid boolean %q (use true or false)", key, v))
+			return def
+		}
+		return b
+	}
+	// integer parses an int and records an error for a non-integer value instead
+	// of silently disabling the feature it configures.
+	integer := func(key string, def int) int {
+		v := os.Getenv(key)
+		if v == "" {
+			return def
+		}
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			errs = append(errs, fmt.Sprintf("%s: invalid integer %q", key, v))
+			return def
+		}
+		return n
+	}
 	cfg := &Config{
 		ListenAddr:          getenv("PAM_LISTEN_ADDR", ":8080"),
 		DatabaseURL:         os.Getenv("PAM_DATABASE_URL"),
@@ -186,11 +217,11 @@ func Load() (*Config, error) {
 		LogFormat:           getenv("PAM_LOG_FORMAT", "json"),
 		TLSCert:             os.Getenv("PAM_TLS_CERT"),
 		TLSKey:              os.Getenv("PAM_TLS_KEY"),
-		AuthRatePerMin:      getenvInt("PAM_AUTH_RATE_LIMIT", 20),
-		RevealDisabled:      os.Getenv("PAM_REVEAL_DISABLED") == "true",
-		BreakGlassThreshold: getenvInt("PAM_BREAK_GLASS_THRESHOLD", 0),
-		BreakGlassShares:    getenvInt("PAM_BREAK_GLASS_SHARES", 5),
-		BreakGlassTTL:       time.Duration(getenvInt("PAM_BREAK_GLASS_TTL_MIN", 15)) * time.Minute,
+		AuthRatePerMin:      integer("PAM_AUTH_RATE_LIMIT", 20),
+		RevealDisabled:      boolean("PAM_REVEAL_DISABLED", false),
+		BreakGlassThreshold: integer("PAM_BREAK_GLASS_THRESHOLD", 0),
+		BreakGlassShares:    integer("PAM_BREAK_GLASS_SHARES", 5),
+		BreakGlassTTL:       time.Duration(integer("PAM_BREAK_GLASS_TTL_MIN", 15)) * time.Minute,
 		AlertWebhook:        os.Getenv("PAM_ALERT_WEBHOOK"),
 		AlertSyslog:         os.Getenv("PAM_ALERT_SYSLOG"),
 		AlertEmailSMTP:      os.Getenv("PAM_ALERT_EMAIL_SMTP"),
@@ -198,24 +229,24 @@ func Load() (*Config, error) {
 		AlertEmailTo:        os.Getenv("PAM_ALERT_EMAIL_TO"),
 		AlertEmailUser:      os.Getenv("PAM_ALERT_EMAIL_USER"),
 		AlertEmailPass:      os.Getenv("PAM_ALERT_EMAIL_PASS"),
-		MFARequired:         os.Getenv("PAM_MFA_REQUIRED") == "true",
-		RotateInterval:      time.Duration(getenvInt("PAM_ROTATE_INTERVAL_MIN", 0)) * time.Minute,
-		RotateMaxAge:        time.Duration(getenvInt("PAM_ROTATE_MAX_AGE_HOURS", 0)) * time.Hour,
-		RotateAfterSession:  os.Getenv("PAM_ROTATE_AFTER_SESSION") == "true",
-		RequireRecording:    os.Getenv("PAM_REQUIRE_RECORDING") == "true",
-		RequireApproval:     os.Getenv("PAM_REQUIRE_APPROVAL") == "true",
-		ApprovalWindow:      time.Duration(getenvInt("PAM_APPROVAL_WINDOW_MIN", 60)) * time.Minute,
-		AirGap:              os.Getenv("PAM_OT_AIRGAP") == "true",
-		CheckoutTTL:         time.Duration(getenvInt("PAM_CHECKOUT_TTL_MIN", 30)) * time.Minute,
+		MFARequired:         boolean("PAM_MFA_REQUIRED", false),
+		RotateInterval:      time.Duration(integer("PAM_ROTATE_INTERVAL_MIN", 0)) * time.Minute,
+		RotateMaxAge:        time.Duration(integer("PAM_ROTATE_MAX_AGE_HOURS", 0)) * time.Hour,
+		RotateAfterSession:  boolean("PAM_ROTATE_AFTER_SESSION", false),
+		RequireRecording:    boolean("PAM_REQUIRE_RECORDING", false),
+		RequireApproval:     boolean("PAM_REQUIRE_APPROVAL", false),
+		ApprovalWindow:      time.Duration(integer("PAM_APPROVAL_WINDOW_MIN", 60)) * time.Minute,
+		AirGap:              boolean("PAM_OT_AIRGAP", false),
+		CheckoutTTL:         time.Duration(integer("PAM_CHECKOUT_TTL_MIN", 30)) * time.Minute,
 		AllowedProtocols:    os.Getenv("PAM_ALLOWED_PROTOCOLS"),
-		WinRMHTTPS:          os.Getenv("PAM_WINRM_HTTPS") != "false", // default HTTPS
-		WinRMInsecure:       os.Getenv("PAM_WINRM_INSECURE_SKIP_VERIFY") == "true",
+		WinRMHTTPS:          boolean("PAM_WINRM_HTTPS", true), // default HTTPS
+		WinRMInsecure:       boolean("PAM_WINRM_INSECURE_SKIP_VERIFY", false),
 		WinRMNTLM:           os.Getenv("PAM_WINRM_AUTH") == "ntlm",
-		ProxyWinRM:          os.Getenv("PAM_PROXY_WINRM") == "true",
+		ProxyWinRM:          boolean("PAM_PROXY_WINRM", false),
 		GuacdAddr:           os.Getenv("PAM_GUACD_ADDR"),
 		GuacdRecordingPath:  os.Getenv("PAM_GUACD_RECORDING_PATH"),
 		GuacdRDPSecurity:    os.Getenv("PAM_GUACD_RDP_SECURITY"),
-		GuacdIgnoreCert:     os.Getenv("PAM_GUACD_IGNORE_CERT") == "true",
+		GuacdIgnoreCert:     boolean("PAM_GUACD_IGNORE_CERT", false),
 		KEKProvider:         getenv("PAM_KEK_PROVIDER", "local"),
 		TransitAddr:         os.Getenv("PAM_KEK_TRANSIT_ADDR"),
 		TransitToken:        os.Getenv("PAM_KEK_TRANSIT_TOKEN"),
@@ -232,7 +263,7 @@ func Load() (*Config, error) {
 		LDAPBindPassword:       os.Getenv("PAM_LDAP_BIND_PASSWORD"),
 		LDAPBaseDN:             os.Getenv("PAM_LDAP_BASE_DN"),
 		LDAPUserFilter:         os.Getenv("PAM_LDAP_USER_FILTER"),
-		LDAPInsecureSkipVerify: os.Getenv("PAM_LDAP_INSECURE_SKIP_VERIFY") == "true",
+		LDAPInsecureSkipVerify: boolean("PAM_LDAP_INSECURE_SKIP_VERIFY", false),
 		LDAPGroupAdmin:         os.Getenv("PAM_LDAP_GROUP_ADMIN"),
 		LDAPGroupUser:          os.Getenv("PAM_LDAP_GROUP_USER"),
 		LDAPGroupAuditor:       os.Getenv("PAM_LDAP_GROUP_AUDITOR"),
@@ -262,17 +293,38 @@ func Load() (*Config, error) {
 		OIDCRoleApprover: os.Getenv("PAM_OIDC_ROLE_APPROVER"),
 		PortalURL:        os.Getenv("PAM_PORTAL_URL"),
 	}
+	// Normalize the disable sentinel so "off"/"OFF"/"Off" all disable the proxy.
+	if strings.EqualFold(cfg.SSHAddr, "off") {
+		cfg.SSHAddr = "off"
+	}
+
 	// MasterKey is required only for the local KEK provider; a KMS-backed
 	// provider (e.g. vault-transit) holds the key material instead. The KEK
 	// factory validates provider-specific settings at startup.
 	if cfg.KEKProvider == "local" && cfg.MasterKey == "" {
-		return nil, fmt.Errorf("PAM_MASTER_KEY is required for the local KEK (generate one with: pam-server -genkey), or set PAM_KEK_PROVIDER")
+		errs = append(errs, "PAM_MASTER_KEY is required for the local KEK (generate one with: pam-server -genkey), or set PAM_KEK_PROVIDER")
 	}
 	if cfg.APIKey == "" {
-		return nil, fmt.Errorf("PAM_API_KEY is required")
+		errs = append(errs, "PAM_API_KEY is required")
 	}
 	if cfg.DatabaseURL == "" {
-		return nil, fmt.Errorf(`PAM_DATABASE_URL is required (postgres://... or "memory" for an ephemeral demo)`)
+		errs = append(errs, `PAM_DATABASE_URL is required (postgres://... or "memory" for an ephemeral demo)`)
+	}
+	// TLS must be all-or-nothing: one of cert/key set without the other would
+	// silently downgrade the control plane to plaintext HTTP.
+	if (cfg.TLSCert == "") != (cfg.TLSKey == "") {
+		errs = append(errs, "PAM_TLS_CERT and PAM_TLS_KEY must both be set (HTTPS) or both empty (HTTP)")
+	}
+	// Break-glass quorum needs a threshold of at least 2; 1 or a negative value
+	// would pass startup yet leave the M-of-N unseal path permanently disabled.
+	if cfg.BreakGlassThreshold != 0 && (cfg.BreakGlassThreshold < 2 || cfg.BreakGlassThreshold > 255) {
+		errs = append(errs, "PAM_BREAK_GLASS_THRESHOLD must be 0 (disabled) or between 2 and 255")
+	}
+	if cfg.BreakGlassThreshold >= 2 && cfg.BreakGlassShares < cfg.BreakGlassThreshold {
+		errs = append(errs, "PAM_BREAK_GLASS_SHARES must be >= PAM_BREAK_GLASS_THRESHOLD")
+	}
+	if len(errs) > 0 {
+		return nil, fmt.Errorf("config: %s", strings.Join(errs, "; "))
 	}
 	return cfg, nil
 }
@@ -281,17 +333,6 @@ func Load() (*Config, error) {
 func getenv(key, def string) string {
 	if v := os.Getenv(key); v != "" {
 		return v
-	}
-	return def
-}
-
-// getenvInt returns the environment variable key parsed as an int, or def when
-// it is unset, empty, or not a valid integer.
-func getenvInt(key string, def int) int {
-	if v := os.Getenv(key); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			return n
-		}
 	}
 	return def
 }
