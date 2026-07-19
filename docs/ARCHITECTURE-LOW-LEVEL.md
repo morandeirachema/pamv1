@@ -28,7 +28,7 @@ internal/
   auth/        # roles, capabilities, Principal, Resolver (RBAC)
   store/       # Store interface + domain types + CredentialAAD
     memstore/  # in-memory impl (tests, demo)
-    pgstore/   # PostgreSQL impl (embedded schema.sql)
+    pgstore/   # PostgreSQL impl + embedded versioned migrations
   api/         # REST handlers, authz middleware, user administration
   proxy/       # SSH gateway, JIT injection, session recording, host key
   web/         # embedded AS/400 portal (static/index.html)
@@ -65,8 +65,12 @@ Interface `Store` with `memstore` and `pgstore` implementations. Domain types:
 `CredentialAAD(targetID) = "target:<id>"` — shared by `api` and `proxy` so vault
 AAD matches on both encrypt and decrypt paths.
 
-Schema (`pgstore/schema.sql`, applied idempotently on startup): `targets`,
-`credentials` (FK `ON DELETE CASCADE`), `audit_events`.
+Schema is applied by an embedded **migration runner** (`pgstore/migrate.go`):
+ordered `migrations/*.sql` files run once each in a transaction, tracked in a
+`schema_migrations` table. `0001_init.sql` is the idempotent baseline (safe on a
+pre-migrations database); later changes are new numbered files. Tables: `targets`,
+`credentials` (FK `ON DELETE CASCADE`), `target_grants`, `audit_events`, `users`,
+`sessions`, `mfa_enrollments`, `mfa_recovery_codes`.
 
 ### 2.3 `auth` *(Phase 3a)*
 
@@ -339,6 +343,7 @@ secrets. Format `json` (SIEM) or `text` (humans); collect from stdout.
 
 | Date | Change |
 |---|---|
+| 2026-07-19 | Phase 5 done: embedded versioned migrations (`pgstore/migrate.go`, `schema_migrations`, `migrations/0001_init.sql`) replacing the ad-hoc startup schema |
 | 2026-07-19 | Phase 2: live session registry (`internal/session`) — `GET /api/sessions` + `DELETE /api/sessions/{id}` (kill-switch); proxy + RDP register live sessions |
 | 2026-07-18 | Phase 2: per-target authorization (`store.TargetGrant`, `auth.CanConnectTarget`, `/api/targets/{id}/grants`, enforced in proxy/WinRM/RDP); reveal lockdown (`PAM_REVEAL_DISABLED`) |
 | 2026-07-18 | Phase 5: vault KEK rotation (`internal/maint`, `pam-server -rotate-kek`); store `UpdateCredentialSecretEnc` + `ListMFAEnrollments` |

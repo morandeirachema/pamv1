@@ -5,7 +5,6 @@ package pgstore
 
 import (
 	"context"
-	_ "embed"
 	"errors"
 	"log/slog"
 	"strings"
@@ -18,9 +17,6 @@ import (
 	"github.com/morandeirachema/pamv1/internal/logging"
 	"github.com/morandeirachema/pamv1/internal/store"
 )
-
-//go:embed schema.sql
-var schema string
 
 const (
 	pgUniqueViolation     = "23505"
@@ -50,7 +46,7 @@ func Open(ctx context.Context, url string) (*PGStore, error) {
 		pool.Close()
 		return nil, err
 	}
-	if _, err := pool.Exec(ctx, schema); err != nil {
+	if err := migrate(ctx, pool); err != nil {
 		pool.Close()
 		return nil, err
 	}

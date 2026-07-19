@@ -68,15 +68,15 @@ The flagship: users connect *through* pamv1, never holding the credential.
 - [ ] Kerberos WinRM auth
 - [ ] Interactive WinRM/PowerShell shell through the SSH proxy (beyond one-shot commands)
 
-## Phase 5 — Hardening: database, vault, transport ⬜
+## Phase 5 — Hardening: database, vault, transport ✅
 
 - [x] **Envelope encryption** with a pluggable KEK: per-secret data keys wrapped by a Key Encryption Key; `local` KEK (dev/test) + **HashiCorp Vault Transit** KEK (production, KEK never leaves the KMS)
-- [ ] More KEK providers on the same interface: AWS KMS, PKCS#11 HSM
 - [x] **Vault key rotation** (`pam-server -rotate-kek`, `internal/maint`): re-encrypts all credentials + MFA secrets from `PAM_MASTER_KEY` to `PAM_NEW_MASTER_KEY`, preserving AAD
-- [x] Hardened Postgres guidance: scram-sha-256 enforced (compose), TLS `verify-full` + least-privilege role + [pgAudit](https://www.pgaudit.org/) documented; **backup/restore runbook** ([docs](docs/BACKUP-AND-RESTORE.md))
-- [ ] Versioned migrations (tern/goose) replacing the idempotent startup schema
+- [x] Hardened Postgres guidance: scram-sha-256 enforced (compose), TLS `verify-full` + least-privilege role + [pgAudit](https://www.pgaudit.org/) documented
+- [x] **Versioned migrations** (embedded, `schema_migrations` table, ordered `migrations/*.sql` applied in a transaction) replacing the ad-hoc startup schema
 - [x] **Native HTTPS** (`PAM_TLS_CERT`/`PAM_TLS_KEY`, TLS 1.2+), **security headers** (nosniff, frame-deny, referrer, HSTS), **rate limiting** on auth endpoints (`PAM_AUTH_RATE_LIMIT`)
-- [ ] Backup/restore runbook with encrypted backups
+- [x] **Backup/restore runbook** with encrypted backups ([docs](docs/BACKUP-AND-RESTORE.md))
+- [ ] _(optional extension, interface ready)_ More KEK providers: AWS KMS, PKCS#11 HSM
 
 ## Phase 6 — Break-glass v2 ⬜
 
