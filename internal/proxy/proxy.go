@@ -88,9 +88,10 @@ type Proxy struct {
 	upstreamDial func(addr string) (net.Conn, error)
 	chain        *recordChain
 
-	mu    sync.Mutex
-	ln    net.Listener
-	conns map[net.Conn]struct{} // accepted client connections, for shutdown force-close
+	mu      sync.Mutex
+	ln      net.Listener
+	conns   map[net.Conn]struct{} // accepted client connections, for shutdown force-close
+	closing bool                  // set once shutdown has begun force-closing connections
 }
 
 // New constructs a Proxy from the store, vault, auth resolver and cfg. It
@@ -209,6 +210,7 @@ func (p *Proxy) ListenAndServe(ctx context.Context, addr string) error {
 func (p *Proxy) Serve(ctx context.Context, ln net.Listener) error {
 	p.mu.Lock()
 	p.ln = ln
+	p.closing = false // reset in case this Proxy is served again
 	p.mu.Unlock()
 
 	go func() {
@@ -243,6 +245,13 @@ func (p *Proxy) Serve(ctx context.Context, ln net.Listener) error {
 // trackConn records an accepted client connection so shutdown can force-close it.
 func (p *Proxy) trackConn(c net.Conn) {
 	p.mu.Lock()
+	if p.closing {
+		// Shutdown already force-closed the tracked set; close this straggler too
+		// so it cannot slip past the drain and block Serve's wg.Wait.
+		p.mu.Unlock()
+		c.Close()
+		return
+	}
 	p.conns[c] = struct{}{}
 	p.mu.Unlock()
 }
@@ -259,6 +268,7 @@ func (p *Proxy) untrackConn(c net.Conn) {
 // and unblocks the session copies — bounding Serve's shutdown drain.
 func (p *Proxy) closeActiveConns() {
 	p.mu.Lock()
+	p.closing = true // any connection tracked after this point closes itself
 	conns := make([]net.Conn, 0, len(p.conns))
 	for c := range p.conns {
 		conns = append(conns, c)
