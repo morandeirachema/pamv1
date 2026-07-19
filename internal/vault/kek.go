@@ -73,23 +73,29 @@ func (k *LocalKEK) ID() string { return "local" }
 
 // KEKOptions selects and configures a KEK provider.
 type KEKOptions struct {
-	Provider  string // "local" (default, dev/test) | "vault-transit"
+	Provider  string // "local" (default, dev/test) | "vault-transit" | "aws-kms"
 	MasterKey string // local provider
 
 	TransitAddr  string // vault-transit provider
 	TransitToken string
 	TransitKey   string
+
+	AWSRegion   string // aws-kms provider
+	AWSKMSKeyID string
 }
 
 // NewKEK builds a KEK from options. "local" uses PAM_MASTER_KEY (dev/test);
-// "vault-transit" uses HashiCorp Vault's Transit secrets engine (production).
+// "vault-transit" uses HashiCorp Vault's Transit engine; "aws-kms" uses AWS KMS
+// (both production, the key never leaves the KMS).
 func NewKEK(o KEKOptions) (KEK, error) {
 	switch o.Provider {
 	case "", "local":
 		return NewLocalKEK(o.MasterKey)
 	case "vault-transit":
 		return NewTransitKEK(o.TransitAddr, o.TransitToken, o.TransitKey)
+	case "aws-kms":
+		return NewAWSKMSKEK(context.Background(), o.AWSRegion, o.AWSKMSKeyID)
 	default:
-		return nil, fmt.Errorf("vault: unknown KEK provider %q (want local|vault-transit)", o.Provider)
+		return nil, fmt.Errorf("vault: unknown KEK provider %q (want local|vault-transit|aws-kms)", o.Provider)
 	}
 }

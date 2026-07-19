@@ -76,7 +76,8 @@ The flagship: users connect *through* pamv1, never holding the credential.
 - [x] **Versioned migrations** (embedded, `schema_migrations` table, ordered `migrations/*.sql` applied in a transaction) replacing the ad-hoc startup schema
 - [x] **Native HTTPS** (`PAM_TLS_CERT`/`PAM_TLS_KEY`, TLS 1.2+), **security headers** (nosniff, frame-deny, referrer, HSTS), **rate limiting** on auth endpoints (`PAM_AUTH_RATE_LIMIT`)
 - [x] **Backup/restore runbook** with encrypted backups ([docs](docs/BACKUP-AND-RESTORE.md))
-- [ ] _(optional extension, interface ready)_ More KEK providers: AWS KMS, PKCS#11 HSM
+- [x] **AWS KMS KEK** (`aws-kms` provider): the data key is wrapped/unwrapped by KMS (`PAM_KEK_AWS_KEY_ID`/`PAM_KEK_AWS_REGION`); the CMK never leaves KMS
+- [ ] _(optional extension, interface ready)_ PKCS#11 HSM KEK provider
 
 ## Phase 6 — Break-glass v2 ⬜
 

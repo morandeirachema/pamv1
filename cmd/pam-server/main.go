@@ -211,6 +211,8 @@ func run() error {
 		TransitAddr:  cfg.TransitAddr,
 		TransitToken: cfg.TransitToken,
 		TransitKey:   cfg.TransitKey,
+		AWSRegion:    cfg.AWSRegion,
+		AWSKMSKeyID:  cfg.AWSKMSKeyID,
 	})
 	if err != nil {
 		return err

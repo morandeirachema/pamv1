@@ -51,8 +51,10 @@ The **KEK is pluggable** (`KEK` interface, `NewKEK(KEKOptions)`):
   the key sits in an env var.
 - `TransitKEK` — HashiCorp [Vault Transit](https://developer.hashicorp.com/vault/docs/secrets/transit)
   over HTTPS (`transit.go`); the KEK never leaves Vault, wrap/unwrap round-trip
-  the data key. **Production / vendor-aligned.** AWS KMS / PKCS#11 HSM are the
-  next providers (same interface).
+  the data key. **Production / vendor-aligned.**
+- `AWSKMSKEK` — AWS KMS (`awskms.go`): the data key is Encrypt/Decrypt'd by KMS,
+  so the CMK never leaves KMS. **Production.** The `kmsAPI` client is an interface
+  (tests inject a fake). PKCS#11 HSM is the next provider on the same interface.
 
 `GenerateMasterKey()` → 32 random bytes, urlsafe-base64 (seeds the local KEK).
 Selected by `PAM_KEK_PROVIDER` (`local` | `vault-transit`).
@@ -256,6 +258,7 @@ the client channel closes.
 | `PAM_KEK_PROVIDER` | `local` | vault KEK: `local` (dev/test) or `vault-transit` |
 | `PAM_MASTER_KEY` | — (local only) | local KEK key (base64, dev/test) |
 | `PAM_KEK_TRANSIT_ADDR` / `_TOKEN` / `_KEY` | — | HashiCorp Vault Transit KEK (production) |
+| `PAM_KEK_AWS_KEY_ID` / `_AWS_REGION` | — | AWS KMS KEK (`aws-kms` provider) |
 | `PAM_LDAP_URL` | — (disabled) | AD/LDAP login; `ldaps://…` enables `/api/login` |
 | `PAM_LDAP_BIND_DN` / `_BIND_PASSWORD` | — | service account for user search |
 | `PAM_LDAP_BASE_DN` / `_USER_FILTER` | — / `(sAMAccountName=%s)` | search base + filter |

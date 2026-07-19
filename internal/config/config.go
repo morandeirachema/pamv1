@@ -57,6 +57,9 @@ type Config struct {
 	TransitAddr  string
 	TransitToken string
 	TransitKey   string
+	// AWS* configure the AWS KMS KEK (production).
+	AWSKMSKeyID string
+	AWSRegion   string
 
 	// LDAP* configure Active Directory / LDAP login. Empty LDAPURL disables it.
 	LDAPURL                string
@@ -123,6 +126,8 @@ func Load() (*Config, error) {
 		TransitAddr:        os.Getenv("PAM_KEK_TRANSIT_ADDR"),
 		TransitToken:       os.Getenv("PAM_KEK_TRANSIT_TOKEN"),
 		TransitKey:         os.Getenv("PAM_KEK_TRANSIT_KEY"),
+		AWSKMSKeyID:        os.Getenv("PAM_KEK_AWS_KEY_ID"),
+		AWSRegion:          os.Getenv("PAM_KEK_AWS_REGION"),
 
 		LDAPURL:                os.Getenv("PAM_LDAP_URL"),
 		LDAPBindDN:             os.Getenv("PAM_LDAP_BIND_DN"),
