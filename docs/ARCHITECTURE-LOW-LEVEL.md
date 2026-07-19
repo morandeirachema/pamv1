@@ -196,6 +196,18 @@ endpoints arrive with the OT/approval phase).
   - `Rotator`/`Verifier` are interfaces keyed by protocol in `Options`; tests
     inject fakes, and the SSH connector is proven against an in-process SSH server.
 
+- **Access-request approval** (`approval_handlers.go`, Phase 8 — OT 4-eyes):
+  `POST /api/access-requests` (needs `CapConnect`) files a request; `GET
+  /api/access-requests` + `POST /api/access-requests/{id}/{approve,deny}` (needs
+  `CapApprove`) let an approver decide. The **four-eyes** rule refuses
+  self-approval (approver ≠ requester); an approval is valid for
+  `PAM_APPROVAL_WINDOW_MIN`. Enforcement (`enforceApproval`): when a target sets
+  `require_approval` or the global `PAM_REQUIRE_APPROVAL` is on, the WinRM/RDP
+  handlers and the SSH proxy require `store.HasActiveApproval` before brokering;
+  **break-glass bypasses**. Decisions audit + fire the `alert.Notifier`.
+- **Air-gap mode** (`Options.AirGap`, `PAM_OT_AIRGAP`): forces the alerter to
+  `alert.Noop` so an isolated OT deployment makes no outbound calls.
+
 ### 2.5 `proxy`  *(Phase 2, RBAC in 3a)*
 
 SSH gateway. See §3 for the wire-level flow.
@@ -304,6 +316,9 @@ the client channel closes.
 | `PAM_MFA_REQUIRED` | `false` | require a confirmed TOTP factor for password login |
 | `PAM_ROTATE_INTERVAL_MIN` | `0` (off) | credential-lifecycle worker interval (minutes) |
 | `PAM_ROTATE_MAX_AGE_HOURS` | `0` (report only) | auto-rotate password credentials older than this |
+| `PAM_REQUIRE_APPROVAL` | `false` | OT: gate every target behind an approved access request (4-eyes) |
+| `PAM_APPROVAL_WINDOW_MIN` | `60` | how long an approved access request stays valid |
+| `PAM_OT_AIRGAP` | `false` | disable all outbound calls (alert webhooks) for air-gapped sites |
 | `PAM_WINRM_HTTPS` | `true` | use HTTPS (5986) for WinRM |
 | `PAM_WINRM_INSECURE_SKIP_VERIFY` | `false` | skip WinRM TLS verify (dev only) |
 | `PAM_WINRM_AUTH` | `basic` | `basic` or `ntlm` |
@@ -332,6 +347,7 @@ secrets. Format `json` (SIEM) or `text` (humans); collect from stdout.
 `credential.delete` · `credential.reveal_denied` · `grant.create` · `grant.delete` ·
 `winrm.denied` · `session.kill` · `breakglass.unseal` · `user.create` · `user.delete` · `login` · `logout` ·
 `credential.rotate` · `credential.rotate_failed` · `credential.reconcile` · `credential.reconcile_scan` · `credential.remediate` ·
+`access.request` · `access.approve` · `access.deny` · `access.denied` · `access.decision_denied` ·
 `mfa.enroll` · `mfa.confirm` · `mfa.disable` · `mfa.recovery_generated` ·
 `mfa.recovery_used` · `winrm.run` · `winrm.error` · `rdp.connect` · `rdp.end` ·
 `rdp.error` · `authz.denied` · `breakglass.access` · `session.start` ·
@@ -386,6 +402,7 @@ secrets. Format `json` (SIEM) or `text` (humans); collect from stdout.
 
 | Date | Change |
 |---|---|
+| 2026-07-19 | Phase 8: OT adaptation — access-request approval workflow (`approval_handlers.go`, `store.AccessRequest`, migration `0002`, 4-eyes, enforced on proxy/WinRM/RDP), air-gap mode (`PAM_OT_AIRGAP`), `docs/OT-DEPLOYMENT.md` |
 | 2026-07-19 | Phase 7: credential lifecycle — `internal/rotate` (SSH/WinRM `Rotator`/`Verifier`, strong password gen), `POST /api/credentials/{id}/rotate`, `/reconcile[?remediate]`, `GET /api/reconcile`, background worker (`scheduler.go`), store `RotateCredentialSecret` |
 | 2026-07-19 | Phase 6: break-glass v2 — `shamir` (M-of-N quorum), `pam-server -split-key`, `POST /api/breakglass/unseal` (auto-expiring session), `alert` webhook on break-glass access/unseal; AWS KMS KEK (`awskms.go`) |
 | 2026-07-19 | Phase 5 done: embedded versioned migrations (`pgstore/migrate.go`, `schema_migrations`, `migrations/0001_init.sql`) replacing the ad-hoc startup schema |

@@ -39,6 +39,9 @@ type Config struct {
 	RecordingDir string     // where session recordings are written
 	DialTimeout  time.Duration
 	Sessions     *session.Registry // live-session registry (optional)
+	// RequireApproval gates every session behind an approved access request
+	// (global OT policy); per-target Target.RequireApproval also applies.
+	RequireApproval bool
 }
 
 type Proxy struct {
@@ -51,6 +54,7 @@ type Proxy struct {
 	recordingDir string
 	dialTimeout  time.Duration
 	sessions     *session.Registry
+	requireApprv bool
 	chain        *recordChain
 
 	mu sync.Mutex
@@ -79,6 +83,7 @@ func New(st store.Store, v *vault.Vault, resolver *auth.Resolver, cfg Config) (*
 		recordingDir: cfg.RecordingDir,
 		dialTimeout:  cfg.DialTimeout,
 		sessions:     cfg.Sessions,
+		requireApprv: cfg.RequireApproval,
 		chain:        newRecordChain(cfg.RecordingDir),
 	}
 	p.sshCfg = &ssh.ServerConfig{PasswordCallback: p.authenticate}
@@ -106,6 +111,9 @@ func (p *Proxy) authenticate(c ssh.ConnMetadata, password []byte) (*ssh.Permissi
 	}
 	if principal.EnrollOnly {
 		ext["enroll_only"] = "true"
+	}
+	if principal.BreakGlass {
+		ext["break_glass"] = "true"
 	}
 	return &ssh.Permissions{Extensions: ext}, nil
 }
@@ -216,6 +224,22 @@ func (p *Proxy) handleConn(ctx context.Context, nConn net.Conn) {
 		p.audit(ctx, actor, "session.denied", "target:"+target.Name+" reason:target-policy")
 		rejectAll(chans, ssh.Prohibited, "pamv1: not authorized for this target")
 		return
+	}
+
+	// Approval gate (4-eyes / OT maintenance window). Break-glass bypasses.
+	if (p.requireApprv || target.RequireApproval) && ext["break_glass"] != "true" {
+		approved, aerr := p.store.HasActiveApproval(ctx, actor, target.ID, time.Now())
+		if aerr != nil {
+			p.log.Error("approval check failed", "target", target.Name, "err", aerr)
+			rejectAll(chans, ssh.Prohibited, "pamv1: approval check failed")
+			return
+		}
+		if !approved {
+			p.log.Warn("session denied: approval required", "actor", actor, "target", target.Name, "remote", remote)
+			p.audit(ctx, actor, "access.denied", "target:"+target.Name+" reason:approval-required")
+			rejectAll(chans, ssh.Prohibited, "pamv1: connection requires an approved access request")
+			return
+		}
 	}
 
 	upstream, err := p.dialUpstream(target, cred, secret)

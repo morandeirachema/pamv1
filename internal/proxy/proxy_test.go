@@ -399,6 +399,73 @@ func TestTargetGrantDeniesUngranted(t *testing.T) {
 	}
 }
 
+// TestApprovalGateProxy proves the proxy honors the 4-eyes approval gate: with
+// RequireApproval on, a session is denied until an approved access request
+// exists for the actor+target.
+func TestApprovalGateProxy(t *testing.T) {
+	host, port := startUpstream(t, upstreamUser, upstreamSecret, targetOutput)
+	st := memstore.New()
+	v := mustVault(t)
+	target := seedTarget(t, st, v, host, port)
+
+	resolver, err := auth.NewResolver(st, proxyAPIKey, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	px, err := proxy.New(st, v, resolver, proxy.Config{
+		HostKey: mustSigner(t), RecordingDir: t.TempDir(), DialTimeout: 5 * time.Second,
+		RequireApproval: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	go px.Serve(ctx, ln)
+	addr := ln.Addr().String()
+
+	// No approval yet: authentication passes but the session is denied.
+	client, err := dialProxy(t, addr, "web-01", proxyAPIKey)
+	if err != nil {
+		t.Fatalf("auth should pass: %v", err)
+	}
+	if sess, err := client.NewSession(); err == nil {
+		sess.Close()
+		client.Close()
+		t.Fatal("session must be denied without an approved request")
+	}
+	client.Close()
+
+	// Seed an approved, unexpired request for the proxy actor (bootstrap-admin).
+	if err := st.CreateAccessRequest(context.Background(), &store.AccessRequest{
+		Requester: "bootstrap-admin", TargetID: target.ID, Status: "approved",
+		ExpiresAt: time.Now().Add(time.Hour),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	client2, err := dialProxy(t, addr, "web-01", proxyAPIKey)
+	if err != nil {
+		t.Fatalf("auth should pass: %v", err)
+	}
+	defer client2.Close()
+	sess, err := client2.NewSession()
+	if err != nil {
+		t.Fatalf("session must be allowed after approval: %v", err)
+	}
+	defer sess.Close()
+	out, err := sess.Output("run")
+	if err != nil {
+		t.Fatalf("exec: %v", err)
+	}
+	if string(out) != targetOutput {
+		t.Fatalf("output = %q, want %q", out, targetOutput)
+	}
+}
+
 func fieldAfter(s, key string) string {
 	i := strings.Index(s, key)
 	if i < 0 {

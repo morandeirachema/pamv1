@@ -92,9 +92,9 @@ func pgCode(err error) string {
 
 func (s *PGStore) CreateTarget(ctx context.Context, t *store.Target) error {
 	err := s.pool.QueryRow(ctx,
-		`INSERT INTO targets (name, host, port, os_type, protocol)
-		 VALUES ($1, $2, $3, $4, $5) RETURNING id, created_at`,
-		t.Name, t.Host, t.Port, t.OSType, t.Protocol,
+		`INSERT INTO targets (name, host, port, os_type, protocol, require_approval)
+		 VALUES ($1, $2, $3, $4, $5, $6) RETURNING id, created_at`,
+		t.Name, t.Host, t.Port, t.OSType, t.Protocol, t.RequireApproval,
 	).Scan(&t.ID, &t.CreatedAt)
 	if pgCode(err) == pgUniqueViolation {
 		return store.ErrConflict
@@ -104,7 +104,7 @@ func (s *PGStore) CreateTarget(ctx context.Context, t *store.Target) error {
 
 func (s *PGStore) ListTargets(ctx context.Context) ([]store.Target, error) {
 	rows, err := s.pool.Query(ctx,
-		`SELECT id, name, host, port, os_type, protocol, created_at
+		`SELECT id, name, host, port, os_type, protocol, require_approval, created_at
 		 FROM targets ORDER BY id`)
 	if err != nil {
 		return nil, err
@@ -114,7 +114,7 @@ func (s *PGStore) ListTargets(ctx context.Context) ([]store.Target, error) {
 
 func (s *PGStore) GetTarget(ctx context.Context, id int64) (*store.Target, error) {
 	rows, err := s.pool.Query(ctx,
-		`SELECT id, name, host, port, os_type, protocol, created_at
+		`SELECT id, name, host, port, os_type, protocol, require_approval, created_at
 		 FROM targets WHERE id = $1`, id)
 	if err != nil {
 		return nil, err
@@ -234,6 +234,68 @@ func (s *PGStore) DeleteCredential(ctx context.Context, id int64) error {
 		return store.ErrNotFound
 	}
 	return err
+}
+
+func (s *PGStore) CreateAccessRequest(ctx context.Context, ar *store.AccessRequest) error {
+	if ar.Status == "" {
+		ar.Status = "pending"
+	}
+	err := s.pool.QueryRow(ctx,
+		`INSERT INTO access_requests (requester, target_id, reason, status, expires_at)
+		 VALUES ($1, $2, $3, $4, $5) RETURNING id, created_at`,
+		ar.Requester, ar.TargetID, ar.Reason, ar.Status, ar.ExpiresAt,
+	).Scan(&ar.ID, &ar.CreatedAt)
+	if pgCode(err) == pgForeignKeyViolation {
+		return store.ErrNotFound
+	}
+	return err
+}
+
+func (s *PGStore) GetAccessRequest(ctx context.Context, id int64) (*store.AccessRequest, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT id, requester, target_id, reason, status, approver, created_at, decided_at, expires_at
+		 FROM access_requests WHERE id = $1`, id)
+	if err != nil {
+		return nil, err
+	}
+	ar, err := pgx.CollectExactlyOneRow(rows, scanAccessRequest)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, store.ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &ar, nil
+}
+
+func (s *PGStore) ListAccessRequests(ctx context.Context, status string) ([]store.AccessRequest, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT id, requester, target_id, reason, status, approver, created_at, decided_at, expires_at
+		 FROM access_requests WHERE ($1 = '' OR status = $1) ORDER BY id`, status)
+	if err != nil {
+		return nil, err
+	}
+	return pgx.CollectRows(rows, scanAccessRequest)
+}
+
+func (s *PGStore) DecideAccessRequest(ctx context.Context, id int64, status, approver string, decidedAt time.Time) error {
+	tag, err := s.pool.Exec(ctx,
+		`UPDATE access_requests SET status = $1, approver = $2, decided_at = $3 WHERE id = $4`,
+		status, approver, decidedAt.UTC(), id)
+	if err == nil && tag.RowsAffected() == 0 {
+		return store.ErrNotFound
+	}
+	return err
+}
+
+func (s *PGStore) HasActiveApproval(ctx context.Context, requester string, targetID int64, now time.Time) (bool, error) {
+	var exists bool
+	err := s.pool.QueryRow(ctx,
+		`SELECT EXISTS(
+			SELECT 1 FROM access_requests
+			WHERE requester = $1 AND target_id = $2 AND status = 'approved' AND expires_at > $3)`,
+		requester, targetID, now.UTC()).Scan(&exists)
+	return exists, err
 }
 
 func (s *PGStore) AppendAudit(ctx context.Context, e *store.AuditEvent) error {
@@ -435,8 +497,15 @@ func (s *PGStore) Close() {
 
 func scanTarget(row pgx.CollectableRow) (store.Target, error) {
 	var t store.Target
-	err := row.Scan(&t.ID, &t.Name, &t.Host, &t.Port, &t.OSType, &t.Protocol, &t.CreatedAt)
+	err := row.Scan(&t.ID, &t.Name, &t.Host, &t.Port, &t.OSType, &t.Protocol, &t.RequireApproval, &t.CreatedAt)
 	return t, err
+}
+
+func scanAccessRequest(row pgx.CollectableRow) (store.AccessRequest, error) {
+	var ar store.AccessRequest
+	err := row.Scan(&ar.ID, &ar.Requester, &ar.TargetID, &ar.Reason, &ar.Status,
+		&ar.Approver, &ar.CreatedAt, &ar.DecidedAt, &ar.ExpiresAt)
+	return ar, err
 }
 
 func scanCredential(row pgx.CollectableRow) (store.Credential, error) {

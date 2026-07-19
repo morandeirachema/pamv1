@@ -58,6 +58,18 @@ func (s *Server) rdpTunnel(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, "not authorized for this target")
 		return
 	}
+	if s.requireApprovalFor(target) && !principal.BreakGlass {
+		approved, aerr := s.store.HasActiveApproval(r.Context(), principal.Name, target.ID, time.Now())
+		if aerr != nil {
+			storeError(w, aerr)
+			return
+		}
+		if !approved {
+			s.audit(withPrincipal(r.Context(), principal), "access.denied", "target:"+target.Name+" reason:approval-required")
+			writeError(w, http.StatusForbidden, "connection requires an approved access request")
+			return
+		}
+	}
 	creds, err := s.store.ListCredentials(r.Context(), target.ID)
 	if err != nil {
 		storeError(w, err)

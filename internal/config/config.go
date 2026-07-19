@@ -55,6 +55,14 @@ type Config struct {
 	RotateInterval time.Duration
 	RotateMaxAge   time.Duration
 
+	// OT hardening (Phase 8). RequireApproval gates every target's connect paths
+	// behind an approved access request (4-eyes / maintenance window).
+	// ApprovalWindow is how long an approval stays valid. AirGap disables all
+	// outbound network calls (alert webhooks) for isolated deployments.
+	RequireApproval bool
+	ApprovalWindow  time.Duration
+	AirGap          bool
+
 	// WinRMHTTPS uses HTTPS (5986) for WinRM; WinRMInsecure skips TLS verify (dev).
 	WinRMHTTPS    bool
 	WinRMInsecure bool
@@ -138,6 +146,9 @@ func Load() (*Config, error) {
 		MFARequired:         os.Getenv("PAM_MFA_REQUIRED") == "true",
 		RotateInterval:      time.Duration(getenvInt("PAM_ROTATE_INTERVAL_MIN", 0)) * time.Minute,
 		RotateMaxAge:        time.Duration(getenvInt("PAM_ROTATE_MAX_AGE_HOURS", 0)) * time.Hour,
+		RequireApproval:     os.Getenv("PAM_REQUIRE_APPROVAL") == "true",
+		ApprovalWindow:      time.Duration(getenvInt("PAM_APPROVAL_WINDOW_MIN", 60)) * time.Minute,
+		AirGap:              os.Getenv("PAM_OT_AIRGAP") == "true",
 		WinRMHTTPS:          os.Getenv("PAM_WINRM_HTTPS") != "false", // default HTTPS
 		WinRMInsecure:       os.Getenv("PAM_WINRM_INSECURE_SKIP_VERIFY") == "true",
 		WinRMNTLM:           os.Getenv("PAM_WINRM_AUTH") == "ntlm",

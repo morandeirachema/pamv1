@@ -95,6 +95,16 @@ type Options struct {
 	// Verifiers checks a vaulted secret still authenticates, keyed by protocol.
 	// Defaults are built from the SSH/WinRM connectors.
 	Verifiers map[string]rotate.Verifier
+	// RequireApproval, when true, gates every target's connect paths behind an
+	// approved access request (global OT maintenance-window / 4-eyes policy).
+	// Individual targets can also opt in via Target.RequireApproval.
+	RequireApproval bool
+	// ApprovalWindow is how long an approved access request stays valid
+	// (default 60m).
+	ApprovalWindow time.Duration
+	// AirGap disables all outbound network calls (alert webhooks) for isolated
+	// OT/air-gapped deployments.
+	AirGap bool
 }
 
 type Server struct {
@@ -121,6 +131,9 @@ type Server struct {
 	alerter            alert.Notifier
 	rotators           map[string]rotate.Rotator
 	verifiers          map[string]rotate.Verifier
+	approvalRequired   bool
+	approvalWindow     time.Duration
+	airGap             bool
 	log                *slog.Logger
 	mux                *http.ServeMux
 	handler            http.Handler
@@ -153,8 +166,13 @@ func New(st store.Store, v *vault.Vault, resolver *auth.Resolver, authn auth.Aut
 		bgTTL = 15 * time.Minute
 	}
 	alerter := opts.Alerter
-	if alerter == nil {
+	if alerter == nil || opts.AirGap {
+		// Air-gapped deployments must make no outbound calls; drop the webhook.
 		alerter = alert.Noop{}
+	}
+	approvalWindow := opts.ApprovalWindow
+	if approvalWindow <= 0 {
+		approvalWindow = 60 * time.Minute
 	}
 	rotators := opts.Rotators
 	if rotators == nil {
@@ -194,6 +212,9 @@ func New(st store.Store, v *vault.Vault, resolver *auth.Resolver, authn auth.Aut
 		alerter:            alerter,
 		rotators:           rotators,
 		verifiers:          verifiers,
+		approvalRequired:   opts.RequireApproval,
+		approvalWindow:     approvalWindow,
+		airGap:             opts.AirGap,
 		log:                logging.Component("api"),
 		mux:                http.NewServeMux(),
 	}
@@ -287,6 +308,13 @@ func (s *Server) routes() {
 	s.mux.Handle("POST /api/credentials/{id}/reconcile", s.authz(auth.CapManageCredentials, s.reconcileCredentialHandler))
 	s.mux.Handle("GET /api/reconcile", s.authz(auth.CapManageCredentials, s.reconcileAllHandler))
 	s.mux.Handle("DELETE /api/credentials/{id}", s.authz(auth.CapManageCredentials, s.deleteCredential))
+
+	// Access-request approval workflow (4-eyes). A connect-capable user files a
+	// request; an approver (a *different* principal) approves or denies it.
+	s.mux.Handle("POST /api/access-requests", s.authz(auth.CapConnect, s.createAccessRequest))
+	s.mux.Handle("GET /api/access-requests", s.authz(auth.CapApprove, s.listAccessRequests))
+	s.mux.Handle("POST /api/access-requests/{id}/approve", s.authz(auth.CapApprove, s.approveAccessRequest))
+	s.mux.Handle("POST /api/access-requests/{id}/deny", s.authz(auth.CapApprove, s.denyAccessRequest))
 
 	s.mux.Handle("GET /api/audit", s.authz(auth.CapReadAudit, s.listAudit))
 

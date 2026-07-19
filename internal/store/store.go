@@ -30,13 +30,32 @@ func MFAAAD(username string) string {
 // Target is a machine reachable through the PAM (a future proxy session
 // connects to it injecting a vaulted credential just-in-time).
 type Target struct {
-	ID        int64     `json:"id"`
-	Name      string    `json:"name"`
-	Host      string    `json:"host"`
-	Port      int       `json:"port"`
-	OSType    string    `json:"os_type"`  // linux | windows
-	Protocol  string    `json:"protocol"` // ssh | winrm | rdp
-	CreatedAt time.Time `json:"created_at"`
+	ID       int64  `json:"id"`
+	Name     string `json:"name"`
+	Host     string `json:"host"`
+	Port     int    `json:"port"`
+	OSType   string `json:"os_type"`  // linux | windows
+	Protocol string `json:"protocol"` // ssh | winrm | rdp
+	// RequireApproval gates connections behind an approved access request
+	// (4-eyes / maintenance-window control, used in OT deployments).
+	RequireApproval bool      `json:"require_approval"`
+	CreatedAt       time.Time `json:"created_at"`
+}
+
+// AccessRequest is a user's request to connect to a target, subject to approval
+// by a different principal (4-eyes). When a target (or global OT policy) requires
+// approval, connect paths admit only a requester with an approved, unexpired
+// request. Statuses: pending | approved | denied.
+type AccessRequest struct {
+	ID        int64      `json:"id"`
+	Requester string     `json:"requester"`
+	TargetID  int64      `json:"target_id"`
+	Reason    string     `json:"reason"`
+	Status    string     `json:"status"`
+	Approver  string     `json:"approver,omitempty"`
+	CreatedAt time.Time  `json:"created_at"`
+	DecidedAt *time.Time `json:"decided_at,omitempty"`
+	ExpiresAt time.Time  `json:"expires_at"`
 }
 
 // Credential is a privileged account on a Target. SecretEnc is always an
@@ -126,6 +145,18 @@ type Store interface {
 	CreateTargetGrant(ctx context.Context, g *TargetGrant) error
 	ListTargetGrants(ctx context.Context, targetID int64) ([]TargetGrant, error)
 	DeleteTargetGrant(ctx context.Context, id int64) error
+
+	// Access requests (4-eyes approval workflow).
+	CreateAccessRequest(ctx context.Context, ar *AccessRequest) error
+	GetAccessRequest(ctx context.Context, id int64) (*AccessRequest, error)
+	// ListAccessRequests returns requests with the given status, or all when
+	// status is "".
+	ListAccessRequests(ctx context.Context, status string) ([]AccessRequest, error)
+	// DecideAccessRequest records an approve/deny decision by approver.
+	DecideAccessRequest(ctx context.Context, id int64, status, approver string, decidedAt time.Time) error
+	// HasActiveApproval reports whether requester has an approved, unexpired
+	// request for targetID as of now.
+	HasActiveApproval(ctx context.Context, requester string, targetID int64, now time.Time) (bool, error)
 
 	AppendAudit(ctx context.Context, e *AuditEvent) error
 	ListAudit(ctx context.Context, limit int) ([]AuditEvent, error)

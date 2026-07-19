@@ -113,6 +113,12 @@ Los componentes con línea discontinua (objetivos Windows) llegan en la [Fase 4]
   `-split-key`; los custodios envían shares para reconstruirla). En ambos casos obtienes una sesión
   de admin **de corta duración con autoexpiración**, y cada acceso/apertura se audita y se **alerta
   en tiempo real** a un webhook.
+- **Aprobación de sesión OT (4 ojos)** — para despliegues industriales/[OT](docs/OT-DEPLOYMENT.md),
+  protege un objetivo tras una **solicitud de acceso aprobada**: un usuario crea la solicitud, un
+  aprobador *distinto* la aprueba (se rechaza la auto-aprobación) y solo entonces puede conectar —
+  aplicado en el proxy SSH, WinRM **y** RDP, con break-glass como bypass. Por objetivo
+  (`require_approval`) o global (`PAM_REQUIRE_APPROVAL`), con ventana temporal, más un **modo
+  air-gap** (`PAM_OT_AIRGAP`) sin llamadas salientes.
 - **Portal AS/400** — interfaz de terminal 5250 en fósforo verde (Sign On, pantallas por menú,
   teclas F), deliberatamente austera para que los administradores sientan el peso del sistema.
 - **Almacenamiento PostgreSQL** vía [pgx](https://github.com/jackc/pgx); almacén en memoria

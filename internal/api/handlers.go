@@ -31,11 +31,12 @@ var (
 // --- targets ---
 
 type targetIn struct {
-	Name     string `json:"name"`
-	Host     string `json:"host"`
-	Port     int    `json:"port"`
-	OSType   string `json:"os_type"`
-	Protocol string `json:"protocol"`
+	Name            string `json:"name"`
+	Host            string `json:"host"`
+	Port            int    `json:"port"`
+	OSType          string `json:"os_type"`
+	Protocol        string `json:"protocol"`
+	RequireApproval bool   `json:"require_approval"`
 }
 
 func (s *Server) createTarget(w http.ResponseWriter, r *http.Request) {
@@ -60,7 +61,7 @@ func (s *Server) createTarget(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnprocessableEntity, `protocol must be "ssh", "winrm" or "rdp"`)
 		return
 	}
-	t := store.Target{Name: in.Name, Host: in.Host, Port: in.Port, OSType: in.OSType, Protocol: in.Protocol}
+	t := store.Target{Name: in.Name, Host: in.Host, Port: in.Port, OSType: in.OSType, Protocol: in.Protocol, RequireApproval: in.RequireApproval}
 	if err := s.store.CreateTarget(r.Context(), &t); err != nil {
 		storeError(w, err)
 		return
@@ -327,6 +328,14 @@ func (s *Server) runWinRM(w http.ResponseWriter, r *http.Request) {
 	} else if !ok {
 		s.audit(r.Context(), "winrm.denied", "target:"+target.Name+" reason:target-policy")
 		writeError(w, http.StatusForbidden, "not authorized for this target")
+		return
+	}
+	if ok, err := s.enforceApproval(r.Context(), target); err != nil {
+		storeError(w, err)
+		return
+	} else if !ok {
+		s.audit(r.Context(), "access.denied", "target:"+target.Name+" reason:approval-required")
+		writeError(w, http.StatusForbidden, "connection requires an approved access request")
 		return
 	}
 	creds, err := s.store.ListCredentials(r.Context(), target.ID)

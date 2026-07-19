@@ -12,27 +12,29 @@ import (
 )
 
 type Memstore struct {
-	mu       sync.Mutex
-	nextID   int64
-	targets  map[int64]store.Target
-	creds    map[int64]store.Credential
-	users    map[int64]store.User
-	sessions map[int64]store.Session
-	mfa      map[string]store.MFAEnrollment
-	recovery map[string]map[string]bool // username -> set of code hashes
-	grants   map[int64]store.TargetGrant
-	audit    []store.AuditEvent
+	mu        sync.Mutex
+	nextID    int64
+	targets   map[int64]store.Target
+	creds     map[int64]store.Credential
+	users     map[int64]store.User
+	sessions  map[int64]store.Session
+	mfa       map[string]store.MFAEnrollment
+	recovery  map[string]map[string]bool // username -> set of code hashes
+	grants    map[int64]store.TargetGrant
+	accessReq map[int64]store.AccessRequest
+	audit     []store.AuditEvent
 }
 
 func New() *Memstore {
 	return &Memstore{
-		targets:  make(map[int64]store.Target),
-		creds:    make(map[int64]store.Credential),
-		users:    make(map[int64]store.User),
-		sessions: make(map[int64]store.Session),
-		mfa:      make(map[string]store.MFAEnrollment),
-		recovery: make(map[string]map[string]bool),
-		grants:   make(map[int64]store.TargetGrant),
+		targets:   make(map[int64]store.Target),
+		creds:     make(map[int64]store.Credential),
+		users:     make(map[int64]store.User),
+		sessions:  make(map[int64]store.Session),
+		mfa:       make(map[string]store.MFAEnrollment),
+		recovery:  make(map[string]map[string]bool),
+		grants:    make(map[int64]store.TargetGrant),
+		accessReq: make(map[int64]store.AccessRequest),
 	}
 }
 
@@ -93,6 +95,11 @@ func (m *Memstore) DeleteTarget(_ context.Context, id int64) error {
 			delete(m.grants, gid)
 		}
 	}
+	for aid, ar := range m.accessReq {
+		if ar.TargetID == id {
+			delete(m.accessReq, aid)
+		}
+	}
 	return nil
 }
 
@@ -133,6 +140,71 @@ func (m *Memstore) DeleteTargetGrant(_ context.Context, id int64) error {
 	}
 	delete(m.grants, id)
 	return nil
+}
+
+func (m *Memstore) CreateAccessRequest(_ context.Context, ar *store.AccessRequest) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.targets[ar.TargetID]; !ok {
+		return store.ErrNotFound
+	}
+	ar.ID = m.id()
+	ar.CreatedAt = time.Now().UTC()
+	if ar.Status == "" {
+		ar.Status = "pending"
+	}
+	m.accessReq[ar.ID] = *ar
+	return nil
+}
+
+func (m *Memstore) GetAccessRequest(_ context.Context, id int64) (*store.AccessRequest, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	ar, ok := m.accessReq[id]
+	if !ok {
+		return nil, store.ErrNotFound
+	}
+	return &ar, nil
+}
+
+func (m *Memstore) ListAccessRequests(_ context.Context, status string) ([]store.AccessRequest, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]store.AccessRequest, 0, len(m.accessReq))
+	for _, ar := range m.accessReq {
+		if status == "" || ar.Status == status {
+			out = append(out, ar)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out, nil
+}
+
+func (m *Memstore) DecideAccessRequest(_ context.Context, id int64, status, approver string, decidedAt time.Time) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	ar, ok := m.accessReq[id]
+	if !ok {
+		return store.ErrNotFound
+	}
+	ar.Status = status
+	ar.Approver = approver
+	at := decidedAt.UTC()
+	ar.DecidedAt = &at
+	m.accessReq[id] = ar
+	return nil
+}
+
+func (m *Memstore) HasActiveApproval(_ context.Context, requester string, targetID int64, now time.Time) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, ar := range m.accessReq {
+		if ar.Requester == requester && ar.TargetID == targetID &&
+			ar.Status == "approved" && now.Before(ar.ExpiresAt) {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func (m *Memstore) CreateCredential(_ context.Context, c *store.Credential) error {

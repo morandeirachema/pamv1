@@ -295,7 +295,10 @@ func run() error {
 	sessions := session.NewRegistry()
 
 	var alerter alert.Notifier = alert.Noop{}
-	if cfg.AlertWebhook != "" {
+	switch {
+	case cfg.AirGap:
+		log.Info("air-gap mode: outbound alerting disabled")
+	case cfg.AlertWebhook != "":
 		alerter = alert.NewWebhook(cfg.AlertWebhook)
 		log.Info("alerting enabled", "webhook", cfg.AlertWebhook)
 	}
@@ -316,6 +319,9 @@ func run() error {
 		BreakGlassThreshold: cfg.BreakGlassThreshold,
 		BreakGlassTTL:       cfg.BreakGlassTTL,
 		Alerter:             alerter,
+		RequireApproval:     cfg.RequireApproval,
+		ApprovalWindow:      cfg.ApprovalWindow,
+		AirGap:              cfg.AirGap,
 	})
 	if err != nil {
 		return err
@@ -337,9 +343,10 @@ func run() error {
 			return fmt.Errorf("ssh host key: %w", err)
 		}
 		px, err := proxy.New(st, v, resolver, proxy.Config{
-			HostKey:      hostKey,
-			RecordingDir: cfg.RecordingDir,
-			Sessions:     sessions,
+			HostKey:         hostKey,
+			RecordingDir:    cfg.RecordingDir,
+			Sessions:        sessions,
+			RequireApproval: cfg.RequireApproval,
 		})
 		if err != nil {
 			return err
