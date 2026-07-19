@@ -228,6 +228,7 @@ func (p *Proxy) Serve(ctx context.Context, ln net.Listener) error {
 		"addr", ln.Addr().String(),
 		"hostkey_fp", ssh.FingerprintSHA256(p.hostKey.PublicKey()))
 	var wg sync.WaitGroup
+	var tempDelay time.Duration
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
@@ -235,8 +236,30 @@ func (p *Proxy) Serve(ctx context.Context, ln net.Listener) error {
 				wg.Wait() // graceful shutdown: active conns already force-closed
 				return nil
 			}
+			// Retry a transient accept error (e.g. fd exhaustion, EMFILE) with
+			// capped exponential backoff instead of tearing the listener down —
+			// the same policy net/http's Server uses.
+			if ne, ok := err.(net.Error); ok && ne.Temporary() { //nolint:staticcheck // Temporary() is the only portable transient-accept signal
+				if tempDelay == 0 {
+					tempDelay = 5 * time.Millisecond
+				} else {
+					tempDelay *= 2
+				}
+				if tempDelay > time.Second {
+					tempDelay = time.Second
+				}
+				p.log.Warn("ssh proxy accept error; retrying", "err", err, "retry_in", tempDelay)
+				select {
+				case <-time.After(tempDelay):
+				case <-ctx.Done():
+					wg.Wait()
+					return nil
+				}
+				continue
+			}
 			return err // fatal listener error: report it without blocking on sessions
 		}
+		tempDelay = 0
 		p.trackConn(conn)
 		wg.Add(1)
 		go func(c net.Conn) {

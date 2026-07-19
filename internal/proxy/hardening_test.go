@@ -298,3 +298,78 @@ func auditHas(t *testing.T, st store.Store, action string) bool {
 	}
 	return false
 }
+
+// flakyListener returns a configurable number of temporary Accept errors before
+// delegating to the real listener, modelling transient fd exhaustion.
+type flakyListener struct {
+	net.Listener
+	remainingTempErrs int
+}
+
+func (l *flakyListener) Accept() (net.Conn, error) {
+	if l.remainingTempErrs > 0 {
+		l.remainingTempErrs--
+		return nil, flakyTempErr{}
+	}
+	return l.Listener.Accept()
+}
+
+type flakyTempErr struct{}
+
+func (flakyTempErr) Error() string   { return "temporary accept failure" }
+func (flakyTempErr) Timeout() bool   { return false }
+func (flakyTempErr) Temporary() bool { return true }
+
+// TestServeRetriesTemporaryAcceptErrors proves Serve backs off and keeps serving
+// on a transient Accept error instead of tearing the listener down.
+func TestServeRetriesTemporaryAcceptErrors(t *testing.T) {
+	host, port := startUpstream(t, upstreamUser, upstreamSecret, targetOutput)
+	st := memstore.New()
+	v := mustVault(t)
+	seedTarget(t, st, v, host, port)
+	resolver, err := auth.NewResolver(st, proxyAPIKey, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	px, err := proxy.New(st, v, resolver, proxy.Config{
+		HostKey:      mustSigner(t),
+		RecordingDir: t.TempDir(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	base, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fl := &flakyListener{Listener: base, remainingTempErrs: 3}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- px.Serve(ctx, fl) }()
+
+	client, err := dialProxy(t, base.Addr().String(), "web-01", proxyAPIKey)
+	if err != nil {
+		cancel()
+		t.Fatalf("proxy should survive transient accept errors: %v", err)
+	}
+	sess, err := client.NewSession()
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, _ := sess.Output("run")
+	if string(out) != targetOutput {
+		t.Errorf("output = %q, want %q", out, targetOutput)
+	}
+	sess.Close()
+	client.Close()
+
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Errorf("Serve returned %v, want nil", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Serve did not return after cancel")
+	}
+}

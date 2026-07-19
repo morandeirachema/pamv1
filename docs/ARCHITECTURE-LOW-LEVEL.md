@@ -456,6 +456,7 @@ secrets. Format `json` (SIEM) or `text` (humans); collect from stdout.
 
 | Date | Change |
 |---|---|
+| 2026-07-19 | Proxy: `Serve` retries transient `Accept` errors (e.g. fd exhaustion) with capped backoff instead of tearing the listener down permanently |
 | 2026-07-19 | Proxy hardening: decrypt the JIT secret only after all authz gates; record target stderr into the asciicast (hash now covers stderr); audit `session.record_failed` and optionally refuse (`PAM_REQUIRE_RECORDING`) when a session can't be recorded |
 | 2026-07-19 | Proxy: graceful shutdown flushes session audit — `main` awaits the (bounded) proxy drain on SIGTERM before closing the store, and closing audits (`session.end`/`session.record`) use `auditClosing` (detached from the cancelled ctx) so they are no longer dropped mid-drain |
 | 2026-07-19 | Proxy: session teardown keyed on the connection lifecycle — stdin half-close only `CloseWrite`s (batch/piped/`ssh -n` output + `exit-status` no longer truncated), `handleConn` closes the upstream when the client is gone; client→upstream request pump joined so the `exec`/`shell` reply flushes before teardown (fixes an EOF flake); `Serve` shutdown drain bounded by force-closing active connections |
