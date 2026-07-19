@@ -216,7 +216,11 @@ IT→OT. Detalles en la [Fase 8](ROADMAP.md#phase-8--ot-adaptation-).
 
 Para entidades bajo la [Directiva (UE) 2022/2555 (NIS2)](https://eur-lex.europa.eu/eli/dir/2022/2555/oj),
 pamv1 apunta a las medidas de gestión de riesgos del Art. 21 (control de acceso, criptografía, MFA,
-registro/gestión de incidentes). Consulta la tabla de mapeo en el [README en inglés](README.md#nis2).
+registro/gestión de incidentes). El mapeo completo está en el
+**[Pack de cumplimiento NIS2](docs/NIS2-COMPLIANCE.md)**: incluye la **exportación de auditoría con
+evidencia anti-manipulación** (`GET /api/audit/export`, JSON/CSV + SHA-256) para las notificaciones de
+24h/72h del Art. 23. Para despliegues **OT/industriales** (IEC 62443 / Purdue), consulta la
+**[Guía de despliegue OT](docs/OT-DEPLOYMENT.md)**.
 
 ## Desarrollo
 

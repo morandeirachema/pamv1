@@ -160,6 +160,10 @@ type Store interface {
 
 	AppendAudit(ctx context.Context, e *AuditEvent) error
 	ListAudit(ctx context.Context, limit int) ([]AuditEvent, error)
+	// ExportAudit returns every audit event with since <= ts < until, ordered
+	// oldest-first (for NIS2 incident-report exports). A zero since means "from
+	// the beginning"; a zero until means "up to now".
+	ExportAudit(ctx context.Context, since, until time.Time) ([]AuditEvent, error)
 
 	CreateUser(ctx context.Context, u *User) error
 	ListUsers(ctx context.Context) ([]User, error)

@@ -525,10 +525,27 @@ The security record of *who did what*. Read it via the API or the portal's
 curl -H "X-API-Key: $PAM_API_KEY" "http://localhost:8080/api/audit?limit=100"
 ```
 
-Actions include: `target.create/delete`, `credential.create/reveal/delete`,
-`user.create/delete`, `authz.denied`, `breakglass.access`,
-`session.start/record/end/denied/error`. The actor is the real username (or
-`bootstrap-admin` / `break-glass`).
+Actions include: `target.create/delete`, `credential.create/reveal/delete/rotate/reconcile`,
+`user.create/delete`, `access.request/approve/deny/denied`, `authz.denied`,
+`breakglass.access/unseal`, `session.start/record/end/denied/error`. The actor is
+the real username (or `bootstrap-admin` / `break-glass` / `system-scheduler`).
+
+**Incident-report export (NIS2 Art. 23).** Produce a scoped, tamper-evident slice
+of the audit trail for a regulator. The response carries a SHA-256 over the exact
+event list (JSON `sha256` field + `X-PAM-Export-SHA256` header) so the file's
+integrity can be re-verified later.
+
+```bash
+# JSON, a time window, with the integrity digest
+curl -H "X-API-Key: $PAM_API_KEY" \
+  "http://localhost:8080/api/audit/export?since=2026-07-19T00:00:00Z&until=2026-07-19T06:00:00Z"
+# Scope to an actor/action; CSV for a spreadsheet
+curl -H "X-API-Key: $PAM_API_KEY" \
+  "http://localhost:8080/api/audit/export?actor=break-glass&format=csv" -o breakglass.csv
+```
+
+See the [NIS2 Compliance Pack](NIS2-COMPLIANCE.md) for the full Art. 21 control
+matrix and the Art. 23 reporting workflow.
 
 ### 9.3 Session recordings
 
@@ -569,6 +586,7 @@ evidence). Replay with [asciinema](https://asciinema.org/): `asciinema play <fil
 
 | Date | Change |
 |---|---|
+| 2026-07-19 | Phase 9: NIS2 pack — tamper-evident audit export (`GET /api/audit/export`, JSON/CSV + SHA-256) for Art. 23; see [NIS2-COMPLIANCE.md](NIS2-COMPLIANCE.md) |
 | 2026-07-19 | Phase 8: OT adaptation — 4-eyes access-request approval (`/api/access-requests`), per-target/global gate (`PAM_REQUIRE_APPROVAL`), air-gap mode (`PAM_OT_AIRGAP`); see [OT-DEPLOYMENT.md](OT-DEPLOYMENT.md) |
 | 2026-07-19 | Phase 7: credential lifecycle — rotation (`/api/credentials/{id}/rotate`), reconciliation (`/reconcile`, `?remediate`, `GET /api/reconcile`), scheduled worker (`PAM_ROTATE_*`) |
 | 2026-07-19 | Phase 6: break-glass v2 (M-of-N quorum unseal, auto-expiring sessions, alerting); AWS KMS KEK |

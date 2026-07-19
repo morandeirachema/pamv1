@@ -207,6 +207,12 @@ endpoints arrive with the OT/approval phase).
   **break-glass bypasses**. Decisions audit + fire the `alert.Notifier`.
 - **Air-gap mode** (`Options.AirGap`, `PAM_OT_AIRGAP`): forces the alerter to
   `alert.Noop` so an isolated OT deployment makes no outbound calls.
+- **Audit export** (`compliance_handlers.go`, Phase 9 — NIS2, needs
+  `CapReadAudit`): `GET /api/audit/export` returns a `store.ExportAudit` slice
+  filtered by `since`/`until`/`actor`/`action` as JSON or CSV, with a **SHA-256**
+  over the canonical event list in the body and the `X-PAM-Export-SHA256` header
+  (tamper evidence for Art. 23 incident reports). The export is audited
+  (`audit.export`).
 
 ### 2.5 `proxy`  *(Phase 2, RBAC in 3a)*
 
@@ -347,7 +353,7 @@ secrets. Format `json` (SIEM) or `text` (humans); collect from stdout.
 `credential.delete` · `credential.reveal_denied` · `grant.create` · `grant.delete` ·
 `winrm.denied` · `session.kill` · `breakglass.unseal` · `user.create` · `user.delete` · `login` · `logout` ·
 `credential.rotate` · `credential.rotate_failed` · `credential.reconcile` · `credential.reconcile_scan` · `credential.remediate` ·
-`access.request` · `access.approve` · `access.deny` · `access.denied` · `access.decision_denied` ·
+`access.request` · `access.approve` · `access.deny` · `access.denied` · `access.decision_denied` · `audit.export` ·
 `mfa.enroll` · `mfa.confirm` · `mfa.disable` · `mfa.recovery_generated` ·
 `mfa.recovery_used` · `winrm.run` · `winrm.error` · `rdp.connect` · `rdp.end` ·
 `rdp.error` · `authz.denied` · `breakglass.access` · `session.start` ·
@@ -402,6 +408,7 @@ secrets. Format `json` (SIEM) or `text` (humans); collect from stdout.
 
 | Date | Change |
 |---|---|
+| 2026-07-19 | Phase 9: NIS2 pack — `GET /api/audit/export` (`compliance_handlers.go`, `store.ExportAudit`, JSON/CSV, SHA-256 tamper digest), `docs/NIS2-COMPLIANCE.md` (Art. 21 matrix + Art. 23 export) |
 | 2026-07-19 | Phase 8: OT adaptation — access-request approval workflow (`approval_handlers.go`, `store.AccessRequest`, migration `0002`, 4-eyes, enforced on proxy/WinRM/RDP), air-gap mode (`PAM_OT_AIRGAP`), `docs/OT-DEPLOYMENT.md` |
 | 2026-07-19 | Phase 7: credential lifecycle — `internal/rotate` (SSH/WinRM `Rotator`/`Verifier`, strong password gen), `POST /api/credentials/{id}/rotate`, `/reconcile[?remediate]`, `GET /api/reconcile`, background worker (`scheduler.go`), store `RotateCredentialSecret` |
 | 2026-07-19 | Phase 6: break-glass v2 — `shamir` (M-of-N quorum), `pam-server -split-key`, `POST /api/breakglass/unseal` (auto-expiring session), `alert` webhook on break-glass access/unseal; AWS KMS KEK (`awskms.go`) |

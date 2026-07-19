@@ -301,6 +301,21 @@ func (m *Memstore) ListAudit(_ context.Context, limit int) ([]store.AuditEvent, 
 	return out, nil
 }
 
+func (m *Memstore) ExportAudit(_ context.Context, since, until time.Time) ([]store.AuditEvent, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if until.IsZero() {
+		until = time.Now()
+	}
+	out := make([]store.AuditEvent, 0, len(m.audit))
+	for _, e := range m.audit {
+		if (since.IsZero() || !e.TS.Before(since)) && e.TS.Before(until) {
+			out = append(out, e)
+		}
+	}
+	return out, nil
+}
+
 func (m *Memstore) CreateUser(_ context.Context, u *store.User) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()

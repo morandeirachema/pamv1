@@ -323,6 +323,34 @@ func (s *PGStore) ListAudit(ctx context.Context, limit int) ([]store.AuditEvent,
 	})
 }
 
+func (s *PGStore) ExportAudit(ctx context.Context, since, until time.Time) ([]store.AuditEvent, error) {
+	if until.IsZero() {
+		until = time.Now()
+	}
+	rows, err := s.pool.Query(ctx,
+		`SELECT id, ts, actor, action, detail
+		 FROM audit_events
+		 WHERE ($1::timestamptz IS NULL OR ts >= $1) AND ts < $2
+		 ORDER BY id ASC`, nullableTime(since), until.UTC())
+	if err != nil {
+		return nil, err
+	}
+	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (store.AuditEvent, error) {
+		var e store.AuditEvent
+		err := row.Scan(&e.ID, &e.TS, &e.Actor, &e.Action, &e.Detail)
+		return e, err
+	})
+}
+
+// nullableTime maps the zero time to a SQL NULL (used as "no lower bound").
+func nullableTime(t time.Time) *time.Time {
+	if t.IsZero() {
+		return nil
+	}
+	u := t.UTC()
+	return &u
+}
+
 func (s *PGStore) CreateUser(ctx context.Context, u *store.User) error {
 	err := s.pool.QueryRow(ctx,
 		`INSERT INTO users (username, role, token_hash)

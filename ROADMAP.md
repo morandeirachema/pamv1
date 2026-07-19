@@ -111,14 +111,14 @@ Designed for industrial environments ([IEC 62443](https://www.isa.org/standards-
 - [ ] Protocol allowlisting per cell; read-only observer sessions for engineers (follow-on)
 - [ ] Serial/jump-host connectors for legacy equipment (follow-on)
 
-## Phase 9 — NIS2 compliance pack ⬜
+## Phase 9 — NIS2 compliance pack ✅
 
-Mapping to [Directive (EU) 2022/2555](https://eur-lex.europa.eu/eli/dir/2022/2555/oj) Art. 21:
+Mapping to [Directive (EU) 2022/2555](https://eur-lex.europa.eu/eli/dir/2022/2555/oj) — see the [NIS2 Compliance Pack](docs/NIS2-COMPLIANCE.md):
 
-- [ ] Control matrix doc: pamv1 feature ↔ NIS2 measure (access control, cryptography, MFA, logging)
-- [ ] Incident reporting hooks: export audit slices for the 24h early-warning / 72h notification duties (Art. 23)
-- [ ] Configurable audit retention + tamper-evident log export (syslog/SIEM forwarding)
-- [ ] Risk-management documentation templates for operators of essential/important entities
+- [x] **Control matrix doc**: full Art. 21(2)(a–j) measure ↔ pamv1 feature mapping
+- [x] **Incident reporting export** (Art. 23): `GET /api/audit/export` returns a scoped audit slice (`since`/`until`/`actor`/`action`, JSON or CSV) with a **SHA-256 tamper-evidence digest** (body field + `X-PAM-Export-SHA256` header); the export is itself audited
+- [x] **Audit retention + SIEM forwarding** guidance (append-only trail in Postgres; JSON logs + audit events to stdout for a collector; real-time alert webhook)
+- [x] **Risk-management documentation template** for essential/important entities
 
 ## Phase 10 — Scale & operations ⬜
 

@@ -202,15 +202,17 @@ pamv1 is being designed to drop into [IEC 62443](https://www.isa.org/standards-a
 
 ## NIS2
 
-For entities under [Directive (EU) 2022/2555 (NIS2)](https://eur-lex.europa.eu/eli/dir/2022/2555/oj), pamv1 targets the Art. 21 risk-management measures:
+For entities under [Directive (EU) 2022/2555 (NIS2)](https://eur-lex.europa.eu/eli/dir/2022/2555/oj), pamv1 targets the Art. 21 risk-management measures — full mapping in the **[NIS2 Compliance Pack](docs/NIS2-COMPLIANCE.md)**:
 
 | NIS2 Art. 21(2) | pamv1 |
 |---|---|
-| (i) access control & asset management | Target inventory, RBAC via AD groups (Phase 3) |
-| (h) cryptography & encryption policies | AES-256-GCM vault, TLS everywhere (Phase 5) |
-| (j) MFA & secured communications | TOTP MFA (Phase 3), proxied recorded sessions (Phase 2) |
-| (b)(c) incident handling & business continuity | Audit trail, break-glass procedure, backup runbook (Phase 5) |
-| Art. 23 reporting | Audit export hooks for 24h/72h notifications (Phase 9) |
+| (i) access control & asset management | Target inventory, RBAC + per-target grants, 4-eyes approval (Phase 3/8) |
+| (h) cryptography & encryption policies | Envelope encryption (AES-256-GCM + pluggable KEK), TLS everywhere (Phase 5) |
+| (j) MFA & secured communications | TOTP MFA + OIDC/Entra SSO, proxied recorded sessions (Phase 2/3) |
+| (b)(c) incident handling & business continuity | Audit trail, break-glass quorum, backup runbook (Phase 5/6) |
+| Art. 23 reporting | Tamper-evident audit export (`GET /api/audit/export`, JSON/CSV + SHA-256) for 24h/72h notifications (Phase 9) |
+
+For **OT/industrial** deployments (IEC 62443 / Purdue), see the **[OT Deployment Guide](docs/OT-DEPLOYMENT.md)**.
 
 ## Development
 
