@@ -15,6 +15,7 @@ import (
 
 	"github.com/morandeirachema/pamv1/internal/auth"
 	"github.com/morandeirachema/pamv1/internal/proxy"
+	"github.com/morandeirachema/pamv1/internal/store"
 	"github.com/morandeirachema/pamv1/internal/store/memstore"
 )
 
@@ -299,5 +300,81 @@ func TestServeShutdownBoundedWithLiveSession(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("Serve did not return within 5s of ctx cancel — shutdown drain is not bounded")
+	}
+}
+
+// ctxAuditStore models a real store (like pgstore) that fails an audit write
+// when its context is already cancelled — memstore alone ignores ctx, so it
+// cannot exhibit the dropped-closing-audit bug.
+type ctxAuditStore struct {
+	*memstore.Memstore
+}
+
+func (s *ctxAuditStore) AppendAudit(ctx context.Context, e *store.AuditEvent) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return s.Memstore.AppendAudit(ctx, e)
+}
+
+// TestClosingAuditSurvivesCancelledContext proves the session-teardown audit is
+// written even when the proxy's context is cancelled during shutdown: the
+// closing audit is detached from ctx, so session.end lands despite the cancel.
+func TestClosingAuditSurvivesCancelledContext(t *testing.T) {
+	host, port := startIdleUpstream(t, upstreamUser, upstreamSecret)
+	st := &ctxAuditStore{Memstore: memstore.New()}
+	v := mustVault(t)
+	seedTarget(t, st, v, host, port)
+
+	resolver, err := auth.NewResolver(st, proxyAPIKey, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	px, err := proxy.New(st, v, resolver, proxy.Config{
+		HostKey:      mustSigner(t),
+		RecordingDir: t.TempDir(),
+		DialTimeout:  5 * time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { px.Serve(ctx, ln); close(done) }()
+
+	client, err := dialProxy(t, ln.Addr().String(), "web-01", proxyAPIKey)
+	if err != nil {
+		t.Fatalf("dial proxy: %v", err)
+	}
+	sess, err := client.NewSession()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sess.Shell(); err != nil {
+		t.Fatalf("shell: %v", err)
+	}
+
+	// Cancel while the session is live: teardown runs with a cancelled context.
+	cancel()
+	<-done
+	client.Close()
+
+	events, err := st.ListAudit(context.Background(), 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var found bool
+	for _, e := range events {
+		if e.Action == "session.end" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("session.end audit missing — closing audit dropped on cancelled context")
 	}
 }

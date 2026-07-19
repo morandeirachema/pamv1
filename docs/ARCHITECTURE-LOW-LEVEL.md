@@ -321,7 +321,10 @@ pump (so the `exec`/`shell` reply the client's `Session.Start` blocks on is
 flushed first). `Serve`'s shutdown is bounded: on `ctx` cancel it closes the
 listener **and** force-closes every tracked client connection, then waits for
 handlers to return, so no handler goroutine outlives `Serve` and the drain does
-not block on operators voluntarily disconnecting.
+not block on operators voluntarily disconnecting. `main` waits for this drain on
+SIGTERM (before closing the store), and the closing audit events (`session.end`,
+`session.record`) are written through `auditClosing`, which detaches from the
+cancelled shutdown context so they are not dropped mid-drain.
 
 ## 4. Configuration (env `PAM_*`)
 
@@ -452,6 +455,7 @@ secrets. Format `json` (SIEM) or `text` (humans); collect from stdout.
 
 | Date | Change |
 |---|---|
+| 2026-07-19 | Proxy: graceful shutdown flushes session audit — `main` awaits the (bounded) proxy drain on SIGTERM before closing the store, and closing audits (`session.end`/`session.record`) use `auditClosing` (detached from the cancelled ctx) so they are no longer dropped mid-drain |
 | 2026-07-19 | Proxy: session teardown keyed on the connection lifecycle — stdin half-close only `CloseWrite`s (batch/piped/`ssh -n` output + `exit-status` no longer truncated), `handleConn` closes the upstream when the client is gone; client→upstream request pump joined so the `exec`/`shell` reply flushes before teardown (fixes an EOF flake); `Serve` shutdown drain bounded by force-closing active connections |
 | 2026-07-19 | Phase 10: Postgres HA (CloudNativePG `Cluster`, `deploy/k8s/postgres-cnpg.yaml`), cloud-Postgres Terraform (`deploy/terraform/cloud-postgres`, AWS RDS), SLSA build-provenance attestation in `release.yml` |
 | 2026-07-19 | Phase 8: SSH jump-host / bastion connector (`proxy.Config.Jump`, `PAM_SSH_JUMP_*`) — targets reached via a `direct-tcpip` tunnel through the bastion |

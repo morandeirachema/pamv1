@@ -398,7 +398,7 @@ func (p *Proxy) handleConn(ctx context.Context, nConn net.Conn) {
 	}
 	defer func() {
 		p.log.Info("session ended", "actor", actor, "target", target.Name)
-		p.audit(ctx, actor, "session.end", "target:"+target.Name)
+		p.auditClosing(ctx, actor, "session.end", "target:"+target.Name)
 		// Force post-session credential rotation, if configured, so a secret
 		// used in one session cannot be reused in the next.
 		if p.onSessionEnd != nil {
@@ -637,7 +637,7 @@ func (p *Proxy) handleSession(ctx context.Context, nc ssh.NewChannel, upstream *
 	if rec != nil {
 		path, sum, n := rec.Close()
 		chain := p.chain.append(sum)
-		p.audit(ctx, actor, "session.record",
+		p.auditClosing(ctx, actor, "session.record",
 			fmt.Sprintf("target:%s cred_user:%s file:%s bytes:%d sha256:%s chain:%s",
 				target.Name, cred.Username, path, n, sum, chain))
 	}
@@ -670,7 +670,7 @@ func (p *Proxy) serveWinRM(ctx context.Context, sconn *ssh.ServerConn, chans <-c
 	}
 	defer func() {
 		p.log.Info("winrm session ended", "actor", actor, "target", target.Name)
-		p.audit(ctx, actor, "session.end", "target:"+target.Name+" protocol:winrm")
+		p.auditClosing(ctx, actor, "session.end", "target:"+target.Name+" protocol:winrm")
 		if p.onSessionEnd != nil {
 			go p.onSessionEnd(cred.ID)
 		}
@@ -704,7 +704,7 @@ func (p *Proxy) handleWinRMSession(ctx context.Context, nc ssh.NewChannel, targe
 		if rec != nil {
 			path, sum, n := rec.Close()
 			chain := p.chain.append(sum)
-			p.audit(ctx, actor, "session.record",
+			p.auditClosing(ctx, actor, "session.record",
 				fmt.Sprintf("target:%s cred_user:%s file:%s bytes:%d sha256:%s chain:%s", target.Name, cred.Username, path, n, sum, chain))
 		}
 	}()
@@ -885,4 +885,13 @@ func (p *Proxy) audit(ctx context.Context, actor, action, detail string) {
 	if err := p.store.AppendAudit(ctx, &e); err != nil {
 		p.log.Error("audit append failed", "action", action, "err", err)
 	}
+}
+
+// auditClosing writes a session-teardown audit event that must survive graceful
+// shutdown. It detaches from ctx so a shutdown-cancelled context does not drop
+// the event, and bounds the write so a hung store cannot stall the drain.
+func (p *Proxy) auditClosing(ctx context.Context, actor, action, detail string) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	p.audit(ctx, actor, action, detail)
 }

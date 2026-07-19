@@ -374,6 +374,14 @@ func run() error {
 		})
 	}
 
+	// proxyDone closes when the SSH proxy has fully drained; shutdown waits on it
+	// so in-flight sessions' closing audit events and recordings are flushed
+	// before the process (and the store) exits. Closed immediately when the proxy
+	// is disabled so the shutdown wait is a no-op.
+	proxyDone := make(chan struct{})
+	if cfg.SSHAddr == "off" {
+		close(proxyDone)
+	}
 	if cfg.SSHAddr != "off" {
 		hostKey, err := proxy.LoadOrCreateHostKey(cfg.SSHHostKeyPath)
 		if err != nil {
@@ -412,6 +420,7 @@ func run() error {
 			return err
 		}
 		go func() {
+			defer close(proxyDone)
 			if err := px.ListenAndServe(ctx, cfg.SSHAddr); err != nil {
 				log.Error("ssh proxy stopped", "err", err)
 			}
@@ -449,7 +458,16 @@ func run() error {
 		log.Info("shutting down")
 		shutCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		return srv.Shutdown(shutCtx)
+		err := srv.Shutdown(shutCtx)
+		// Wait for the SSH proxy to finish draining active sessions. The drain is
+		// bounded (Serve force-closes connections on ctx cancel), so this blocks
+		// only briefly; a timeout guards against a wedged session holding exit.
+		select {
+		case <-proxyDone:
+		case <-time.After(10 * time.Second):
+			log.Warn("ssh proxy drain timed out")
+		}
+		return err
 	}
 }
 
