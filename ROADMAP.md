@@ -54,7 +54,7 @@ The flagship: users connect *through* pamv1, never holding the credential.
 - [x] **Enforce-MFA policy** (`PAM_MFA_REQUIRED`) with enrollment-only sessions, and **single-use recovery codes**
 - [x] **OIDC Authorization Code flow + PKCE + JWKS signature validation** (`internal/oidc`): browser SSO (`/api/auth/oidc/{start,callback}`), IdP-side MFA/Conditional Access, ID-token verified (RS256, iss/aud/nonce/exp), discovery
 - [ ] Optional Kerberos bind (needs a KDC to test)
-- [ ] Entra ROPC **id_token JWKS signature validation** (the browser OIDC path already validates; the ROPC path reads claims unverified) — *in progress*
+- [x] Entra ROPC **id_token JWKS signature validation** — requests `openid`, validates the id_token's RS256 signature against the tenant JWKS (`oidc.VerifyRS256`) + audience + expiry before trusting role/group claims
 - [x] OIDC pending-state shared store for multi-replica HA — **shipped in Phase 10** (`store.PutOIDCState`/`TakeOIDCState`, migration `0004`)
 - [x] Local emergency admin kept for AD-down scenarios (bootstrap key + break-glass)
 

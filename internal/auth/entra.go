@@ -2,7 +2,6 @@ package auth
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -10,6 +9,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/morandeirachema/pamv1/internal/oidc"
 )
 
 // EntraConfig configures login against Microsoft Entra ID (Azure AD).
@@ -26,22 +27,24 @@ type EntraConfig struct {
 	// AuthorityHost overrides the login host for sovereign clouds
 	// (e.g. login.microsoftonline.us); default login.microsoftonline.com.
 	AuthorityHost string
-	// tokenEndpoint overrides the full endpoint (tests only).
+	// tokenEndpoint / jwksURL override the endpoints (tests only).
 	tokenEndpoint string
+	jwksURL       string
 }
 
 // EntraAuthenticator authenticates users against Entra ID using the OAuth2
 // resource-owner-password (ROPC) grant, which fits pamv1's username+password
-// login. The access token is received over TLS in a direct back-channel call
-// (not via the browser), so its claims are read to derive the role.
+// login. It requests an id_token (openid scope) and **validates its RS256
+// signature against the tenant JWKS** (issuer host + audience + expiry) before
+// trusting the role/group claims.
 //
 // NOTE: ROPC does not exercise Entra Conditional Access or IdP-side MFA — use
-// pamv1's own TOTP MFA on top, and prefer the OIDC auth-code flow for
-// production (a hardening item). JWKS signature validation is also a TODO.
+// pamv1's own TOTP MFA on top, and prefer the OIDC auth-code flow for production.
 type EntraAuthenticator struct {
 	cfg      EntraConfig
 	hc       *http.Client
 	endpoint string
+	jwksURL  string
 }
 
 // NewEntraAuthenticator validates cfg (tenant, client id/secret and at least one
@@ -68,7 +71,11 @@ func NewEntraAuthenticator(cfg EntraConfig) (*EntraAuthenticator, error) {
 	if endpoint == "" {
 		endpoint = fmt.Sprintf("https://%s/%s/oauth2/v2.0/token", cfg.AuthorityHost, cfg.TenantID)
 	}
-	return &EntraAuthenticator{cfg: cfg, hc: &http.Client{Timeout: 10 * time.Second}, endpoint: endpoint}, nil
+	jwksURL := cfg.jwksURL
+	if jwksURL == "" {
+		jwksURL = fmt.Sprintf("https://%s/%s/discovery/v2.0/keys", cfg.AuthorityHost, cfg.TenantID)
+	}
+	return &EntraAuthenticator{cfg: cfg, hc: &http.Client{Timeout: 10 * time.Second}, endpoint: endpoint, jwksURL: jwksURL}, nil
 }
 
 type entraClaims struct {
@@ -89,9 +96,10 @@ func (a *EntraAuthenticator) Authenticate(ctx context.Context, username, passwor
 		"grant_type":    {"password"},
 		"client_id":     {a.cfg.ClientID},
 		"client_secret": {a.cfg.ClientSecret},
-		"scope":         {a.cfg.Scope},
-		"username":      {username},
-		"password":      {password},
+		// openid is required so Entra returns a signed id_token we can validate.
+		"scope":    {withOpenID(a.cfg.Scope)},
+		"username": {username},
+		"password": {password},
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, a.endpoint, strings.NewReader(form.Encode()))
 	if err != nil {
@@ -111,14 +119,16 @@ func (a *EntraAuthenticator) Authenticate(ctx context.Context, username, passwor
 	}
 
 	var tok struct {
-		AccessToken string `json:"access_token"`
+		IDToken string `json:"id_token"`
 	}
-	if err := json.Unmarshal(body, &tok); err != nil || tok.AccessToken == "" {
-		return nil, fmt.Errorf("entra: malformed token response")
+	if err := json.Unmarshal(body, &tok); err != nil || tok.IDToken == "" {
+		return nil, fmt.Errorf("entra: no id_token in response (is the openid scope permitted?)")
 	}
-	claims, err := parseJWTClaims(tok.AccessToken)
-	if err != nil {
-		return nil, fmt.Errorf("entra: parse token: %w", err)
+	// Trust the claims only after verifying the id_token's RS256 signature
+	// against the tenant JWKS (plus audience + expiry).
+	var claims entraClaims
+	if err := oidc.VerifyRS256(ctx, a.hc, a.jwksURL, tok.IDToken, a.cfg.ClientID, &claims); err != nil {
+		return nil, fmt.Errorf("%w: id_token validation failed: %v", ErrUnauthorized, err)
 	}
 	role, ok := a.roleFor(claims.Roles, claims.Groups)
 	if !ok {
@@ -133,19 +143,15 @@ func (a *EntraAuthenticator) roleFor(roles, groups []string) (Role, bool) {
 	return HighestRole(append(append([]string{}, roles...), groups...), a.cfg.RoleMap)
 }
 
-// parseJWTClaims decodes the (unverified) payload of a JWT. Safe here because
-// the token is received directly from Entra over TLS in a back-channel call.
-func parseJWTClaims(jwt string) (entraClaims, error) {
-	var c entraClaims
-	parts := strings.Split(jwt, ".")
-	if len(parts) != 3 {
-		return c, fmt.Errorf("not a JWT")
+// withOpenID ensures the requested scope string contains "openid" (required for
+// Entra to return an id_token), preserving any other requested scopes.
+func withOpenID(scope string) string {
+	for _, s := range strings.Fields(scope) {
+		if s == "openid" {
+			return scope
+		}
 	}
-	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
-	if err != nil {
-		return c, err
-	}
-	return c, json.Unmarshal(payload, &c)
+	return strings.TrimSpace("openid " + scope)
 }
 
 // firstNonEmpty returns the first non-empty string in vals, or "".

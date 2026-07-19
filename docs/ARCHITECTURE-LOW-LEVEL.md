@@ -103,11 +103,13 @@ Pluggable and composable via `NewChain` (try each, first success wins):
   password, maps groups → role (`roleForGroups`, highest privilege wins). The LDAP
   connection is behind an `ldapConn` interface so tests inject a fake; real dial uses LDAPS.
 - `EntraAuthenticator` (`entra.go`) — Microsoft Entra ID (Azure AD): OAuth2 ROPC
-  grant to the tenant token endpoint (over TLS, back-channel), reads `roles`
-  (app roles) / `groups` claims from the access token and maps to a role.
-  `AuthorityHost` supports sovereign clouds; the endpoint is overridable in tests.
-  Notes: ROPC skips IdP-side Conditional Access/MFA (use pamv1's TOTP); JWKS
-  signature validation is a hardening TODO (token is from a trusted back-channel).
+  grant to the tenant token endpoint (over TLS, back-channel), requesting `openid`
+  so Entra returns an **id_token**. It **validates the id_token's RS256 signature
+  against the tenant JWKS** (`oidc.VerifyRS256`, plus audience + expiry) before
+  reading `roles` (app roles) / `groups` claims and mapping to a role.
+  `AuthorityHost` supports sovereign clouds; the endpoints are overridable in
+  tests. Note: ROPC still skips IdP-side Conditional Access/MFA (use pamv1's TOTP;
+  prefer the OIDC auth-code flow for production).
 
 `POST /api/login` runs the configured authenticator, enforces TOTP if enrolled,
 and issues a session token (see `api`). `HighestRole` is the shared claim→role
@@ -437,6 +439,7 @@ secrets. Format `json` (SIEM) or `text` (humans); collect from stdout.
 
 | Date | Change |
 |---|---|
+| 2026-07-19 | Hardening: Entra ROPC now validates the id_token RS256 signature against the tenant JWKS (`oidc.VerifyRS256`) instead of reading unverified claims |
 | 2026-07-19 | Hardening: RDP now verifies the server certificate by default (`PAM_GUACD_RDP_SECURITY`/`PAM_GUACD_IGNORE_CERT`) instead of hardcoding `security:any`/`ignore-cert:true` |
 | 2026-07-19 | Hardening: upstream SSH host-key pinning (`PAM_SSH_KNOWN_HOSTS`, `proxy.Config.UpstreamHostKey` + rotation connector) — no longer trusts any target key |
 | 2026-07-19 | PKCS#11 HSM KEK provider (`vault/pkcs11.go`, build tag `pkcs11`; stub in the default build), `Dockerfile.pkcs11`, CI job against SoftHSM2, `PAM_KEK_PKCS11_*` |

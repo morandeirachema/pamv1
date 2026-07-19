@@ -205,11 +205,17 @@ type jwk struct {
 // publicKey fetches the provider's JWKS and returns the RSA public key whose kid
 // matches, erroring if none is found.
 func (p *Provider) publicKey(ctx context.Context, kid string) (*rsa.PublicKey, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, p.cfg.JWKSURL, nil)
+	return keyFromJWKS(ctx, p.hc, p.cfg.JWKSURL, kid)
+}
+
+// keyFromJWKS fetches the JWKS at jwksURL and returns the RSA public key whose
+// kid matches, erroring if none is found.
+func keyFromJWKS(ctx context.Context, hc *http.Client, jwksURL, kid string) (*rsa.PublicKey, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, jwksURL, nil)
 	if err != nil {
 		return nil, err
 	}
-	resp, err := p.hc.Do(req)
+	resp, err := hc.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("oidc: jwks: %w", err)
 	}
@@ -226,6 +232,60 @@ func (p *Provider) publicKey(ctx context.Context, kid string) (*rsa.PublicKey, e
 		}
 	}
 	return nil, fmt.Errorf("oidc: no JWKS key for kid %q", kid)
+}
+
+// VerifyRS256 validates a JWT's RS256 signature against the JWKS at jwksURL,
+// enforces expiry (60s leeway), optionally requires wantAudience in the "aud"
+// claim, and unmarshals the now-trusted payload into out. It performs no issuer
+// or nonce checks — the caller adds those. This backs token paths without a
+// nonce, such as the Entra ROPC id_token. A nil hc uses a default client.
+func VerifyRS256(ctx context.Context, hc *http.Client, jwksURL, token, wantAudience string, out any) error {
+	if hc == nil {
+		hc = &http.Client{Timeout: 10 * time.Second}
+	}
+	parts := strings.Split(token, ".")
+	if len(parts) != 3 {
+		return errors.New("oidc: malformed token")
+	}
+	var hdr struct {
+		Alg string `json:"alg"`
+		Kid string `json:"kid"`
+	}
+	if err := decodeSegment(parts[0], &hdr); err != nil {
+		return err
+	}
+	if hdr.Alg != "RS256" {
+		return fmt.Errorf("oidc: unsupported token alg %q", hdr.Alg)
+	}
+	pub, err := keyFromJWKS(ctx, hc, jwksURL, hdr.Kid)
+	if err != nil {
+		return err
+	}
+	sig, err := base64.RawURLEncoding.DecodeString(parts[2])
+	if err != nil {
+		return err
+	}
+	digest := sha256.Sum256([]byte(parts[0] + "." + parts[1]))
+	if err := rsa.VerifyPKCS1v15(pub, crypto.SHA256, digest[:], sig); err != nil {
+		return errors.New("oidc: token signature invalid")
+	}
+	var std struct {
+		Exp int64           `json:"exp"`
+		Aud json.RawMessage `json:"aud"`
+	}
+	if err := decodeSegment(parts[1], &std); err != nil {
+		return err
+	}
+	if std.Exp != 0 && time.Now().After(time.Unix(std.Exp, 0).Add(60*time.Second)) {
+		return errors.New("oidc: token expired")
+	}
+	if wantAudience != "" && !audienceContains(std.Aud, wantAudience) {
+		return errors.New("oidc: audience mismatch")
+	}
+	if out != nil {
+		return decodeSegment(parts[1], out)
+	}
+	return nil
 }
 
 // rsaKeyFromJWK reconstructs an RSA public key from a JWK's base64url modulus (n)
