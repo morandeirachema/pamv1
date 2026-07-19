@@ -95,12 +95,15 @@ Pod spec (defaults in `deploy/k8s/deployment.yaml` and the chart):
 [CloudNativePG](https://cloudnative-pg.io/). Migrations apply automatically on
 pam-server startup.
 
-**Scaling / HA caveat:** the server is largely stateless, but OIDC PKCE login
-state, break-glass quorum-unseal shares, and the auth rate-limiter are currently
-**per-replica in memory**. Until those move to shared storage, run a single
-replica *or* use sticky sessions for the OIDC callback and the unseal flow. All
-core PAM operations (proxy, WinRM, RDP, rotation, reveal) are safe across
-replicas.
+**Scaling / HA:** the server is stateless enough to run multiple replicas —
+**OIDC login state is shared via the database**, so the auth-code callback can
+land on any replica. Two things remain per-replica: the auth **rate-limiter**
+(best-effort; slightly looser limits across N replicas, acceptable) and the
+**break-glass quorum-unseal shares** (kept in memory *by design* — persisting key
+shares to the DB would weaken the offline-shares guarantee). For the unseal flow,
+submit all shares to one replica (a sticky session, or scale to 1 during an
+emergency). All other operations (proxy, WinRM, RDP, rotation, reveal, approval,
+checkout) are safe across replicas.
 
 ## Sizing (rough)
 

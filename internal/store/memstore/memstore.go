@@ -12,18 +12,19 @@ import (
 )
 
 type Memstore struct {
-	mu        sync.Mutex
-	nextID    int64
-	targets   map[int64]store.Target
-	creds     map[int64]store.Credential
-	users     map[int64]store.User
-	sessions  map[int64]store.Session
-	mfa       map[string]store.MFAEnrollment
-	recovery  map[string]map[string]bool // username -> set of code hashes
-	grants    map[int64]store.TargetGrant
-	accessReq map[int64]store.AccessRequest
-	checkouts map[int64]store.Checkout
-	audit     []store.AuditEvent
+	mu         sync.Mutex
+	nextID     int64
+	targets    map[int64]store.Target
+	creds      map[int64]store.Credential
+	users      map[int64]store.User
+	sessions   map[int64]store.Session
+	mfa        map[string]store.MFAEnrollment
+	recovery   map[string]map[string]bool // username -> set of code hashes
+	grants     map[int64]store.TargetGrant
+	accessReq  map[int64]store.AccessRequest
+	checkouts  map[int64]store.Checkout
+	oidcStates map[string]oidcState
+	audit      []store.AuditEvent
 }
 
 func New() *Memstore {
@@ -528,6 +529,40 @@ func (m *Memstore) CountMFARecoveryCodes(_ context.Context, username string) (in
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return len(m.recovery[username]), nil
+}
+
+type oidcState struct {
+	verifier, nonce string
+	expiresAt       time.Time
+}
+
+func (m *Memstore) PutOIDCState(_ context.Context, state, verifier, nonce string, expiresAt time.Time) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.oidcStates == nil {
+		m.oidcStates = make(map[string]oidcState)
+	}
+	now := time.Now()
+	for k, v := range m.oidcStates { // opportunistic expiry sweep
+		if now.After(v.expiresAt) {
+			delete(m.oidcStates, k)
+		}
+	}
+	m.oidcStates[state] = oidcState{verifier: verifier, nonce: nonce, expiresAt: expiresAt.UTC()}
+	return nil
+}
+
+func (m *Memstore) TakeOIDCState(_ context.Context, state string, now time.Time) (string, string, bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	s, ok := m.oidcStates[state]
+	if ok {
+		delete(m.oidcStates, state)
+	}
+	if !ok || now.After(s.expiresAt) {
+		return "", "", false, nil
+	}
+	return s.verifier, s.nonce, true, nil
 }
 
 func (m *Memstore) Ping(_ context.Context) error { return nil }

@@ -109,14 +109,15 @@ and issues a session token (see `api`). `HighestRole` is the shared claim→role
 mapper used by LDAP, Entra and OIDC.
 
 **OIDC login** (`internal/oidc`, Phase 3b hardening): the production-grade
-browser flow. `GET /api/auth/oidc/start` generates PKCE + state + nonce (kept in
-an in-memory `oidcPending` store) and redirects to the IdP. `GET
-/api/auth/oidc/callback` validates state, exchanges the code, and **verifies the
-ID token's RS256 signature against the IdP JWKS** plus issuer/audience/nonce/exp,
-maps roles/groups → role, issues a session, and redirects to the portal with the
-token in the URL fragment. Unlike ROPC, the IdP performs the login (so its
-Conditional Access / MFA apply); pamv1 does not layer its own TOTP on OIDC. HA
-needs shared `oidcPending` storage (roadmap).
+browser flow. `GET /api/auth/oidc/start` generates PKCE + state + nonce and
+persists them via `store.PutOIDCState` (shared, so any replica can complete the
+login — HA), then redirects to the IdP. `GET /api/auth/oidc/callback`
+atomically takes the state (`store.TakeOIDCState`, single-use), exchanges the
+code, and **verifies the ID token's RS256 signature against the IdP JWKS** plus
+issuer/audience/nonce/exp, maps roles/groups → role, issues a session, and
+redirects to the portal with the token in the URL fragment. Unlike ROPC, the IdP
+performs the login (so its Conditional Access / MFA apply); pamv1 does not layer
+its own TOTP on OIDC.
 
 Capability grants: admin = all; user = `CapReadInventory`+`CapConnect`; auditor =
 `CapReadInventory`+`CapReadAudit`; approver = auditor + `CapApprove` (approval
@@ -426,6 +427,7 @@ secrets. Format `json` (SIEM) or `text` (humans); collect from stdout.
 
 | Date | Change |
 |---|---|
+| 2026-07-19 | HA: OIDC PKCE login state moved to the store (`store.PutOIDCState`/`TakeOIDCState`, migration `0004`) so the auth-code callback works on any replica; removed the in-memory `oidcPending` |
 | 2026-07-19 | Phase 7 follow-ons: credential checkout/check-in leases (`store.Checkout`, migration `0003`, auto-rotate on return) + discovery (`internal/discovery`, `POST /api/discovery/scan`); `docs/REQUIREMENTS.md` (run specs) |
 | 2026-07-19 | Phase 10: scale & ops — `internal/metrics` + `GET /metrics` (Prometheus), `GET /readyz` (`store.Ping`), `deploy/helm/pamv1` chart, `release.yml` (SBOM + cosign signing) |
 | 2026-07-19 | Phase 9: NIS2 pack — `GET /api/audit/export` (`compliance_handlers.go`, `store.ExportAudit`, JSON/CSV, SHA-256 tamper digest), `docs/NIS2-COMPLIANCE.md` (Art. 21 matrix + Art. 23 export) |

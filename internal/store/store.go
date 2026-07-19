@@ -215,6 +215,13 @@ type Store interface {
 	// CountMFARecoveryCodes returns how many recovery codes remain.
 	CountMFARecoveryCodes(ctx context.Context, username string) (int, error)
 
+	// OIDC login PKCE/nonce state, shared across replicas so the auth-code
+	// callback can land on any instance (HA).
+	PutOIDCState(ctx context.Context, state, verifier, nonce string, expiresAt time.Time) error
+	// TakeOIDCState atomically fetches and deletes an unexpired state; ok is false
+	// if it is missing or expired.
+	TakeOIDCState(ctx context.Context, state string, now time.Time) (verifier, nonce string, ok bool, err error)
+
 	// Ping reports whether the backend is reachable (readiness probe).
 	Ping(ctx context.Context) error
 

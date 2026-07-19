@@ -124,7 +124,6 @@ type Server struct {
 	recordingDir       string
 	oidc               *oidc.Provider
 	oidcRoleMap        map[string]auth.Role
-	oidcPending        *oidcPending
 	portalURL          string
 	guacdAddr          string
 	guacdRecordingPath string
@@ -212,7 +211,6 @@ func New(st store.Store, v *vault.Vault, resolver *auth.Resolver, authn auth.Aut
 		recordingDir:       opts.RecordingDir,
 		oidc:               opts.OIDC,
 		oidcRoleMap:        opts.OIDCRoleMap,
-		oidcPending:        newOIDCPending(),
 		portalURL:          portalURL,
 		guacdAddr:          opts.GuacdAddr,
 		guacdRecordingPath: opts.GuacdRecordingPath,

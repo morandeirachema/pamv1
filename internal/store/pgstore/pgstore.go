@@ -597,6 +597,30 @@ func (s *PGStore) CountMFARecoveryCodes(ctx context.Context, username string) (i
 	return n, err
 }
 
+func (s *PGStore) PutOIDCState(ctx context.Context, state, verifier, nonce string, expiresAt time.Time) error {
+	// Best-effort GC of expired rows, then upsert.
+	_, _ = s.pool.Exec(ctx, `DELETE FROM oidc_states WHERE expires_at <= now()`)
+	_, err := s.pool.Exec(ctx,
+		`INSERT INTO oidc_states (state, verifier, nonce, expires_at) VALUES ($1, $2, $3, $4)
+		 ON CONFLICT (state) DO UPDATE SET verifier = EXCLUDED.verifier, nonce = EXCLUDED.nonce, expires_at = EXCLUDED.expires_at`,
+		state, verifier, nonce, expiresAt.UTC())
+	return err
+}
+
+func (s *PGStore) TakeOIDCState(ctx context.Context, state string, now time.Time) (string, string, bool, error) {
+	var verifier, nonce string
+	err := s.pool.QueryRow(ctx,
+		`DELETE FROM oidc_states WHERE state = $1 AND expires_at > $2 RETURNING verifier, nonce`,
+		state, now.UTC()).Scan(&verifier, &nonce)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", "", false, nil
+	}
+	if err != nil {
+		return "", "", false, err
+	}
+	return verifier, nonce, true, nil
+}
+
 func (s *PGStore) Ping(ctx context.Context) error {
 	return s.pool.Ping(ctx)
 }

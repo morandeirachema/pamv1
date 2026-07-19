@@ -3,56 +3,16 @@ package api
 import (
 	"net/http"
 	"net/url"
-	"sync"
 	"time"
 
 	"github.com/morandeirachema/pamv1/internal/auth"
 	"github.com/morandeirachema/pamv1/internal/oidc"
 )
 
+// oidcStateTTL bounds an in-flight OIDC login. The PKCE verifier + nonce are
+// persisted in the store (keyed by the opaque state) so the callback can land on
+// any replica (HA).
 const oidcStateTTL = 10 * time.Minute
-
-// pendingAuth holds the PKCE verifier and nonce for an in-flight OIDC login,
-// keyed by the opaque state parameter.
-type pendingAuth struct {
-	verifier string
-	nonce    string
-	expires  time.Time
-}
-
-// oidcPending is an in-memory store of in-flight OIDC logins. It is per-process;
-// a multi-replica deployment needs shared storage (roadmap).
-type oidcPending struct {
-	mu sync.Mutex
-	m  map[string]pendingAuth
-}
-
-func newOIDCPending() *oidcPending { return &oidcPending{m: make(map[string]pendingAuth)} }
-
-func (p *oidcPending) put(state string, a pendingAuth) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	now := time.Now()
-	for k, v := range p.m { // opportunistic expiry sweep
-		if now.After(v.expires) {
-			delete(p.m, k)
-		}
-	}
-	p.m[state] = a
-}
-
-func (p *oidcPending) take(state string) (pendingAuth, bool) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	a, ok := p.m[state]
-	if ok {
-		delete(p.m, state)
-	}
-	if !ok || time.Now().After(a.expires) {
-		return pendingAuth{}, false
-	}
-	return a, true
-}
 
 // oidcStart begins the Authorization Code + PKCE flow and redirects to the IdP.
 func (s *Server) oidcStart(w http.ResponseWriter, r *http.Request) {
@@ -67,7 +27,10 @@ func (s *Server) oidcStart(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "oidc init failed")
 		return
 	}
-	s.oidcPending.put(state, pendingAuth{verifier: verifier, nonce: nonce, expires: time.Now().Add(oidcStateTTL)})
+	if err := s.store.PutOIDCState(r.Context(), state, verifier, nonce, time.Now().Add(oidcStateTTL)); err != nil {
+		writeError(w, http.StatusInternalServerError, "oidc init failed")
+		return
+	}
 	http.Redirect(w, r, s.oidc.AuthCodeURL(state, nonce, challenge), http.StatusFound)
 }
 
@@ -85,13 +48,18 @@ func (s *Server) oidcCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	code, state := q.Get("code"), q.Get("state")
-	pending, ok := s.oidcPending.take(state)
+	verifier, nonce, ok, err := s.store.TakeOIDCState(r.Context(), state, time.Now())
+	if err != nil {
+		s.log.Error("oidc state lookup failed", "err", err)
+		s.redirectPortal(w, r, "pam_error=login_failed")
+		return
+	}
 	if code == "" || !ok {
 		s.log.Warn("oidc callback: invalid state", "remote", r.RemoteAddr)
 		s.redirectPortal(w, r, "pam_error=invalid_state")
 		return
 	}
-	claims, err := s.oidc.Exchange(r.Context(), code, pending.verifier, pending.nonce)
+	claims, err := s.oidc.Exchange(r.Context(), code, verifier, nonce)
 	if err != nil {
 		s.log.Warn("oidc exchange failed", "err", err, "remote", r.RemoteAddr)
 		s.redirectPortal(w, r, "pam_error=login_failed")
