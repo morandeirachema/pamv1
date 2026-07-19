@@ -73,6 +73,10 @@ func (s *Server) mfaVerify(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "decryption failed")
 		return
 	}
+	// Validate without consuming the time-step: verify is a session-authenticated
+	// enrollment check, and confirming here then logging in with the same in-window
+	// code is a legitimate flow. The login path (checkSecondFactor) is what enforces
+	// single-use against replay.
 	if !mfa.Validate(secret, in.OTP, time.Now()) {
 		writeError(w, http.StatusUnauthorized, "invalid multi-factor code")
 		return

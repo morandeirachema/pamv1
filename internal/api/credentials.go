@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"os"
@@ -51,14 +52,18 @@ func (s *Server) createCredential(w http.ResponseWriter, r *http.Request) {
 		storeError(w, err)
 		return
 	}
+	// Roll the half-built row back on a cancel-detached context, so a client
+	// disconnect between the insert and the ciphertext write cannot orphan a
+	// permanent empty-SecretEnc credential (which would be undecryptable).
+	rollback := func() { _ = s.store.DeleteCredential(context.WithoutCancel(r.Context()), c.ID) }
 	enc, err := s.vault.Encrypt(r.Context(), in.Secret, store.CredentialAAD(c.TargetID, c.ID))
 	if err != nil {
-		_ = s.store.DeleteCredential(r.Context(), c.ID)
+		rollback()
 		writeError(w, http.StatusInternalServerError, "encryption failed")
 		return
 	}
 	if err := s.store.UpdateCredentialSecretEnc(r.Context(), c.ID, enc); err != nil {
-		_ = s.store.DeleteCredential(r.Context(), c.ID)
+		rollback()
 		storeError(w, err)
 		return
 	}

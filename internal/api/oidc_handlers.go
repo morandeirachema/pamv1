@@ -4,11 +4,21 @@ import (
 	"crypto/subtle"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/morandeirachema/pamv1/internal/auth"
 	"github.com/morandeirachema/pamv1/internal/oidc"
 )
+
+// requestIsHTTPS reports whether the browser reached the edge over TLS, honoring
+// a TLS-terminating proxy's X-Forwarded-Proto so the login-CSRF state cookie
+// still gets the Secure attribute in the common reverse-proxy deployment. Only
+// used to set Secure (over-setting merely drops the cookie on plain HTTP), never
+// to make a trust decision, so a spoofed header cannot weaken anything.
+func requestIsHTTPS(r *http.Request) bool {
+	return r.TLS != nil || strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https")
+}
 
 // oidcStateTTL bounds an in-flight OIDC login. The PKCE verifier + nonce are
 // persisted in the store (keyed by the opaque state) so the callback can land on
@@ -40,7 +50,7 @@ func (s *Server) oidcStart(w http.ResponseWriter, r *http.Request) {
 	http.SetCookie(w, &http.Cookie{
 		Name: oidcStateCookie, Value: state, Path: "/api/auth/oidc/",
 		MaxAge: int(oidcStateTTL.Seconds()), HttpOnly: true,
-		Secure: r.TLS != nil, SameSite: http.SameSiteLaxMode,
+		Secure: requestIsHTTPS(r), SameSite: http.SameSiteLaxMode,
 	})
 	http.Redirect(w, r, s.oidc.AuthCodeURL(state, nonce, challenge), http.StatusFound)
 }
@@ -63,7 +73,7 @@ func (s *Server) oidcCallback(w http.ResponseWriter, r *http.Request) {
 	// the state the IdP echoed back. Checked before consuming the single-use
 	// server state so a foreign request can't burn a legitimate one.
 	sc, cerr := r.Cookie(oidcStateCookie)
-	http.SetCookie(w, &http.Cookie{Name: oidcStateCookie, Value: "", Path: "/api/auth/oidc/", MaxAge: -1, HttpOnly: true, Secure: r.TLS != nil, SameSite: http.SameSiteLaxMode})
+	http.SetCookie(w, &http.Cookie{Name: oidcStateCookie, Value: "", Path: "/api/auth/oidc/", MaxAge: -1, HttpOnly: true, Secure: requestIsHTTPS(r), SameSite: http.SameSiteLaxMode})
 	if state == "" || cerr != nil || subtle.ConstantTimeCompare([]byte(sc.Value), []byte(state)) != 1 {
 		s.log.Warn("oidc callback: state cookie mismatch", "remote", r.RemoteAddr)
 		s.redirectPortal(w, r, "pam_error=invalid_state")

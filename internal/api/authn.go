@@ -131,11 +131,12 @@ func (s *Server) checkSecondFactor(ctx context.Context, username string, enr *st
 	if secret, err := s.vault.Decrypt(ctx, enr.SecretEnc, store.MFAAAD(username)); err == nil {
 		if step, ok := mfa.ValidateStep(secret, otp, time.Now()); ok {
 			// Anti-replay: accept a valid code only if its time-step has not been
-			// used yet. A store error shouldn't block login, so accept + log.
+			// used yet. The replay guard is a security control, so a store error
+			// that prevents recording the step must fail closed (reject), not accept.
 			consumed, cerr := s.store.ConsumeTOTPStep(ctx, username, step)
 			if cerr != nil {
-				s.log.Warn("totp replay check failed; accepting code", "user", username, "err", cerr)
-				return true
+				s.log.Warn("totp replay check failed; rejecting code", "user", username, "err", cerr)
+				return false
 			}
 			return consumed
 		}
