@@ -116,6 +116,34 @@ func TestLoginMFAFailsClosedOnStoreError(t *testing.T) {
 	}
 }
 
+// TestCheckoutDecryptFailureRollsBackLease proves that when a checkout's decrypt
+// fails after the lease is created, the lease is rolled back so the credential is
+// not blocked from checkout for the whole TTL.
+func TestCheckoutDecryptFailureRollsBackLease(t *testing.T) {
+	srv, st := newTestServerOpts(t, nil, api.Options{CheckoutTTL: 30 * time.Minute})
+	ctx := context.Background()
+	target := &store.Target{Name: "web-01", Host: "h", Port: 22, OSType: "linux", Protocol: "ssh"}
+	if err := st.CreateTarget(ctx, target); err != nil {
+		t.Fatal(err)
+	}
+	// An undecryptable secret makes the checkout's Decrypt fail.
+	if err := st.CreateCredential(ctx, &store.Credential{
+		TargetID: target.ID, Username: "root", SecretType: "password", SecretEnc: "v1:not-a-real-token",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	creds, _ := st.ListCredentials(ctx, target.ID)
+	path := "/api/credentials/" + itoa(creds[0].ID) + "/checkout"
+
+	if status, _ := do(t, srv, http.MethodPost, path, testAPIKey, nil); status < 500 {
+		t.Fatalf("checkout with bad secret = %d, want 5xx", status)
+	}
+	// A second checkout must NOT be 409 — the failed lease must have rolled back.
+	if status, _ := do(t, srv, http.MethodPost, path, testAPIKey, nil); status == http.StatusConflict {
+		t.Fatal("lease was not rolled back: second checkout is 409")
+	}
+}
+
 // newServerWithStore builds a test server over a caller-supplied store (for
 // fault injection), mirroring newTestServerOpts otherwise.
 func newServerWithStore(t *testing.T, st store.Store, authn auth.Authenticator, opts api.Options) *httptest.Server {

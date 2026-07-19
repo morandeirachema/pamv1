@@ -62,6 +62,11 @@ func (s *Server) rotateCredential(ctx context.Context, cred *store.Credential, t
 		return time.Time{}, fmt.Errorf("vault decrypt failed")
 	}
 
+	// Record the attempt before the external password change, so a crash between
+	// changing the target and persisting the new secret leaves a rotate_started
+	// with no matching rotate/rotate_failed — a detectable trail on every path.
+	s.audit(ctx, "credential.rotate_started", fmt.Sprintf("credential:%d target:%s", cred.ID, target.Name))
+
 	// Generate the new secret and apply it on the target. Passwords use the
 	// Rotator; ssh_key credentials install a fresh keypair via a KeyRotator.
 	var newSecret string
@@ -90,13 +95,16 @@ func (s *Server) rotateCredential(ctx context.Context, cred *store.Credential, t
 		return time.Time{}, fmt.Errorf("%w: unknown secret type %q", ErrUnsupported, cred.SecretType)
 	}
 
-	enc, err := s.vault.Encrypt(ctx, newSecret, store.CredentialAAD(target.ID))
+	// The target's secret is now changed. Persist the new secret with a context
+	// detached from cancellation: a client disconnect or graceful shutdown here
+	// must not lose the new secret, which would lock PAM out of the target.
+	pctx := context.WithoutCancel(ctx)
+	enc, err := s.vault.Encrypt(pctx, newSecret, store.CredentialAAD(target.ID))
 	if err != nil {
-		// The target now has a password the vault does not hold — loud failure.
 		return time.Time{}, fmt.Errorf("re-encrypt after rotation failed: %w", err)
 	}
 	now := time.Now().UTC()
-	if err := s.store.RotateCredentialSecret(ctx, cred.ID, enc, now); err != nil {
+	if err := s.store.RotateCredentialSecret(pctx, cred.ID, enc, now); err != nil {
 		return time.Time{}, fmt.Errorf("persist rotated secret failed: %w", err)
 	}
 	return now, nil
@@ -148,6 +156,9 @@ func (s *Server) checkoutCredential(w http.ResponseWriter, r *http.Request) {
 	}
 	secret, err := s.vault.Decrypt(r.Context(), cred.SecretEnc, store.CredentialAAD(target.ID))
 	if err != nil {
+		// The lease was created but the secret can't be revealed — roll it back so
+		// the credential isn't blocked from checkout for the whole TTL.
+		_ = s.store.CheckinCheckout(r.Context(), co.ID, time.Now())
 		s.audit(r.Context(), "credential.decrypt_failed", fmt.Sprintf("credential:%d target:%s op:checkout", cred.ID, target.Name))
 		writeError(w, http.StatusInternalServerError, "decryption failed")
 		return

@@ -46,10 +46,6 @@ func (s *Server) RotateCredentialByID(ctx context.Context, credentialID int64) {
 		s.log.Warn("post-session rotation: target not found", "credential", credentialID, "err", err)
 		return
 	}
-	// Record the attempt before the external password change, so a crash between
-	// changing the target and persisting the new secret to the vault still leaves
-	// a rotate_started with no matching rotate/rotate_failed — a detectable trail.
-	s.audit(ctx, "credential.rotate_started", fmt.Sprintf("credential:%d target:%s reason:post-session", cred.ID, target.Name))
 	if _, err := s.rotateCredential(ctx, cred, target); err != nil {
 		s.audit(ctx, "credential.rotate_failed", fmt.Sprintf("credential:%d reason:post-session error:%v", cred.ID, err))
 		s.log.Error("post-session rotation failed", "credential", cred.ID, "err", err)
@@ -91,26 +87,38 @@ func (s *Server) runLifecycleOnce(ctx context.Context, maxAge time.Duration, now
 	}
 	for i := range creds {
 		cred := &creds[i]
-		target, terr := s.store.GetTarget(ctx, cred.TargetID)
-		if terr != nil {
-			continue
-		}
-		res := s.reconcileOne(ctx, cred, target, false)
-		rep.Checked++
-		if res.Status == "out_of_sync" {
-			rep.OutOfSync++
-		}
-		if maxAge > 0 && cred.SecretType == "password" && credentialAge(cred, now) > maxAge {
-			if _, ok := s.rotators[target.Protocol]; ok {
-				if _, rerr := s.rotateCredential(ctx, cred, target); rerr == nil {
-					rep.Rotated++
-					s.audit(ctx, "credential.rotate",
-						"credential:"+strconv.FormatInt(cred.ID, 10)+" target:"+target.Name+" reason:max-age")
-				} else {
-					s.log.Error("lifecycle: rotate", "credential", cred.ID, "err", rerr)
+		// Isolate each credential: a panic in a third-party-backed connector must
+		// not crash the worker goroutine (and with it the whole process).
+		func() {
+			defer func() {
+				if p := recover(); p != nil {
+					s.log.Error("lifecycle: panic handling credential", "credential", cred.ID, "panic", p)
+				}
+			}()
+			target, terr := s.store.GetTarget(ctx, cred.TargetID)
+			if terr != nil {
+				s.log.Warn("lifecycle: target lookup failed", "credential", cred.ID, "err", terr)
+				return
+			}
+			res := s.reconcileOne(ctx, cred, target, false)
+			rep.Checked++
+			if res.Status == "out_of_sync" {
+				rep.OutOfSync++
+			}
+			if maxAge > 0 && cred.SecretType == "password" && credentialAge(cred, now) > maxAge {
+				if _, ok := s.rotators[target.Protocol]; ok {
+					if _, rerr := s.rotateCredential(ctx, cred, target); rerr == nil {
+						rep.Rotated++
+						s.audit(ctx, "credential.rotate",
+							"credential:"+strconv.FormatInt(cred.ID, 10)+" target:"+target.Name+" reason:max-age")
+					} else {
+						s.audit(ctx, "credential.rotate_failed",
+							fmt.Sprintf("credential:%d target:%s reason:max-age error:%v", cred.ID, target.Name, rerr))
+						s.log.Error("lifecycle: rotate", "credential", cred.ID, "err", rerr)
+					}
 				}
 			}
-		}
+		}()
 	}
 	return rep
 }
