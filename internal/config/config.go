@@ -78,6 +78,10 @@ type Config struct {
 	AirGap          bool
 	// CheckoutTTL is the lifetime of a credential checkout lease.
 	CheckoutTTL time.Duration
+	// AllowedProtocols restricts which target protocols may be created and
+	// connected to (comma-separated, e.g. "ssh,winrm"); empty = all allowed. Used
+	// in OT zones to forbid protocols like RDP.
+	AllowedProtocols string
 
 	// WinRMHTTPS uses HTTPS (5986) for WinRM; WinRMInsecure skips TLS verify (dev).
 	WinRMHTTPS    bool
@@ -187,6 +191,7 @@ func Load() (*Config, error) {
 		ApprovalWindow:      time.Duration(getenvInt("PAM_APPROVAL_WINDOW_MIN", 60)) * time.Minute,
 		AirGap:              os.Getenv("PAM_OT_AIRGAP") == "true",
 		CheckoutTTL:         time.Duration(getenvInt("PAM_CHECKOUT_TTL_MIN", 30)) * time.Minute,
+		AllowedProtocols:    os.Getenv("PAM_ALLOWED_PROTOCOLS"),
 		WinRMHTTPS:          os.Getenv("PAM_WINRM_HTTPS") != "false", // default HTTPS
 		WinRMInsecure:       os.Getenv("PAM_WINRM_INSECURE_SKIP_VERIFY") == "true",
 		WinRMNTLM:           os.Getenv("PAM_WINRM_AUTH") == "ntlm",

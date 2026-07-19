@@ -110,7 +110,8 @@ Designed for industrial environments ([IEC 62443](https://www.isa.org/standards-
 - [x] **Session approval workflow (4-eyes)**: `POST /api/access-requests` → approver (a *different* principal, `CapApprove`) approves/denies; `access_requests` table; enforced on **every** connect path (SSH proxy, WinRM, RDP); break-glass bypasses; approvals/denials audited + alerted. Per-target (`require_approval`) or global (`PAM_REQUIRE_APPROVAL`), time-boxed (`PAM_APPROVAL_WINDOW_MIN`)
 - [x] **Air-gap/offline mode** (`PAM_OT_AIRGAP`): disables all outbound calls (alert webhooks); alerts still hit the audit trail + local logs
 - [x] Deployment pattern for the industrial DMZ (level 3.5) documented (Purdue diagram, firewall guidance, IEC 62443 control mapping)
-- [ ] Protocol allowlisting per cell; read-only observer sessions for engineers (follow-on)
+- [x] **Protocol allowlisting** (`PAM_ALLOWED_PROTOCOLS`): restrict which target protocols may be created/connected (e.g. forbid RDP in an OT zone); enforced at create-target and on every connect path (API + proxy)
+- [ ] Read-only observer sessions for engineers (follow-on)
 - [ ] Serial/jump-host connectors for legacy equipment (follow-on)
 
 ## Phase 9 — NIS2 compliance pack ✅

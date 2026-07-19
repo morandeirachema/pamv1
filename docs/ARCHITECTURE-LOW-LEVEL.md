@@ -440,6 +440,7 @@ secrets. Format `json` (SIEM) or `text` (humans); collect from stdout.
 
 | Date | Change |
 |---|---|
+| 2026-07-19 | OT: protocol allowlist (`PAM_ALLOWED_PROTOCOLS`) enforced at create-target and every connect path (WinRM/RDP handlers + SSH proxy) |
 | 2026-07-19 | Alerting: email + syslog channels (`alert.Email`/`alert.Syslog`/`alert.Multi`, `PAM_ALERT_SYSLOG`/`PAM_ALERT_EMAIL_*`) alongside the webhook |
 | 2026-07-19 | Lifecycle: forced rotation after a proxied SSH session ends (`proxy.Config.OnSessionEnd` → `Server.RotateCredentialByID`, `PAM_ROTATE_AFTER_SESSION`) |
 | 2026-07-19 | Lifecycle: `ssh_key` credential rotation (`rotate.GenerateSSHKey` + `SSHConnector.RotateKey` / `KeyRotator`) — generates a keypair and replaces `authorized_keys` |

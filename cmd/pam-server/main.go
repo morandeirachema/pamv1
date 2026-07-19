@@ -351,6 +351,7 @@ func run() error {
 		ApprovalWindow:      cfg.ApprovalWindow,
 		AirGap:              cfg.AirGap,
 		CheckoutTTL:         cfg.CheckoutTTL,
+		AllowedProtocols:    splitAndTrim(cfg.AllowedProtocols),
 	})
 	if err != nil {
 		return err
@@ -377,12 +378,13 @@ func run() error {
 			log.Info("post-session credential rotation enabled")
 		}
 		px, err := proxy.New(st, v, resolver, proxy.Config{
-			HostKey:         hostKey,
-			RecordingDir:    cfg.RecordingDir,
-			Sessions:        sessions,
-			RequireApproval: cfg.RequireApproval,
-			UpstreamHostKey: upstreamHostKey,
-			OnSessionEnd:    onSessionEnd,
+			HostKey:          hostKey,
+			RecordingDir:     cfg.RecordingDir,
+			Sessions:         sessions,
+			RequireApproval:  cfg.RequireApproval,
+			UpstreamHostKey:  upstreamHostKey,
+			OnSessionEnd:     onSessionEnd,
+			AllowedProtocols: splitAndTrim(cfg.AllowedProtocols),
 		})
 		if err != nil {
 			return err

@@ -49,6 +49,9 @@ type Config struct {
 	// session ends — used to force credential rotation after use. It runs in a
 	// goroutine and must not block.
 	OnSessionEnd func(credentialID int64)
+	// AllowedProtocols, when non-empty, restricts which target protocols the proxy
+	// will broker (the proxy only handles "ssh"; this lets an OT policy forbid it).
+	AllowedProtocols []string
 }
 
 type Proxy struct {
@@ -64,6 +67,7 @@ type Proxy struct {
 	requireApprv bool
 	upstreamHKCB ssh.HostKeyCallback
 	onSessionEnd func(credentialID int64)
+	allowedProto map[string]bool
 	chain        *recordChain
 
 	mu sync.Mutex
@@ -99,6 +103,7 @@ func New(st store.Store, v *vault.Vault, resolver *auth.Resolver, cfg Config) (*
 		requireApprv: cfg.RequireApproval,
 		upstreamHKCB: cfg.UpstreamHostKey,
 		onSessionEnd: cfg.OnSessionEnd,
+		allowedProto: protocolSet(cfg.AllowedProtocols),
 		chain:        newRecordChain(cfg.RecordingDir),
 	}
 	if p.upstreamHKCB == nil {
@@ -233,6 +238,14 @@ func (p *Proxy) handleConn(ctx context.Context, nConn net.Conn) {
 		p.log.Warn("session denied", "actor", actor, "login", login, "reason", err.Error(), "remote", remote)
 		p.audit(ctx, actor, "session.denied", fmt.Sprintf("login:%s reason:%v", login, err))
 		rejectAll(chans, ssh.Prohibited, "pamv1: "+err.Error())
+		return
+	}
+
+	// Protocol allowlist (OT policy): refuse forbidden protocols.
+	if p.allowedProto != nil && !p.allowedProto[target.Protocol] {
+		p.log.Warn("session denied: protocol not allowed", "actor", actor, "target", target.Name, "protocol", target.Protocol)
+		p.audit(ctx, actor, "access.denied", "target:"+target.Name+" reason:protocol-not-allowed")
+		rejectAll(chans, ssh.Prohibited, "pamv1: this protocol is not allowed by policy")
 		return
 	}
 
@@ -451,6 +464,21 @@ func pumpRequests(in <-chan *ssh.Request, dst ssh.Channel) {
 
 // rejectAll rejects every pending channel with reason and msg, used to refuse a
 // connection after authentication once a policy gate fails.
+// protocolSet turns a protocol list into a lookup set; an empty list returns nil
+// (meaning "allow all protocols").
+func protocolSet(ps []string) map[string]bool {
+	if len(ps) == 0 {
+		return nil
+	}
+	m := make(map[string]bool, len(ps))
+	for _, p := range ps {
+		if p = strings.TrimSpace(p); p != "" {
+			m[p] = true
+		}
+	}
+	return m
+}
+
 func rejectAll(chans <-chan ssh.NewChannel, reason ssh.RejectionReason, msg string) {
 	for nc := range chans {
 		nc.Reject(reason, msg)

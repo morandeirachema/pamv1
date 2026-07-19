@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/morandeirachema/pamv1/internal/alert"
@@ -127,6 +128,9 @@ type Options struct {
 	// connector (nil trusts any upstream key). Ignored if Rotators/Verifiers are
 	// supplied explicitly.
 	SSHHostKeyCallback ssh.HostKeyCallback
+	// AllowedProtocols, when non-empty, restricts which target protocols may be
+	// created and connected to (e.g. {"ssh","winrm"}); empty allows all.
+	AllowedProtocols []string
 }
 
 type Server struct {
@@ -159,6 +163,7 @@ type Server struct {
 	checkoutTTL        time.Duration
 	airGap             bool
 	discoveryDial      func(ctx context.Context, network, addr string) (net.Conn, error)
+	allowedProtocols   map[string]bool
 	metrics            *metrics.Metrics
 	log                *slog.Logger
 	mux                *http.ServeMux
@@ -249,6 +254,7 @@ func New(st store.Store, v *vault.Vault, resolver *auth.Resolver, authn auth.Aut
 		checkoutTTL:        checkoutTTL,
 		airGap:             opts.AirGap,
 		discoveryDial:      opts.DiscoveryDial,
+		allowedProtocols:   protocolSet(opts.AllowedProtocols),
 		metrics:            metrics.New(),
 		log:                logging.Component("api"),
 		mux:                http.NewServeMux(),
@@ -451,6 +457,27 @@ func (s *Server) audit(ctx context.Context, action, detail string) {
 // health is the liveness probe: it always reports ok while the process serves.
 func (s *Server) health(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// protocolSet turns a protocol list into a lookup set; an empty list returns nil,
+// meaning "allow all protocols".
+func protocolSet(ps []string) map[string]bool {
+	if len(ps) == 0 {
+		return nil
+	}
+	m := make(map[string]bool, len(ps))
+	for _, p := range ps {
+		if p = strings.TrimSpace(p); p != "" {
+			m[p] = true
+		}
+	}
+	return m
+}
+
+// protocolAllowed reports whether a target using proto may be created or
+// connected to under the configured allowlist (nil allowlist = all allowed).
+func (s *Server) protocolAllowed(proto string) bool {
+	return s.allowedProtocols == nil || s.allowedProtocols[proto]
 }
 
 // readyz reports readiness: the server is up AND its store backend is reachable.

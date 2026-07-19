@@ -62,6 +62,9 @@ func (s *Server) createTarget(w http.ResponseWriter, r *http.Request) {
 	case !validProtocol[in.Protocol]:
 		writeError(w, http.StatusUnprocessableEntity, `protocol must be "ssh", "winrm" or "rdp"`)
 		return
+	case !s.protocolAllowed(in.Protocol):
+		writeError(w, http.StatusUnprocessableEntity, "protocol "+in.Protocol+" is not allowed by policy")
+		return
 	}
 	t := store.Target{Name: in.Name, Host: in.Host, Port: in.Port, OSType: in.OSType, Protocol: in.Protocol, RequireApproval: in.RequireApproval}
 	if err := s.store.CreateTarget(r.Context(), &t); err != nil {
@@ -338,6 +341,10 @@ func (s *Server) runWinRM(w http.ResponseWriter, r *http.Request) {
 	}
 	if target.Protocol != "winrm" {
 		writeError(w, http.StatusUnprocessableEntity, "target protocol is not winrm")
+		return
+	}
+	if !s.protocolAllowed("winrm") {
+		writeError(w, http.StatusForbidden, "winrm is not allowed by policy")
 		return
 	}
 	if ok, err := s.authorizedForTarget(r.Context(), target.ID); err != nil {

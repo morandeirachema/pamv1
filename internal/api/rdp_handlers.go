@@ -49,6 +49,10 @@ func (s *Server) rdpTunnel(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnprocessableEntity, "target protocol is not rdp")
 		return
 	}
+	if !s.protocolAllowed("rdp") {
+		writeError(w, http.StatusForbidden, "rdp is not allowed by policy")
+		return
+	}
 	grants, err := s.store.ListTargetGrants(r.Context(), target.ID)
 	if err != nil {
 		storeError(w, err)
