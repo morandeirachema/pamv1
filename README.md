@@ -20,7 +20,7 @@ Built phase by phase with one rule: **every phase is functional end to end** —
 
 - **[User Guide](docs/USER-GUIDE.md)** — for operators/auditors/approvers: signing in, connecting through the proxy, per-role abilities.
 - **[Administrator Guide](docs/ADMIN-GUIDE.md)** — deploy, configure, manage targets/credentials/users/roles, break-glass, logging & audit.
-- **[Architecture](docs/ARCHITECTURE-HIGH-LEVEL.md)** ([low-level](docs/ARCHITECTURE-LOW-LEVEL.md)), the **[ports & network-flow matrix](docs/PORTS-AND-FLOWS.md)**, and the **[backup & restore runbook](docs/BACKUP-AND-RESTORE.md)**.
+- **[Architecture](docs/ARCHITECTURE-HIGH-LEVEL.md)** ([low-level](docs/ARCHITECTURE-LOW-LEVEL.md)) plus **[code-derived diagrams](docs/ARCHITECTURE-DIAGRAMS.md)** (package graph, data model, REST surface — generated from source and CI-enforced current), the **[ports & network-flow matrix](docs/PORTS-AND-FLOWS.md)**, and the **[backup & restore runbook](docs/BACKUP-AND-RESTORE.md)**.
 
 ## Architecture
 

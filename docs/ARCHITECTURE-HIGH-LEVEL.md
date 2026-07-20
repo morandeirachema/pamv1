@@ -4,6 +4,11 @@
 > boundaries, data flows or trust zones. Keep it conceptual — implementation
 > detail belongs in [ARCHITECTURE-LOW-LEVEL.md](ARCHITECTURE-LOW-LEVEL.md).
 >
+> **Code-derived diagrams** (package graph, data model, REST surface) are
+> generated from the source and CI-enforced current — see
+> [ARCHITECTURE-DIAGRAMS.md](ARCHITECTURE-DIAGRAMS.md). This file holds the
+> hand-authored conceptual diagrams below.
+>
 > Last updated: 2026-07-18 · Reflects: **Phase 3a** (RBAC + four profiles) on top of Phase 2 (session proxy + JIT injection). See [ROADMAP](../ROADMAP.md).
 
 ## 1. Purpose

@@ -1,0 +1,244 @@
+# pamv1 — Architecture Diagrams (generated)
+
+> **Do not edit by hand.** This file is regenerated from the source by
+> `go run ./cmd/archgen` (or `go generate ./...`). CI runs the
+> generator and fails if the committed copy is stale, so these diagrams stay in
+> step with the code on every change. Conceptual flows (trust zones, the JIT
+> proxy sequence, deployment) live in the hand-authored
+> [High-Level Architecture](ARCHITECTURE-HIGH-LEVEL.md) and
+> [Low-Level Architecture](ARCHITECTURE-LOW-LEVEL.md).
+
+Rendering: these are [Mermaid](https://mermaid.js.org/) diagrams; GitHub renders
+them inline.
+
+## 1. Package dependency graph
+
+Every Go package in the module and the imports between them. Arrows point from a package to the packages it imports.
+
+```mermaid
+flowchart LR
+  subgraph n_Entry_point["Entry point"]
+    n_archgen[archgen]
+    n_pam_server[pam-server]
+  end
+  subgraph n_Interface["Interface"]
+    n_api[api]
+    n_proxy[proxy]
+    n_web[web]
+  end
+  subgraph n_Identity___authz["Identity & authz"]
+    n_auth[auth]
+    n_mfa[mfa]
+    n_oidc[oidc]
+  end
+  subgraph n_Secrets["Secrets"]
+    n_shamir[shamir]
+    n_vault[vault]
+  end
+  subgraph n_Persistence["Persistence"]
+    n_memstore[memstore]
+    n_pgstore[pgstore]
+    n_store[store]
+    n_storetest[storetest]
+  end
+  subgraph n_Connectors["Connectors"]
+    n_discovery[discovery]
+    n_guacd[guacd]
+    n_rotate[rotate]
+    n_winrm[winrm]
+  end
+  subgraph n_Platform["Platform"]
+    n_alert[alert]
+    n_config[config]
+    n_logging[logging]
+    n_maint[maint]
+    n_metrics[metrics]
+    n_session[session]
+  end
+  n_alert --> n_logging
+  n_api --> n_alert
+  n_api --> n_auth
+  n_api --> n_discovery
+  n_api --> n_guacd
+  n_api --> n_logging
+  n_api --> n_metrics
+  n_api --> n_mfa
+  n_api --> n_oidc
+  n_api --> n_rotate
+  n_api --> n_session
+  n_api --> n_shamir
+  n_api --> n_store
+  n_api --> n_vault
+  n_api --> n_web
+  n_api --> n_winrm
+  n_auth --> n_oidc
+  n_auth --> n_store
+  n_maint --> n_store
+  n_maint --> n_vault
+  n_memstore --> n_store
+  n_pam_server --> n_alert
+  n_pam_server --> n_api
+  n_pam_server --> n_auth
+  n_pam_server --> n_config
+  n_pam_server --> n_logging
+  n_pam_server --> n_maint
+  n_pam_server --> n_memstore
+  n_pam_server --> n_oidc
+  n_pam_server --> n_pgstore
+  n_pam_server --> n_proxy
+  n_pam_server --> n_session
+  n_pam_server --> n_shamir
+  n_pam_server --> n_store
+  n_pam_server --> n_vault
+  n_pam_server --> n_winrm
+  n_pgstore --> n_logging
+  n_pgstore --> n_store
+  n_proxy --> n_auth
+  n_proxy --> n_logging
+  n_proxy --> n_session
+  n_proxy --> n_store
+  n_proxy --> n_vault
+  n_proxy --> n_winrm
+  n_rotate --> n_store
+  n_rotate --> n_winrm
+  n_storetest --> n_store
+```
+
+## 2. Domain data model
+
+Entities are the exported structs in `internal/store/store.go` (never-serialized fields such as `SecretEnc`/`TokenHash` are omitted). Relationships are inferred from `<Entity>ID` foreign keys.
+
+```mermaid
+erDiagram
+  AccessRequest {
+    int64 ID
+    string Requester
+    int64 TargetID
+    string Reason
+    string Status
+    string Approver
+    time_Time CreatedAt
+    ptr_time_Time DecidedAt
+    time_Time ExpiresAt
+  }
+  AuditEvent {
+    int64 ID
+    time_Time TS
+    string Actor
+    string Action
+    string Detail
+  }
+  Checkout {
+    int64 ID
+    int64 CredentialID
+    int64 TargetID
+    string Holder
+    string Reason
+    time_Time CheckedOutAt
+    time_Time ExpiresAt
+    ptr_time_Time ReturnedAt
+  }
+  Credential {
+    int64 ID
+    int64 TargetID
+    string Username
+    string SecretType
+    time_Time CreatedAt
+    ptr_time_Time RotatedAt
+  }
+  MFAEnrollment {
+    string Username
+    bool Confirmed
+    time_Time CreatedAt
+  }
+  Session {
+    int64 ID
+    string Username
+    string Role
+    string Scope
+    time_Time CreatedAt
+    time_Time ExpiresAt
+  }
+  Target {
+    int64 ID
+    string Name
+    string Host
+    int Port
+    string OSType
+    string Protocol
+    bool RequireApproval
+    time_Time CreatedAt
+  }
+  TargetGrant {
+    int64 ID
+    int64 TargetID
+    string SubjectType
+    string Subject
+  }
+  User {
+    int64 ID
+    string Username
+    string Role
+    time_Time CreatedAt
+  }
+  Credential ||--o{ Checkout : "has"
+  Target ||--o{ AccessRequest : "has"
+  Target ||--o{ Checkout : "has"
+  Target ||--o{ Credential : "has"
+  Target ||--o{ TargetGrant : "has"
+```
+
+## 3. REST API surface
+
+The 47 routes registered on the API mux, with the capability or guard each enforces (see `internal/auth` for the role → capability matrix).
+
+| Method | Path | Guard |
+|---|---|---|
+| GET | `/api/access-requests` | CapApprove |
+| POST | `/api/access-requests` | CapConnect |
+| POST | `/api/access-requests/{id}/approve` | CapApprove |
+| POST | `/api/access-requests/{id}/deny` | CapApprove |
+| GET | `/api/audit` | CapReadAudit |
+| GET | `/api/audit/export` | CapReadAudit |
+| GET | `/api/auth/oidc/callback` | public (rate-limited) |
+| GET | `/api/auth/oidc/start` | public (rate-limited) |
+| POST | `/api/breakglass/unseal` | public (rate-limited) |
+| GET | `/api/checkouts` | CapReadAudit |
+| GET | `/api/credentials` | CapReadInventory |
+| POST | `/api/credentials` | CapManageCredentials |
+| DELETE | `/api/credentials/{id}` | CapManageCredentials |
+| POST | `/api/credentials/{id}/checkin` | CapRevealSecret |
+| POST | `/api/credentials/{id}/checkout` | CapRevealSecret |
+| POST | `/api/credentials/{id}/reconcile` | CapManageCredentials |
+| POST | `/api/credentials/{id}/reveal` | CapRevealSecret |
+| POST | `/api/credentials/{id}/rotate` | CapManageCredentials |
+| POST | `/api/discovery/scan` | CapManageTargets |
+| POST | `/api/identity/reconcile` | CapManageUsers |
+| POST | `/api/login` | public (rate-limited) |
+| POST | `/api/logout` | authenticated |
+| GET | `/api/me` | authenticated |
+| DELETE | `/api/mfa` | authenticated |
+| GET | `/api/mfa` | authenticated |
+| POST | `/api/mfa/enroll` | authenticated |
+| POST | `/api/mfa/recovery-codes` | authenticated |
+| POST | `/api/mfa/verify` | authenticated |
+| GET | `/api/reconcile` | CapManageCredentials |
+| GET | `/api/sessions` | CapReadAudit |
+| DELETE | `/api/sessions/{id}` | CapManageTargets |
+| GET | `/api/targets` | CapReadInventory |
+| POST | `/api/targets` | CapManageTargets |
+| DELETE | `/api/targets/{id}` | CapManageTargets |
+| GET | `/api/targets/{id}` | CapReadInventory |
+| GET | `/api/targets/{id}/grants` | CapManageTargets |
+| POST | `/api/targets/{id}/grants` | CapManageTargets |
+| DELETE | `/api/targets/{id}/grants/{gid}` | CapManageTargets |
+| GET | `/api/targets/{id}/rdp` | token (query) |
+| POST | `/api/targets/{id}/winrm` | CapConnect |
+| GET | `/api/users` | CapManageUsers |
+| POST | `/api/users` | CapManageUsers |
+| DELETE | `/api/users/{id}` | CapManageUsers |
+| GET | `/healthz` | public |
+| GET | `/metrics` | public |
+| GET | `/readyz` | public |
+| GET | `/{$}` | public |
+
