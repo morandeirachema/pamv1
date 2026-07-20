@@ -47,6 +47,12 @@ flowchart LR
     n_rotate[rotate]
     n_winrm[winrm]
   end
+  subgraph n_Agent_broker["Agent broker"]
+    n_agentid[agentid]
+    n_auditchain[auditchain]
+    n_broker[broker]
+    n_policy[policy]
+  end
   subgraph n_Platform["Platform"]
     n_alert[alert]
     n_config[config]
@@ -55,15 +61,21 @@ flowchart LR
     n_metrics[metrics]
     n_session[session]
   end
+  n_agentid --> n_auth
+  n_agentid --> n_store
   n_alert --> n_logging
+  n_api --> n_agentid
   n_api --> n_alert
+  n_api --> n_auditchain
   n_api --> n_auth
+  n_api --> n_broker
   n_api --> n_discovery
   n_api --> n_guacd
   n_api --> n_logging
   n_api --> n_metrics
   n_api --> n_mfa
   n_api --> n_oidc
+  n_api --> n_policy
   n_api --> n_rotate
   n_api --> n_session
   n_api --> n_shamir
@@ -71,13 +83,21 @@ flowchart LR
   n_api --> n_vault
   n_api --> n_web
   n_api --> n_winrm
+  n_auditchain --> n_store
   n_auth --> n_oidc
   n_auth --> n_store
+  n_broker --> n_agentid
+  n_broker --> n_auditchain
+  n_broker --> n_auth
+  n_broker --> n_logging
+  n_broker --> n_policy
+  n_broker --> n_store
   n_maint --> n_store
   n_maint --> n_vault
   n_memstore --> n_store
   n_pam_server --> n_alert
   n_pam_server --> n_api
+  n_pam_server --> n_auditchain
   n_pam_server --> n_auth
   n_pam_server --> n_config
   n_pam_server --> n_logging
@@ -85,6 +105,7 @@ flowchart LR
   n_pam_server --> n_memstore
   n_pam_server --> n_oidc
   n_pam_server --> n_pgstore
+  n_pam_server --> n_policy
   n_pam_server --> n_proxy
   n_pam_server --> n_session
   n_pam_server --> n_shamir
@@ -121,12 +142,30 @@ erDiagram
     ptr_time_Time DecidedAt
     time_Time ExpiresAt
   }
+  AgentKey {
+    int64 ID
+    string Name
+    string Owner
+    bool Disabled
+    time_Time CreatedAt
+  }
   AuditEvent {
     int64 ID
     time_Time TS
     string Actor
     string Action
     string Detail
+  }
+  BrokerAuditEvent {
+    int64 ID
+    time_Time TS
+    string Actor
+    string OnBehalfOf
+    string ActorChain
+    string Action
+    string Detail
+    string Scope
+    arr_byte HMAC
   }
   Checkout {
     int64 ID
@@ -190,7 +229,7 @@ erDiagram
 
 ## 3. REST API surface
 
-The 47 routes registered on the API mux, with the capability or guard each enforces (see `internal/auth` for the role → capability matrix).
+The 53 routes registered on the API mux, with the capability or guard each enforces (see `internal/auth` for the role → capability matrix).
 
 | Method | Path | Guard |
 |---|---|---|
@@ -240,5 +279,11 @@ The 47 routes registered on the API mux, with the capability or guard each enfor
 | GET | `/healthz` | public |
 | GET | `/metrics` | public |
 | GET | `/readyz` | public |
+| POST | `/v1/agents` | CapManageUsers |
+| GET | `/v1/audit` | CapReadAudit |
+| GET | `/v1/audit/head` | CapReadAudit |
+| GET | `/v1/audit/verify` | CapReadAudit |
+| POST | `/v1/tool-calls` | public |
+| GET | `/v1/tool-calls/{id}` | public |
 | GET | `/{$}` | public |
 

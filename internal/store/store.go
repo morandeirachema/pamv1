@@ -118,6 +118,36 @@ type User struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
+// AgentKey is an AI-agent identity for the access broker: a bearer key whose
+// SHA-256 hash is stored, granting only the ability to request brokered tool
+// calls (never a credential). Owner is the accountable human/service recorded in
+// every audit entry the agent produces.
+type AgentKey struct {
+	ID        int64     `json:"id"`
+	Name      string    `json:"name"`
+	Owner     string    `json:"owner"`
+	TokenHash string    `json:"-"`
+	Disabled  bool      `json:"disabled"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// BrokerAuditEvent is one entry in the broker's tamper-evident, keyed-HMAC
+// hash-chained audit log (separate from the general audit_events trail). Each
+// row's HMAC covers the previous row's HMAC, so any edit or truncation breaks
+// the chain. The broker is the sole writer, so rows chain in id order.
+type BrokerAuditEvent struct {
+	ID         int64     `json:"id"`
+	TS         time.Time `json:"ts"`
+	Actor      string    `json:"actor"`        // agent name
+	OnBehalfOf string    `json:"on_behalf_of"` // accountable owner / SVID on_behalf_of
+	ActorChain string    `json:"actor_chain"`  // JSON array of the delegation actor chain
+	Action     string    `json:"action"`
+	Detail     string    `json:"detail"`
+	Scope      string    `json:"scope"`
+	PrevHash   []byte    `json:"-"`    // previous row's HMAC (chain link); derivable, not exposed
+	HMAC       []byte    `json:"hmac"` // HMAC-SHA256(key, prev_hash || canonical(event))
+}
+
 // Session is a short-lived bearer token issued after a password login (e.g.
 // Active Directory). Only the token's hex SHA-256 is stored (never serialized).
 type Session struct {
@@ -218,6 +248,27 @@ type Store interface {
 	GetUserByTokenHash(ctx context.Context, tokenHashHex string) (*User, error)
 	// DeleteUser removes a user by ID, or ErrNotFound.
 	DeleteUser(ctx context.Context, id int64) error
+
+	// CreateAgentKey inserts an AI-agent identity key, populating ID and CreatedAt.
+	CreateAgentKey(ctx context.Context, k *AgentKey) error
+	// GetAgentKeyByTokenHash returns the enabled agent key whose token hash
+	// matches, or ErrNotFound (a disabled key is treated as not found).
+	GetAgentKeyByTokenHash(ctx context.Context, tokenHashHex string) (*AgentKey, error)
+	// ListAgentKeys returns all agent keys.
+	ListAgentKeys(ctx context.Context) ([]AgentKey, error)
+	// DeleteAgentKey removes an agent key by ID, or ErrNotFound.
+	DeleteAgentKey(ctx context.Context, id int64) error
+
+	// AppendBrokerAudit appends a pre-chained broker audit event (HMAC and
+	// PrevHash already computed by the caller), populating its ID and TS. The
+	// broker is the sole writer so rows chain in insertion order.
+	AppendBrokerAudit(ctx context.Context, e *BrokerAuditEvent) error
+	// ListBrokerAudit returns broker audit events ordered oldest-first (id ASC);
+	// limit <= 0 returns all (used by the chain verifier).
+	ListBrokerAudit(ctx context.Context, limit int) ([]BrokerAuditEvent, error)
+	// GetBrokerAuditHead returns the most recent broker audit event, or (nil, nil)
+	// when the log is empty (genesis).
+	GetBrokerAuditHead(ctx context.Context) (*BrokerAuditEvent, error)
 
 	// CreateSession inserts a login session, populating its ID and CreatedAt.
 	CreateSession(ctx context.Context, s *Session) error

@@ -25,6 +25,8 @@ type Memstore struct {
 	checkouts  map[int64]store.Checkout
 	oidcStates map[string]oidcState
 	audit      []store.AuditEvent
+	agentKeys  map[int64]store.AgentKey
+	brokerLog  []store.BrokerAuditEvent
 }
 
 // New returns an empty in-memory store ready for use.
@@ -39,6 +41,7 @@ func New() *Memstore {
 		grants:    make(map[int64]store.TargetGrant),
 		accessReq: make(map[int64]store.AccessRequest),
 		checkouts: make(map[int64]store.Checkout),
+		agentKeys: make(map[int64]store.AgentKey),
 	}
 }
 
@@ -511,6 +514,96 @@ func (m *Memstore) DeleteUser(_ context.Context, id int64) error {
 	}
 	delete(m.users, id)
 	return nil
+}
+
+// CreateAgentKey inserts an agent key, assigning its ID and CreatedAt; ErrConflict
+// if the token hash is taken.
+func (m *Memstore) CreateAgentKey(_ context.Context, k *store.AgentKey) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, existing := range m.agentKeys {
+		if existing.TokenHash == k.TokenHash {
+			return store.ErrConflict
+		}
+	}
+	k.ID = m.id()
+	k.CreatedAt = time.Now().UTC()
+	m.agentKeys[k.ID] = *k
+	return nil
+}
+
+// GetAgentKeyByTokenHash returns the enabled agent key whose token hash matches,
+// or ErrNotFound (a disabled key is treated as not found).
+func (m *Memstore) GetAgentKeyByTokenHash(_ context.Context, tokenHashHex string) (*store.AgentKey, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, k := range m.agentKeys {
+		if k.TokenHash == tokenHashHex && !k.Disabled {
+			out := k
+			return &out, nil
+		}
+	}
+	return nil, store.ErrNotFound
+}
+
+// ListAgentKeys returns all agent keys ordered by ID.
+func (m *Memstore) ListAgentKeys(_ context.Context) ([]store.AgentKey, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]store.AgentKey, 0, len(m.agentKeys))
+	for _, k := range m.agentKeys {
+		out = append(out, k)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out, nil
+}
+
+// DeleteAgentKey removes an agent key by ID; ErrNotFound if absent.
+func (m *Memstore) DeleteAgentKey(_ context.Context, id int64) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.agentKeys[id]; !ok {
+		return store.ErrNotFound
+	}
+	delete(m.agentKeys, id)
+	return nil
+}
+
+// AppendBrokerAudit appends a pre-chained broker audit event, assigning ID and TS.
+func (m *Memstore) AppendBrokerAudit(_ context.Context, e *store.BrokerAuditEvent) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	e.ID = m.id()
+	e.TS = time.Now().UTC()
+	m.brokerLog = append(m.brokerLog, *e)
+	return nil
+}
+
+// ListBrokerAudit returns broker audit events oldest-first; limit <= 0 returns
+// the whole chain, limit > 0 the most recent limit events (still in chain order).
+func (m *Memstore) ListBrokerAudit(_ context.Context, limit int) ([]store.BrokerAuditEvent, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	n := len(m.brokerLog)
+	start := 0
+	if limit > 0 && limit < n {
+		start = n - limit
+	}
+	out := make([]store.BrokerAuditEvent, 0, n-start)
+	out = append(out, m.brokerLog[start:]...)
+	return out, nil
+}
+
+// GetBrokerAuditHead returns the most recent broker audit event, or (nil, nil)
+// when the log is empty.
+func (m *Memstore) GetBrokerAuditHead(_ context.Context) (*store.BrokerAuditEvent, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if len(m.brokerLog) == 0 {
+		return nil, nil
+	}
+	out := m.brokerLog[len(m.brokerLog)-1]
+	return &out, nil
 }
 
 // CreateSession inserts a session, assigning its ID and CreatedAt.

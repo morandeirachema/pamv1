@@ -270,4 +270,54 @@ func RunStoreContract(t *testing.T, st store.Store) {
 	if _, _, ok, _ := st.TakeOIDCState(ctx, "state2", now); ok {
 		t.Fatal("expired OIDC state must not be returned")
 	}
+
+	// --- agent keys + broker audit chain (Phase 13) ---
+	if head, err := st.GetBrokerAuditHead(ctx); err != nil || head != nil {
+		t.Fatalf("GetBrokerAuditHead(empty): head=%v err=%v", head, err)
+	}
+	ak := &store.AgentKey{Name: "bot", Owner: "alice", TokenHash: "agenthash1"}
+	if err := st.CreateAgentKey(ctx, ak); err != nil {
+		t.Fatalf("CreateAgentKey: %v", err)
+	}
+	if got, err := st.GetAgentKeyByTokenHash(ctx, "agenthash1"); err != nil || got.Name != "bot" || got.Owner != "alice" {
+		t.Fatalf("GetAgentKeyByTokenHash: %+v err %v", got, err)
+	}
+	if _, err := st.GetAgentKeyByTokenHash(ctx, "nope"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("GetAgentKeyByTokenHash(missing): want ErrNotFound, got %v", err)
+	}
+	if err := st.CreateAgentKey(ctx, &store.AgentKey{Name: "off", TokenHash: "agenthash2", Disabled: true}); err != nil {
+		t.Fatalf("CreateAgentKey(disabled): %v", err)
+	}
+	if _, err := st.GetAgentKeyByTokenHash(ctx, "agenthash2"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatal("a disabled agent key must not resolve")
+	}
+	if keys, err := st.ListAgentKeys(ctx); err != nil || len(keys) != 2 {
+		t.Fatalf("ListAgentKeys: %d err %v", len(keys), err)
+	}
+	if err := st.DeleteAgentKey(ctx, ak.ID); err != nil {
+		t.Fatalf("DeleteAgentKey: %v", err)
+	}
+	if _, err := st.GetAgentKeyByTokenHash(ctx, "agenthash1"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatal("a deleted agent key must not resolve")
+	}
+
+	// Broker audit is append-only; head follows the latest, list is chain order.
+	e1 := &store.BrokerAuditEvent{Actor: "bot", Action: "broker.tool_call.executed", Detail: "one", PrevHash: []byte{}, HMAC: []byte{0x01}}
+	if err := st.AppendBrokerAudit(ctx, e1); err != nil {
+		t.Fatalf("AppendBrokerAudit: %v", err)
+	}
+	e2 := &store.BrokerAuditEvent{Actor: "bot", Action: "broker.tool_call.denied", Detail: "two", PrevHash: []byte{0x01}, HMAC: []byte{0x02}}
+	if err := st.AppendBrokerAudit(ctx, e2); err != nil {
+		t.Fatalf("AppendBrokerAudit: %v", err)
+	}
+	if head, err := st.GetBrokerAuditHead(ctx); err != nil || head == nil || head.Detail != "two" {
+		t.Fatalf("GetBrokerAuditHead: %+v err %v", head, err)
+	}
+	all, err := st.ListBrokerAudit(ctx, 0)
+	if err != nil || len(all) != 2 || all[0].Detail != "one" || all[1].Detail != "two" {
+		t.Fatalf("ListBrokerAudit: %+v err %v", all, err)
+	}
+	if len(all[0].HMAC) != 1 || all[0].HMAC[0] != 0x01 {
+		t.Fatalf("broker audit HMAC not round-tripped: %v", all[0].HMAC)
+	}
 }

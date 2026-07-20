@@ -12,8 +12,10 @@ package main
 
 import (
 	"context"
+	"crypto/ed25519"
 	"crypto/sha256"
 	"crypto/tls"
+	"encoding/base64"
 	"encoding/hex"
 	"flag"
 	"fmt"
@@ -30,11 +32,13 @@ import (
 
 	"github.com/morandeirachema/pamv1/internal/alert"
 	"github.com/morandeirachema/pamv1/internal/api"
+	"github.com/morandeirachema/pamv1/internal/auditchain"
 	"github.com/morandeirachema/pamv1/internal/auth"
 	"github.com/morandeirachema/pamv1/internal/config"
 	"github.com/morandeirachema/pamv1/internal/logging"
 	"github.com/morandeirachema/pamv1/internal/maint"
 	"github.com/morandeirachema/pamv1/internal/oidc"
+	"github.com/morandeirachema/pamv1/internal/policy"
 	"github.com/morandeirachema/pamv1/internal/proxy"
 	"github.com/morandeirachema/pamv1/internal/session"
 	"github.com/morandeirachema/pamv1/internal/shamir"
@@ -122,6 +126,29 @@ func runHealthcheck() error {
 		return fmt.Errorf("healthz returned %d", resp.StatusCode)
 	}
 	return nil
+}
+
+// buildBroker loads the AI-agent access-broker policy and decodes its
+// audit-chain keys when PAM_BROKER_POLICY_FILE is set. It returns all-nil when
+// the broker is disabled; config.Load already guarantees the keys are present
+// when the policy file is set, so any decode failure here is a fatal misconfig.
+func buildBroker(cfg *config.Config) (*policy.Engine, []byte, ed25519.PrivateKey, error) {
+	if cfg.BrokerPolicyFile == "" {
+		return nil, nil, nil, nil
+	}
+	engine, err := policy.LoadFile(cfg.BrokerPolicyFile)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	key, err := base64.StdEncoding.DecodeString(cfg.BrokerAuditKey)
+	if err != nil || len(key) != auditchain.KeySize {
+		return nil, nil, nil, fmt.Errorf("PAM_BROKER_AUDIT_KEY must be base64 of %d bytes", auditchain.KeySize)
+	}
+	seed, err := base64.StdEncoding.DecodeString(cfg.BrokerAuditSignSeed)
+	if err != nil || len(seed) != ed25519.SeedSize {
+		return nil, nil, nil, fmt.Errorf("PAM_BROKER_AUDIT_SIGN_SEED must be base64 of %d bytes", ed25519.SeedSize)
+	}
+	return engine, key, ed25519.NewKeyFromSeed(seed), nil
 }
 
 // runRotateKEK re-encrypts every vaulted secret from the current local master
@@ -374,6 +401,10 @@ func run() error {
 		log.Info("upstream SSH host keys pinned", "known_hosts", cfg.SSHKnownHosts)
 	}
 
+	brokerPolicy, brokerAuditKey, brokerSignKey, err := buildBroker(cfg)
+	if err != nil {
+		return err
+	}
 	handler, err := api.New(st, v, resolver, authn, api.Options{
 		Sessions:            sessions,
 		SSHHostKeyCallback:  upstreamHostKey,
@@ -399,6 +430,9 @@ func run() error {
 		CheckoutTTL:         cfg.CheckoutTTL,
 		AllowedProtocols:    splitAndTrim(cfg.AllowedProtocols),
 		Directory:           directory,
+		BrokerPolicy:        brokerPolicy,
+		BrokerAuditKey:      brokerAuditKey,
+		BrokerAuditSignKey:  brokerSignKey,
 	})
 	if err != nil {
 		return err

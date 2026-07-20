@@ -489,6 +489,83 @@ func (s *PGStore) DeleteUser(ctx context.Context, id int64) error {
 	return execExpectingRow(ctx, s.pool, `DELETE FROM users WHERE id = $1`, id)
 }
 
+// CreateAgentKey inserts an agent key, populating its ID and CreatedAt.
+func (s *PGStore) CreateAgentKey(ctx context.Context, k *store.AgentKey) error {
+	err := s.pool.QueryRow(ctx,
+		`INSERT INTO agent_keys (name, owner, token_hash, disabled)
+		 VALUES ($1, $2, $3, $4) RETURNING id, created_at`,
+		k.Name, k.Owner, k.TokenHash, k.Disabled,
+	).Scan(&k.ID, &k.CreatedAt)
+	if pgCode(err) == pgUniqueViolation {
+		return store.ErrConflict
+	}
+	return err
+}
+
+// GetAgentKeyByTokenHash returns the enabled agent key whose token hash matches,
+// or ErrNotFound (a disabled key is treated as not found).
+func (s *PGStore) GetAgentKeyByTokenHash(ctx context.Context, tokenHashHex string) (*store.AgentKey, error) {
+	return getOne(ctx, s.pool, scanAgentKey,
+		`SELECT id, name, owner, token_hash, disabled, created_at
+		 FROM agent_keys WHERE token_hash = $1 AND disabled = FALSE`, tokenHashHex)
+}
+
+// ListAgentKeys returns all agent keys ordered by ID.
+func (s *PGStore) ListAgentKeys(ctx context.Context) ([]store.AgentKey, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT id, name, owner, token_hash, disabled, created_at FROM agent_keys ORDER BY id`)
+	if err != nil {
+		return nil, err
+	}
+	return pgx.CollectRows(rows, scanAgentKey)
+}
+
+// DeleteAgentKey removes an agent key by ID; ErrNotFound if absent.
+func (s *PGStore) DeleteAgentKey(ctx context.Context, id int64) error {
+	return execExpectingRow(ctx, s.pool, `DELETE FROM agent_keys WHERE id = $1`, id)
+}
+
+const brokerAuditCols = `id, ts, actor, on_behalf_of, actor_chain, action, detail, scope, prev_hash, hmac`
+
+// AppendBrokerAudit inserts a pre-chained broker audit event, populating ID and TS.
+func (s *PGStore) AppendBrokerAudit(ctx context.Context, e *store.BrokerAuditEvent) error {
+	return s.pool.QueryRow(ctx,
+		`INSERT INTO broker_audit_events (actor, on_behalf_of, actor_chain, action, detail, scope, prev_hash, hmac)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id, ts`,
+		e.Actor, e.OnBehalfOf, e.ActorChain, e.Action, e.Detail, e.Scope, e.PrevHash, e.HMAC,
+	).Scan(&e.ID, &e.TS)
+}
+
+// ListBrokerAudit returns broker audit events oldest-first (id ASC). limit <= 0
+// returns the whole chain (for verification); limit > 0 returns the most recent
+// limit events, still in chain order.
+func (s *PGStore) ListBrokerAudit(ctx context.Context, limit int) ([]store.BrokerAuditEvent, error) {
+	var rows pgx.Rows
+	var err error
+	if limit > 0 {
+		rows, err = s.pool.Query(ctx,
+			`SELECT `+brokerAuditCols+` FROM (SELECT `+brokerAuditCols+
+				` FROM broker_audit_events ORDER BY id DESC LIMIT $1) t ORDER BY id ASC`, limit)
+	} else {
+		rows, err = s.pool.Query(ctx, `SELECT `+brokerAuditCols+` FROM broker_audit_events ORDER BY id ASC`)
+	}
+	if err != nil {
+		return nil, err
+	}
+	return pgx.CollectRows(rows, scanBrokerAudit)
+}
+
+// GetBrokerAuditHead returns the most recent broker audit event, or (nil, nil)
+// when the log is empty.
+func (s *PGStore) GetBrokerAuditHead(ctx context.Context) (*store.BrokerAuditEvent, error) {
+	e, err := getOne(ctx, s.pool, scanBrokerAudit,
+		`SELECT `+brokerAuditCols+` FROM broker_audit_events ORDER BY id DESC LIMIT 1`)
+	if errors.Is(err, store.ErrNotFound) {
+		return nil, nil
+	}
+	return e, err
+}
+
 // CreateSession inserts a session, populating its ID and CreatedAt.
 func (s *PGStore) CreateSession(ctx context.Context, sess *store.Session) error {
 	err := s.pool.QueryRow(ctx,
@@ -709,4 +786,18 @@ func scanSession(row pgx.CollectableRow) (store.Session, error) {
 	var s store.Session
 	err := row.Scan(&s.ID, &s.Username, &s.Role, &s.Scope, &s.TokenHash, &s.CreatedAt, &s.ExpiresAt)
 	return s, err
+}
+
+// scanAgentKey maps one result row into a store.AgentKey.
+func scanAgentKey(row pgx.CollectableRow) (store.AgentKey, error) {
+	var k store.AgentKey
+	err := row.Scan(&k.ID, &k.Name, &k.Owner, &k.TokenHash, &k.Disabled, &k.CreatedAt)
+	return k, err
+}
+
+// scanBrokerAudit maps one result row into a store.BrokerAuditEvent.
+func scanBrokerAudit(row pgx.CollectableRow) (store.BrokerAuditEvent, error) {
+	var e store.BrokerAuditEvent
+	err := row.Scan(&e.ID, &e.TS, &e.Actor, &e.OnBehalfOf, &e.ActorChain, &e.Action, &e.Detail, &e.Scope, &e.PrevHash, &e.HMAC)
+	return e, err
 }

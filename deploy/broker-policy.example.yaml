@@ -1,0 +1,30 @@
+# Example AI-agent access-broker policy (point PAM_BROKER_POLICY_FILE at a copy).
+#
+# The broker evaluates this on every agent tool call. First matching rule wins;
+# a call that matches no rule is an implicit deny (fail-closed). Conditions match
+# the tool's arguments as args.<field> with:
+#   value            equality
+#   { not: X }       differs or absent
+#   { in: [A, B] }   present and in the allow-list  (prefer allow-lists)
+#   { not_in: [X] }  absent or not in the block-list
+# There is deliberately no regex, numeric comparison, OR, or nesting. Keep this
+# file in version control; policy changes take effect on restart.
+rules:
+  # Run a command on an allow-listed lab host, with a scoped, short-lived grant.
+  - id: exec-on-lab
+    tool: winrm_exec
+    when:
+      args.target: { in: [lab-win-01, lab-win-02] }
+    effect: allow
+    scope: "target:{target}:exec"
+    ttl_seconds: 60
+
+  # Everything else is denied by default (no matching rule). To require a human
+  # instead of denying, add a require_approval rule with approvers — the approval
+  # and resume flow lands in the next broker increment:
+  #
+  #   - id: exec-elsewhere-needs-approval
+  #     tool: winrm_exec
+  #     effect: require_approval
+  #     approvers: [platform-team]
+  #     scope: "target:{target}:exec"

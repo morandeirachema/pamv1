@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -204,30 +205,47 @@ func (s *Server) runWinRM(w http.ResponseWriter, r *http.Request) {
 	}
 	cred := creds[0]
 
-	// Just-in-time: the secret exists only for this call.
-	secret, err := s.vault.Decrypt(r.Context(), cred.SecretEnc, store.CredentialAAD(target.ID, cred.ID))
-	if err != nil {
-		s.audit(r.Context(), "credential.decrypt_failed", fmt.Sprintf("credential:%d target:%s op:winrm", cred.ID, target.Name))
+	res, err := s.execWinRM(r.Context(), target, &cred, in.Command, actorFrom(r.Context()))
+	if errors.Is(err, errDecryptFailed) {
 		writeError(w, http.StatusInternalServerError, "decryption failed")
 		return
 	}
-	res, err := s.winrm.Run(r.Context(), target.Host, target.Port, cred.Username, secret, in.Command)
 	if err != nil {
-		s.log.Error("winrm run failed", "target", target.Name, "err", err)
-		s.audit(r.Context(), "winrm.error", fmt.Sprintf("target:%s cred_user:%s error:%v", target.Name, cred.Username, err))
 		writeError(w, http.StatusBadGateway, "winrm execution failed")
 		return
 	}
-
-	file, sum := s.recordWinRM(target, cred.Username, actorFrom(r.Context()), in.Command, res)
-	s.audit(r.Context(), "winrm.run",
-		fmt.Sprintf("target:%s cred_user:%s exit:%d file:%s sha256:%s", target.Name, cred.Username, res.ExitCode, file, sum))
 	writeJSON(w, http.StatusOK, map[string]any{
 		"target":    target.Name,
 		"exit_code": res.ExitCode,
 		"stdout":    res.Stdout,
 		"stderr":    res.Stderr,
 	})
+}
+
+// errDecryptFailed marks a just-in-time vault decrypt failure, so callers can map
+// it to an internal-error status distinct from a target execution failure.
+var errDecryptFailed = errors.New("decryption failed")
+
+// execWinRM injects target's vaulted credential just-in-time, runs command over
+// WinRM, records the transcript, and audits the run — returning only the result.
+// The plaintext secret never leaves this function. Shared by the REST handler and
+// the agent-broker winrm_exec tool.
+func (s *Server) execWinRM(ctx context.Context, target *store.Target, cred *store.Credential, command, actor string) (winrm.Result, error) {
+	secret, err := s.vault.Decrypt(ctx, cred.SecretEnc, store.CredentialAAD(target.ID, cred.ID))
+	if err != nil {
+		s.audit(ctx, "credential.decrypt_failed", fmt.Sprintf("credential:%d target:%s op:winrm", cred.ID, target.Name))
+		return winrm.Result{}, errDecryptFailed
+	}
+	res, err := s.winrm.Run(ctx, target.Host, target.Port, cred.Username, secret, command)
+	if err != nil {
+		s.log.Error("winrm run failed", "target", target.Name, "err", err)
+		s.audit(ctx, "winrm.error", fmt.Sprintf("target:%s cred_user:%s error:%v", target.Name, cred.Username, err))
+		return winrm.Result{}, err
+	}
+	file, sum := s.recordWinRM(target, cred.Username, actor, command, res)
+	s.audit(ctx, "winrm.run",
+		fmt.Sprintf("target:%s cred_user:%s exit:%d file:%s sha256:%s", target.Name, cred.Username, res.ExitCode, file, sum))
+	return res, nil
 }
 
 // recordWinRM writes a transcript of the command and its output, returning the

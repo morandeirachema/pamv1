@@ -3,6 +3,7 @@ package api
 
 import (
 	"context"
+	"crypto/ed25519"
 	"encoding/hex"
 	"errors"
 	"log/slog"
@@ -11,11 +12,15 @@ import (
 	"strings"
 	"time"
 
+	"github.com/morandeirachema/pamv1/internal/agentid"
 	"github.com/morandeirachema/pamv1/internal/alert"
+	"github.com/morandeirachema/pamv1/internal/auditchain"
 	"github.com/morandeirachema/pamv1/internal/auth"
+	"github.com/morandeirachema/pamv1/internal/broker"
 	"github.com/morandeirachema/pamv1/internal/logging"
 	"github.com/morandeirachema/pamv1/internal/metrics"
 	"github.com/morandeirachema/pamv1/internal/oidc"
+	"github.com/morandeirachema/pamv1/internal/policy"
 	"github.com/morandeirachema/pamv1/internal/rotate"
 	"github.com/morandeirachema/pamv1/internal/session"
 	"github.com/morandeirachema/pamv1/internal/store"
@@ -134,6 +139,12 @@ type Options struct {
 	// Directory (optional) backs identity reconciliation: pamv1 revokes access for
 	// users the directory reports as disabled. nil disables the reconcile endpoint.
 	Directory auth.DirectorySource
+	// BrokerPolicy (optional) enables the AI-agent access broker (Phase 13). When
+	// non-nil the broker routes are served; BrokerAuditKey (32 bytes) and
+	// BrokerAuditSignKey are then required for the tamper-evident audit chain.
+	BrokerPolicy       *policy.Engine
+	BrokerAuditKey     []byte
+	BrokerAuditSignKey ed25519.PrivateKey
 }
 
 type Server struct {
@@ -172,6 +183,10 @@ type Server struct {
 	log                *slog.Logger
 	mux                *http.ServeMux
 	handler            http.Handler
+	// AI-agent access broker (Phase 13); nil unless a policy file is configured.
+	broker        *broker.Broker
+	agentVerifier agentid.Verifier
+	auditChain    *auditchain.Chain
 }
 
 // New builds the HTTP handler. The resolver authenticates the X-API-Key header
@@ -266,6 +281,9 @@ func New(st store.Store, v *vault.Vault, resolver *auth.Resolver, authn auth.Aut
 	}
 	if s.sessions != nil {
 		s.metrics.SetActiveSessionsSource(func() int { return len(s.sessions.List()) })
+	}
+	if err := s.setupBroker(opts); err != nil {
+		return nil, err
 	}
 	s.routes()
 	s.handler = s.withAccessLog(s.withSecurityHeaders(s.mux))
@@ -393,6 +411,18 @@ func (s *Server) routes() {
 	s.mux.Handle("GET /api/users", s.authz(auth.CapManageUsers, s.listUsers))
 	s.mux.Handle("DELETE /api/users/{id}", s.authz(auth.CapManageUsers, s.deleteUser))
 	s.mux.Handle("POST /api/identity/reconcile", s.authz(auth.CapManageUsers, s.reconcileIdentities))
+
+	// AI-agent access broker (Phase 13), served only when a policy is configured.
+	// Agent-facing routes authenticate an agent bearer key/SVID; operator-facing
+	// routes reuse the human RBAC capabilities.
+	if s.broker != nil {
+		s.mux.HandleFunc("POST /v1/tool-calls", s.agentAuth(s.processToolCall))
+		s.mux.HandleFunc("GET /v1/tool-calls/{id}", s.agentAuth(s.getToolCall))
+		s.mux.Handle("POST /v1/agents", s.authz(auth.CapManageUsers, s.createAgentKey))
+		s.mux.Handle("GET /v1/audit", s.authz(auth.CapReadAudit, s.listBrokerAudit))
+		s.mux.Handle("GET /v1/audit/verify", s.authz(auth.CapReadAudit, s.verifyBrokerAudit))
+		s.mux.Handle("GET /v1/audit/head", s.authz(auth.CapReadAudit, s.brokerAuditHead))
+	}
 }
 
 // authz resolves the caller into a Principal and enforces that its role holds

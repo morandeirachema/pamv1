@@ -175,3 +175,17 @@ that respects the project's IaC-first roots.
 - [ ] **Networking/TLS stays IaC**: a read-only effective-config + backend-health screen plus a generator that emits the env/Helm/Terraform to apply (listeners/ports/TLS cannot be safely rebound at runtime)
 - [ ] **Custom permission profiles**: named capability sets assignable to users and directory groups (a configurable RBAC engine), with the current 4 roles as built-in defaults; assignment surfaced in *Work with users & profiles*
 - [ ] Console screens to manage directory bindings, SSO, profiles, and network status (Kerberos *config* is buildable here even though live Kerberos auth needs a KDC to exercise — see the infra-bound list above)
+
+## Phase 13 — AI-agent access broker 🚧
+
+PAM for AI agents (ports [`morandeirachema/pam-research`](https://github.com/morandeirachema/pam-research)): an agent holds only an identity key; a policy engine decides `allow / require_approval / deny` on a tool call **and its arguments**; approved actions execute **server-side** with a just-in-time credential; the agent receives only the result. "Trust the chokepoint, not the agent." Opt-in via `PAM_BROKER_POLICY_FILE`; brokers pamv1's own operations with JIT vault injection.
+
+- [x] **Policy engine** (`internal/policy`): YAML rules (`eq`/`not`/`in`/`not_in`), first-match-wins, implicit deny, scope templating, fail-loud loader
+- [x] **Agent identity** (`internal/agentid`): static bearer keys (`agent_keys`, SHA-256 hash lookup), `RoleAgent` + `CapCallTool`
+- [x] **Tool registry + JIT execution**: `winrm_exec` over the refactored `execWinRM` — decrypts just-in-time, returns only the result (proven: the runner gets the vaulted secret, the response leaks nothing)
+- [x] **Verifiable audit chain** (`internal/auditchain`): keyed-HMAC per-event hash chain (`broker_audit_events`) + `/v1/audit/verify` + ed25519-signed head checkpoint for truncation detection
+- [x] **REST surface**: `POST /v1/tool-calls`, `GET /v1/tool-calls/{id}`, `POST /v1/agents`, `GET /v1/audit[/verify|/head]`; HTTP-200-with-status error model
+- [ ] **Approval + resume + short-lived single-use tokens**: `require_approval` effect, park/resume, execute-on-approve (reusing the 4-eyes + alert path), JTI single-use `broker_tokens`; tools `rotate_credential`, `reveal_credential` (default-deny), `list_targets`/`list_credentials`, `ssh_exec`; per-agent rate limits + arg caps
+- [ ] **MCP server** (`internal/mcp`): JSON-RPC 2.0 `/mcp` (`initialize`, `tools/list`, `tools/call`, `broker/resume`) sharing the one policy loop
+- [ ] **SPIFFE JWT-SVID + RFC 8693 delegation**: verified agent identity + actor-chains (reusing the `internal/oidc` JWT/JWKS machinery)
+- Deferred (documented): SPIRE workload attestation, RFC 8693 token-**exchange** minting, MCP SSE/elicitation, KEK-wrapping the audit keys, multi-replica chain writer

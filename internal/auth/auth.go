@@ -35,6 +35,10 @@ const (
 	RoleUser     Role = "user"
 	RoleAuditor  Role = "auditor"
 	RoleApprover Role = "approver"
+	// RoleAgent is an AI agent identity: it may call brokered tools and read
+	// inventory, nothing else. It is assigned by the broker's agent-auth path, not
+	// via ParseRole (agents are never provisioned as human/user tokens).
+	RoleAgent Role = "agent"
 )
 
 // ParseRole validates s and returns the corresponding Role, or an error if it is
@@ -60,6 +64,7 @@ const (
 	CapReadAudit                           // read the audit trail
 	CapManageUsers                         // create/delete users
 	CapApprove                             // review and approve/deny access requests
+	CapCallTool                            // invoke a brokered tool call (AI agents)
 )
 
 // roleCaps is the authoritative role → capability matrix.
@@ -77,6 +82,9 @@ var roleCaps = map[Role]map[Capability]bool{
 	},
 	RoleApprover: {
 		CapReadInventory: true, CapReadAudit: true, CapApprove: true,
+	},
+	RoleAgent: {
+		CapReadInventory: true, CapCallTool: true,
 	},
 }
 
@@ -97,6 +105,7 @@ var capNames = map[Capability]string{
 	CapReadAudit:         "read_audit",
 	CapManageUsers:       "manage_users",
 	CapApprove:           "approve",
+	CapCallTool:          "call_tool",
 }
 
 // String returns the capability's stable snake_case name.
@@ -111,7 +120,7 @@ func (c Capability) String() string {
 // in capability-enum order.
 func (r Role) Capabilities() []string {
 	out := make([]string, 0, len(capNames))
-	for c := CapReadInventory; c <= CapApprove; c++ {
+	for c := CapReadInventory; c <= CapCallTool; c++ {
 		if r.Can(c) {
 			out = append(out, c.String())
 		}

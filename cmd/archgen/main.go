@@ -111,6 +111,7 @@ var pkgLayer = []struct {
 	{"Secrets", []string{"vault", "shamir"}},
 	{"Persistence", []string{"store", "memstore", "pgstore", "storetest"}},
 	{"Connectors", []string{"winrm", "guacd", "rotate", "discovery"}},
+	{"Agent broker", []string{"broker", "policy", "agentid", "auditchain", "mcp"}},
 	{"Platform", []string{"config", "logging", "metrics", "alert", "session", "maint"}},
 }
 
