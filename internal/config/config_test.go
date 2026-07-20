@@ -14,6 +14,32 @@ func setRequired(t *testing.T) {
 	t.Setenv("PAM_DATABASE_URL", "memory")
 }
 
+// TestLoadValidation covers the fail-loud guards for negative rate limits and a
+// partial email-alert config (which would otherwise silently disable controls).
+func TestLoadValidation(t *testing.T) {
+	t.Run("negative auth rate limit", func(t *testing.T) {
+		setRequired(t)
+		t.Setenv("PAM_AUTH_RATE_LIMIT", "-1")
+		if _, err := Load(); err == nil || !strings.Contains(err.Error(), "PAM_AUTH_RATE_LIMIT") {
+			t.Fatalf("Load() = %v, want PAM_AUTH_RATE_LIMIT error", err)
+		}
+	})
+	t.Run("partial email alert", func(t *testing.T) {
+		setRequired(t)
+		t.Setenv("PAM_ALERT_EMAIL_SMTP", "smtp:25")
+		t.Setenv("PAM_ALERT_EMAIL_FROM", "pam@x")
+		// PAM_ALERT_EMAIL_TO deliberately omitted.
+		if _, err := Load(); err == nil || !strings.Contains(err.Error(), "PAM_ALERT_EMAIL") {
+			t.Fatalf("Load() = %v, want PAM_ALERT_EMAIL error", err)
+		}
+	})
+	t.Run("ldap insecure not overridable", func(t *testing.T) {
+		if IsOverridable("PAM_LDAP_INSECURE_SKIP_VERIFY") {
+			t.Fatal("PAM_LDAP_INSECURE_SKIP_VERIFY must not be a runtime-overridable setting")
+		}
+	})
+}
+
 // TestLoadRequiredVars checks each required variable is reported when missing and
 // that the master key is required only for the local KEK provider.
 func TestLoadRequiredVars(t *testing.T) {

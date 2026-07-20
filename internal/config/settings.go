@@ -48,7 +48,10 @@ var settingSpecs = []setting{
 	{Key: "PAM_LDAP_BIND_PASSWORD", Secret: true, apply: applyStr(func(c *Config, v string) { c.LDAPBindPassword = v })},
 	{Key: "PAM_LDAP_BASE_DN", apply: applyStr(func(c *Config, v string) { c.LDAPBaseDN = v })},
 	{Key: "PAM_LDAP_USER_FILTER", apply: applyStr(func(c *Config, v string) { c.LDAPUserFilter = v })},
-	{Key: "PAM_LDAP_INSECURE_SKIP_VERIFY", apply: applyBool(func(c *Config, b bool) { c.LDAPInsecureSkipVerify = b })},
+	// PAM_LDAP_INSECURE_SKIP_VERIFY is deliberately NOT overridable: it is a
+	// transport-security control (disables LDAPS certificate verification), and the
+	// module's contract keeps transport settings env/IaC-only. Allowing it in the
+	// DB whitelist would let a runtime override downgrade LDAPS to MITM-able.
 	{Key: "PAM_LDAP_GROUP_ADMIN", apply: applyStr(func(c *Config, v string) { c.LDAPGroupAdmin = v })},
 	{Key: "PAM_LDAP_GROUP_USER", apply: applyStr(func(c *Config, v string) { c.LDAPGroupUser = v })},
 	{Key: "PAM_LDAP_GROUP_AUDITOR", apply: applyStr(func(c *Config, v string) { c.LDAPGroupAuditor = v })},

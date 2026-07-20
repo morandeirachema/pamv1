@@ -359,6 +359,26 @@ func Load() (*Config, error) {
 	if cfg.BrokerTrustDomainJWKS != "" && (cfg.BrokerTrustDomain == "" || cfg.BrokerAudience == "") {
 		errs = append(errs, "PAM_BROKER_TRUST_DOMAIN and PAM_BROKER_AUDIENCE are required when PAM_BROKER_TRUST_DOMAIN_JWKS is set")
 	}
+	// Rate limits are "0 = off"; a negative value must fail loud rather than
+	// silently disable throttling (a fat-fingered minus turning off brute-force
+	// protection).
+	if cfg.AuthRatePerMin < 0 {
+		errs = append(errs, "PAM_AUTH_RATE_LIMIT must be >= 0 (0 disables)")
+	}
+	if cfg.BrokerRatePerMin < 0 || cfg.BrokerMaxArgBytes < 0 {
+		errs = append(errs, "PAM_BROKER_RATE_PER_MIN and PAM_BROKER_MAX_ARG_BYTES must be >= 0")
+	}
+	// Email alerting is all-or-nothing: a partial config silently drops the
+	// detective break-glass alert channel while the operator believes it is armed.
+	emailSet := 0
+	for _, v := range []string{cfg.AlertEmailSMTP, cfg.AlertEmailFrom, cfg.AlertEmailTo} {
+		if v != "" {
+			emailSet++
+		}
+	}
+	if emailSet != 0 && emailSet != 3 {
+		errs = append(errs, "PAM_ALERT_EMAIL_SMTP, PAM_ALERT_EMAIL_FROM and PAM_ALERT_EMAIL_TO must all be set together (or all empty)")
+	}
 	if len(errs) > 0 {
 		return nil, fmt.Errorf("config: %s", strings.Join(errs, "; "))
 	}
