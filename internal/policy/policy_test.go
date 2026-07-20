@@ -105,6 +105,10 @@ rules:
     tool: t_not
     when: { args.b: { not: main } }
     effect: allow
+  - id: num
+    tool: t_num
+    when: { args.n: "10000000" }
+    effect: allow
 `)
 	cases := []struct {
 		tool string
@@ -117,6 +121,10 @@ rules:
 		{"t_not", map[string]any{"b": "dev"}, EffectAllow}, // differs
 		{"t_not", map[string]any{}, EffectAllow},           // absent → not matches
 		{"t_not", map[string]any{"b": "main"}, EffectDeny}, // equal → not fails
+		// JSON numbers arrive as float64; a large integer must render "10000000",
+		// not "1e+07", or the eq would silently never match.
+		{"t_num", map[string]any{"n": float64(10000000)}, EffectAllow},
+		{"t_num", map[string]any{"n": float64(9999999)}, EffectDeny},
 	}
 	for _, c := range cases {
 		if got := e.Evaluate(c.tool, c.args).Effect; got != c.want {

@@ -7,10 +7,12 @@ package policy
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -234,13 +236,21 @@ func renderScope(tmpl string, args map[string]any) (string, bool) {
 // stringify renders an argument value (from JSON: string/number/bool) as the
 // string the policy compares against.
 func stringify(v any) string {
-	if v == nil {
+	switch t := v.(type) {
+	case nil:
 		return ""
+	case string:
+		return t
+	case float64:
+		// JSON numbers decode to float64; format in plain decimal so an integer
+		// argument like 10000000 matches the policy's "10000000" and not the
+		// "%v"/%g rendering "1e+07" (which would silently never match).
+		return strconv.FormatFloat(t, 'f', -1, 64)
+	case json.Number:
+		return t.String()
+	default:
+		return fmt.Sprintf("%v", t)
 	}
-	if s, ok := v.(string); ok {
-		return s
-	}
-	return fmt.Sprintf("%v", v)
 }
 
 // contains reports whether xs includes s.
