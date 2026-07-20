@@ -90,6 +90,7 @@ func (s *Server) getToolCall(w http.ResponseWriter, r *http.Request, _ *agentid.
 		return
 	}
 	out.Result = nil
+	out.ResumeToken = "" // never re-serve the single-use token on the status poll
 	writeJSON(w, http.StatusOK, out)
 }
 
@@ -133,6 +134,12 @@ func (s *Server) decideBrokerApproval(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	approver := actorFrom(r.Context())
+	// Four-eyes: the human who owns the agent may not approve their own agent's
+	// call (mirrors the human access-request self-approval refusal).
+	if owner, ok := s.broker.ApprovalOwner(r.PathValue("id")); ok && owner != "" && strings.EqualFold(owner, approver) {
+		writeError(w, http.StatusForbidden, "cannot approve a call for an agent you own (four-eyes)")
+		return
+	}
 	out, ok := s.broker.Decide(r.Context(), r.PathValue("id"), approver, in.Approve)
 	if !ok {
 		writeError(w, http.StatusNotFound, "unknown or already-decided approval")

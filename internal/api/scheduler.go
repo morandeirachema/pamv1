@@ -176,6 +176,9 @@ func (s *Server) RunBrokerTokenGC(ctx context.Context) {
 			} else if n > 0 {
 				s.log.Debug("broker token GC swept expired/used tokens", "deleted", n)
 			}
+			if n := s.broker.SweepExpiredParked(time.Now()); n > 0 {
+				s.log.Debug("broker swept abandoned parked approvals", "evicted", n)
+			}
 		}
 	}
 }

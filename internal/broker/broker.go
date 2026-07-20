@@ -261,6 +261,12 @@ func (b *Broker) ProcessCall(ctx context.Context, id *agentid.Identity, c Call) 
 			out.Status, out.Reason = StatusFailed, "unknown tool: "+c.Tool
 			break
 		}
+		// Capability backstop: the principal must hold the tool's capability, so
+		// authorization never rests on the policy YAML alone.
+		if !id.Principal().Can(tool.Capability()) {
+			out.Status, out.Reason = StatusDenied, "principal lacks the capability for this tool"
+			break
+		}
 		// Record the intent in the tamper-evident chain BEFORE running a
 		// side-effecting action, so an executed action can never be missing from
 		// the authoritative log. If the chain is unavailable, refuse to run (fail
@@ -377,6 +383,14 @@ func (b *Broker) Decide(ctx context.Context, callID, approver string, approve bo
 		_ = b.chainEvent(ctx, p.id, p.call, "broker.tool_call.failed", out, out.Reason)
 		return out, true
 	}
+	// Capability backstop: the principal must hold the tool's capability (auth is
+	// the single source of truth; policy is not the only gate).
+	if !p.id.Principal().Can(tool.Capability()) {
+		out.Status, out.Reason = StatusDenied, "principal lacks the capability for this tool"
+		b.remember(out)
+		_ = b.chainEvent(ctx, p.id, p.call, "broker.tool_call.denied", out, out.Reason)
+		return out, true
+	}
 	// Record intent before the side effect, fail closed if the chain is down.
 	if err := b.chainEvent(ctx, p.id, p.call, "broker.tool_call.requested", out, ""); err != nil {
 		out.Status, out.Reason = StatusFailed, "audit log unavailable; call refused"
@@ -390,11 +404,45 @@ func (b *Broker) Decide(ctx context.Context, callID, approver string, approve bo
 	} else {
 		out.Status, out.Result = StatusExecuted, res.Data
 	}
-	b.remember(out)
+	b.remember(out) // full outcome — the agent collects it once via the resume token
 	if err := b.chainEvent(ctx, p.id, p.call, "broker.tool_call."+string(out.Status), out, out.Reason); err != nil {
 		b.log.Error("broker audit chain append failed", "call", out.CallID, "err", err)
 	}
+	// The approver receives the decision status, never a secret-bearing result; a
+	// Sensitive result (reveal_credential) is delivered only to the requesting
+	// agent, once, through the single-use resume token.
+	if res.Sensitive {
+		out.Result = nil
+	}
 	return out, true
+}
+
+// ApprovalOwner returns the accountable owner (on-behalf-of) of a parked call, so
+// the operator layer can refuse a self-approval (owner approving their own agent).
+func (b *Broker) ApprovalOwner(callID string) (string, bool) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	p, ok := b.parked[callID]
+	if !ok {
+		return "", false
+	}
+	return p.id.OnBehalfOf, true
+}
+
+// SweepExpiredParked drops parked approvals older than the resume-token TTL (the
+// token they'd resume with has expired anyway), so an abandoned backlog can't
+// permanently hold the parked cap. Returns the number evicted.
+func (b *Broker) SweepExpiredParked(now time.Time) int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	n := 0
+	for id, p := range b.parked {
+		if now.Sub(p.requested) > b.tokenTTL {
+			delete(b.parked, id)
+			n++
+		}
+	}
+	return n
 }
 
 // Resume spends a single-use token and returns the stored outcome for its bound
