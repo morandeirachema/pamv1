@@ -12,7 +12,7 @@ import (
 
 var (
 	validOS       = map[string]bool{"linux": true, "windows": true}
-	validProtocol = map[string]bool{"ssh": true, "winrm": true, "rdp": true}
+	validProtocol = map[string]bool{"ssh": true, "winrm": true, "rdp": true, "postgres": true}
 	validSecret   = map[string]bool{"password": true, "ssh_key": true}
 )
 
@@ -48,7 +48,7 @@ func (s *Server) createTarget(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnprocessableEntity, `os_type must be "linux" or "windows"`)
 		return
 	case !validProtocol[in.Protocol]:
-		writeError(w, http.StatusUnprocessableEntity, `protocol must be "ssh", "winrm" or "rdp"`)
+		writeError(w, http.StatusUnprocessableEntity, `protocol must be "ssh", "winrm", "rdp" or "postgres"`)
 		return
 	case !s.protocolAllowed(in.Protocol):
 		writeError(w, http.StatusUnprocessableEntity, "protocol "+in.Protocol+" is not allowed by policy")

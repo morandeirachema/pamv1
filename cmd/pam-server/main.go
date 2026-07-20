@@ -554,6 +554,11 @@ func run() error {
 	if cfg.SSHAddr == "off" {
 		close(proxyDone)
 	}
+	// dbProxyDone mirrors proxyDone for the PostgreSQL session proxy (Phase 15).
+	dbProxyDone := make(chan struct{})
+	if cfg.DBAddr == "off" {
+		close(dbProxyDone)
+	}
 	if cfg.SSHAddr != "off" {
 		hostKey, err := proxy.LoadOrCreateHostKey(cfg.SSHHostKeyPath)
 		if err != nil {
@@ -606,6 +611,45 @@ func run() error {
 		}()
 	}
 
+	// PostgreSQL session proxy (Phase 15): brokers postgres targets with JIT
+	// credential injection and per-statement query audit, on its own listener.
+	if cfg.DBAddr != "off" {
+		var dbOnSessionEnd func(int64)
+		if cfg.RotateAfterSession {
+			dbOnSessionEnd = func(credID int64) { handler.RotateCredentialByID(context.Background(), credID) }
+		}
+		var dbClientTLS *tls.Config
+		if cfg.TLSCert != "" && cfg.TLSKey != "" {
+			cert, cerr := tls.LoadX509KeyPair(cfg.TLSCert, cfg.TLSKey)
+			if cerr != nil {
+				return fmt.Errorf("db proxy tls: %w", cerr)
+			}
+			dbClientTLS = &tls.Config{MinVersion: tls.VersionTLS12, Certificates: []tls.Certificate{cert}}
+		}
+		dbx, err := proxy.NewDB(st, v, resolver, proxy.DBConfig{
+			RecordingDir:     cfg.RecordingDir,
+			Sessions:         sessions,
+			RequireApproval:  cfg.RequireApproval,
+			AllowedProtocols: splitAndTrim(cfg.AllowedProtocols),
+			RequireRecording: cfg.RequireRecording,
+			ClientTLS:        dbClientTLS,
+			OnSessionEnd:     dbOnSessionEnd,
+		})
+		if err != nil {
+			return err
+		}
+		go func() {
+			defer close(dbProxyDone)
+			if err := dbx.ListenAndServe(ctx, cfg.DBAddr); err != nil && ctx.Err() == nil {
+				log.Error("database proxy stopped", "err", err)
+				select {
+				case errc <- fmt.Errorf("database proxy: %w", err):
+				default:
+				}
+			}
+		}()
+	}
+
 	srv := &http.Server{
 		Addr:              cfg.ListenAddr,
 		Handler:           handler,
@@ -633,11 +677,16 @@ func run() error {
 	// bounded, for it to finish flushing session audit/recordings before the
 	// deferred st.Close() runs — on either exit path.
 	drainProxy := func() {
-		stop() // cancel ctx so the proxy drains
+		stop() // cancel ctx so the proxies drain
 		select {
 		case <-proxyDone:
 		case <-time.After(10 * time.Second):
 			log.Warn("ssh proxy drain timed out")
+		}
+		select {
+		case <-dbProxyDone:
+		case <-time.After(10 * time.Second):
+			log.Warn("database proxy drain timed out")
 		}
 	}
 

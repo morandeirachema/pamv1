@@ -21,6 +21,9 @@ type Config struct {
 
 	// SSHAddr is the session-proxy listen address; "off" disables it.
 	SSHAddr string
+	// DBAddr is the PostgreSQL session-proxy listen address; "off" disables it
+	// (Phase 15). Operators reach postgres targets with psql through this port.
+	DBAddr string
 	// SSHHostKeyPath persists the proxy host key; empty = ephemeral key.
 	SSHHostKeyPath string
 	// SSHKnownHosts pins upstream target host keys (an OpenSSH known_hosts file).
@@ -221,6 +224,7 @@ func Load() (*Config, error) {
 		APIKey:              os.Getenv("PAM_API_KEY"),
 		BreakGlassKeyHash:   os.Getenv("PAM_BREAK_GLASS_KEY_HASH"),
 		SSHAddr:             getenv("PAM_SSH_ADDR", ":2222"),
+		DBAddr:              getenv("PAM_DB_ADDR", "off"),
 		SSHHostKeyPath:      os.Getenv("PAM_SSH_HOST_KEY"),
 		SSHKnownHosts:       os.Getenv("PAM_SSH_KNOWN_HOSTS"),
 		SSHJumpHost:         os.Getenv("PAM_SSH_JUMP_HOST"),
@@ -321,6 +325,9 @@ func Load() (*Config, error) {
 	// Normalize the disable sentinel so "off"/"OFF"/"Off" all disable the proxy.
 	if strings.EqualFold(cfg.SSHAddr, "off") {
 		cfg.SSHAddr = "off"
+	}
+	if strings.EqualFold(cfg.DBAddr, "off") {
+		cfg.DBAddr = "off"
 	}
 
 	// MasterKey is required only for the local KEK provider; a KMS-backed

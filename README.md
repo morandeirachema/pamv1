@@ -25,13 +25,14 @@ unapologetically **AS/400 / IBM 5250 green-screen console**, because touching a 
 
 Built phase by phase with a single rule: **every phase is functional end to end** — it
 runs, passes tests, and deploys as Infrastructure-as-Code. The **[roadmap](ROADMAP.md)** runs
-0–14 and **all fifteen phases have shipped** — from the JIT SSH proxy and RBAC, through
+0–15 and **all sixteen phases have shipped** — from the JIT SSH proxy and RBAC, through
 AD/Entra/OIDC login, Windows targets, break-glass quorum, OT/industrial adaptation, NIS2
 tooling, scale/HA and the full 5250 console, to a hot-swappable configuration subsystem with
 custom-profile RBAC, an **AI-agent access broker** (policy engine, JIT tool execution,
-verifiable audit, MCP transport and SPIFFE identity), and **SOPS-encrypted Kubernetes
-secrets**. It remains an **alpha, educational** codebase — read it, run it, learn from it, but
-don't trust it with real secrets.
+verifiable audit, MCP transport and SPIFFE identity), **SOPS-encrypted Kubernetes secrets**,
+and a **PostgreSQL database session proxy** (JIT injection + per-statement query audit). It
+remains an **alpha, educational** codebase — read it, run it, learn from it, but don't trust
+it with real secrets.
 
 🔎 **Live overview:** [interactive project page](https://claude.ai/code/artifact/a1b34e5b-cd84-4fc7-8389-ebb1897495f7) — what works, architecture and roadmap at a glance &nbsp;·&nbsp; 📖 **[Léelo en español →](README.es.md)**
 
@@ -132,7 +133,8 @@ Phases 0–14, grouped by area. Every capability is exercised by tests and deplo
 
 - **Session proxy with JIT injection** — operators connect through an SSH gateway; the proxy authenticates them, pulls the credential from the vault, **decrypts it only at connection time** (and only after every authorization gate passes), injects it into the upstream session and records everything. Proven end to end by an integration test where the upstream accepts *only* the vaulted password the client never possessed. Upstream host keys can be pinned (`PAM_SSH_KNOWN_HOSTS`); a jump-host/bastion path and read-only **observer** sessions are supported.
 - **Windows targets (WinRM + RDP)** — run commands on Windows hosts via `POST /api/targets/{id}/winrm` (basic or NTLM) or an interactive WinRM loop through the proxy, or broker a full **RDP** desktop through [Apache Guacamole](https://guacamole.apache.org/) (`GET /api/targets/{id}/rdp` WebSocket tunnel, cert-verified by default). Either way the credential is injected just-in-time (AD-joined accounts work), sessions are audited, and the operator never sees the secret.
-- **Session recording** — every session (stdout **and** stderr) captured in [asciicast v2](https://docs.asciinema.org/manual/asciicast/v2/), hashed with SHA-256 into a tamper-evident chain, and the hash written to the audit trail. Recording failures are audited, and `PAM_REQUIRE_RECORDING` can refuse an unrecordable session outright.
+- **Database session proxy (PostgreSQL)** — point `psql` at pamv1 (`PAM_DB_ADDR`, e.g. `:5433`) with `user=<dbcred>@<target>` and your PAM key as the password; the proxy runs the same authorization gates as the SSH proxy, injects the vaulted DB credential just-in-time (upstream auth via cleartext / MD5 / **SCRAM-SHA-256**), and brokers the wire protocol — **auditing every SQL statement** (`db.query`) and recording the session. The operator never learns the database password. Proven end to end by a fake upstream that accepts *only* the vaulted secret.
+- **Session recording** — every session (stdout **and** stderr, or each SQL statement) captured in [asciicast v2](https://docs.asciinema.org/manual/asciicast/v2/), hashed with SHA-256 into a tamper-evident chain, and the hash written to the audit trail. Recording failures are audited, and `PAM_REQUIRE_RECORDING` can refuse an unrecordable session outright.
 
 ### Vault & credential lifecycle
 
@@ -218,7 +220,7 @@ disable the proxy with `PAM_SSH_ADDR=off`.
 
 ## Roadmap
 
-All fifteen phases have shipped — full per-phase detail in **[ROADMAP.md](ROADMAP.md)**:
+All sixteen phases have shipped — full per-phase detail in **[ROADMAP.md](ROADMAP.md)**:
 
 | Phase | Theme | Status |
 |---|---|---|
@@ -237,6 +239,7 @@ All fifteen phases have shipped — full per-phase detail in **[ROADMAP.md](ROAD
 | 12 | Configuration subsystem + custom-profile RBAC + hot-swap | ✅ shipped |
 | 13 | AI-agent access broker (policy, JIT tools, verifiable audit, MCP, SPIFFE) | ✅ shipped |
 | 14 | SOPS-encrypted Kubernetes secrets (age; Flux/Argo/helm-secrets) | ✅ shipped |
+| 15 | PostgreSQL database session proxy (JIT injection + query audit) | ✅ shipped |
 
 ## Coverage vs. commercial PAM (CyberArk, Wallix, …)
 
@@ -260,7 +263,7 @@ existing chokepoint architecture, and they map to candidate future phases.
 | Gap | What the leaders do | pamv1 today | Fit |
 |---|---|---|---|
 | **Safe / vault containers** with delegated ownership | CyberArk's whole authorization model is [Safes](https://docs.cyberark.com/pam-self-hosted/latest/en/content/pasref/safes-and-safe-members.htm) — credential containers with their own members, workflows & delegated admin; Wallix uses target domains | per-target grants + global RBAC — no container to group credentials, delegate team ownership, or scope policy/approval to a collection | extends the grant model; the biggest structural delta and the key to multi-team / multi-tenant use |
-| **Database session proxy** with query-level audit | [Teleport](https://goteleport.com/docs/enroll-resources/database-access/), [StrongDM](https://www.strongdm.com/), CyberArk & Wallix broker native Postgres/MySQL/MSSQL/Oracle with per-query audit + JIT injection | shells + RDP only; no database protocol brokering | **excellent** — a new listener speaking the DB wire protocol, reusing the SSH proxy's decrypt→inject→record pattern |
+| ~~**Database session proxy** with query-level audit~~ **✅ shipped (Phase 15, PostgreSQL)** | [Teleport](https://goteleport.com/docs/enroll-resources/database-access/), [StrongDM](https://www.strongdm.com/), CyberArk & Wallix broker native Postgres/MySQL/MSSQL/Oracle with per-query audit + JIT injection | **PostgreSQL brokered** (`PAM_DB_ADDR`): JIT injection, SCRAM/MD5/cleartext upstream auth, `db.query` audit per statement. MySQL/MSSQL/Oracle still to come | done for Postgres — the same listener pattern generalizes to the other wire protocols |
 | **Live monitoring + command control** | [CyberArk PSM](https://www.cyberark.com/products/privileged-session-manager/) & Wallix let a supervisor watch a live session, block a dangerous command mid-stream (`rm -rf /`, `DROP TABLE`) and terminate it interactively | async recording + session kill only; no live shadow, no command blocking | **excellent** — tee the recording stream to a watcher; add a filter hook in the I/O loop |
 | **Dependent-account propagation** on rotation | CyberArk CPM updates every [consumer](https://docs.cyberark.com/pam-self-hosted/latest/en/content/pasimp/managing-service-accounts-service.htm) of a rotated service account (Windows Services, Scheduled Tasks, IIS App Pools, COM+) | rotates the credential on the target; no notion of consumers | makes **auto-rotating service accounts safe** in a real Windows estate — today a genuine adoption blocker |
 
@@ -298,7 +301,7 @@ vault + proxy chokepoint, and is **out of scope** by design.
 
 ### Candidate next phases
 
-1. **Phase 15 — Database session proxy** (Postgres → MySQL/MSSQL): the biggest coverage win, and it drops straight into the proven proxy pattern.
+1. ~~**Phase 15 — Database session proxy**~~ ✅ **shipped** (PostgreSQL; MySQL/MSSQL/Oracle are follow-on connectors on the same pattern).
 2. **Phase 16 — Live monitoring + command control**: turns the existing recording + kill-switch into supervised sessions.
 3. **Phase 17 — Safes / containers + dependent-account propagation**: the authorization upgrade for multi-team use and *safe* service-account rotation.
 

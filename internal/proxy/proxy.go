@@ -21,7 +21,6 @@ import (
 	"io"
 	"log/slog"
 	"net"
-	"runtime/debug"
 	"strconv"
 	"strings"
 	"sync"
@@ -326,9 +325,7 @@ func (p *Proxy) fireSessionEnd(credID int64) {
 // goroutine, so one malformed session can't crash the whole proxy — and every
 // other operator's live session (and their unflushed recording) with it.
 func (p *Proxy) recoverPanic(where string) {
-	if r := recover(); r != nil {
-		p.log.Error("ssh proxy: recovered from panic", "where", where, "panic", r, "stack", string(debug.Stack()))
-	}
+	recoverPanicLog(p.log, where)
 }
 
 // closeActiveConns force-closes every tracked client connection. Closing the
@@ -529,49 +526,14 @@ func (p *Proxy) handleConn(ctx context.Context, nConn net.Conn) {
 // plaintext exists. The just-in-time decryption is a separate step
 // (decryptSecret) taken only once the session is authorized.
 func (p *Proxy) resolveTarget(ctx context.Context, targetName, credUser string) (*store.Target, *store.Credential, error) {
-	if targetName == "" {
-		return nil, nil, errors.New("no target specified")
-	}
-	targets, err := p.store.ListTargets(ctx)
-	if err != nil {
-		return nil, nil, errors.New("target lookup failed")
-	}
-	var target *store.Target
-	for i := range targets {
-		if targets[i].Name == targetName {
-			target = &targets[i]
-			break
-		}
-	}
-	if target == nil {
-		return nil, nil, fmt.Errorf("unknown target %q", targetName)
-	}
-	creds, err := p.store.ListCredentials(ctx, target.ID)
-	if err != nil {
-		return nil, nil, errors.New("credential lookup failed")
-	}
-	var cred *store.Credential
-	for i := range creds {
-		if credUser == "" || creds[i].Username == credUser {
-			cred = &creds[i]
-			break
-		}
-	}
-	if cred == nil {
-		return nil, nil, fmt.Errorf("no matching credential for target %q", targetName)
-	}
-	return target, cred, nil
+	return lookupTargetCred(ctx, p.store, targetName, credUser)
 }
 
 // decryptSecret performs the just-in-time decryption of a credential's secret.
 // It must be called only after every authorization gate has passed — plaintext
 // must never be materialized for a session that will be denied.
 func (p *Proxy) decryptSecret(ctx context.Context, target *store.Target, cred *store.Credential) (string, error) {
-	secret, err := p.vault.Decrypt(ctx, cred.SecretEnc, store.CredentialAAD(target.ID, cred.ID))
-	if err != nil {
-		return "", errors.New("credential decryption failed")
-	}
-	return secret, nil
+	return jitDecrypt(ctx, p.vault, target, cred)
 }
 
 // dialUpstream opens an SSH client to the target, authenticating with the
@@ -1051,10 +1013,7 @@ func (p *Proxy) audit(ctx context.Context, actor, action, detail string) {
 	if actor == "" {
 		actor = "proxy"
 	}
-	e := store.AuditEvent{Actor: actor, Action: action, Detail: detail}
-	if err := p.store.AppendAudit(ctx, &e); err != nil {
-		p.log.Error("audit append failed", "action", action, "err", err)
-	}
+	appendAudit(ctx, p.store, p.log, actor, action, detail)
 }
 
 // auditClosing writes a session-teardown audit event that must survive graceful

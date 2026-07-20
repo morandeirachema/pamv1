@@ -179,6 +179,7 @@ All configuration is environment variables (12-factor). Full descriptions in
 | `PAM_BREAK_GLASS_KEY_HASH` | | (off) | Hex SHA-256 of the sealed emergency key. |
 | `PAM_LISTEN_ADDR` | | `:8080` | HTTP portal/API bind. |
 | `PAM_SSH_ADDR` | | `:2222` | SSH proxy bind; `off` disables the proxy. |
+| `PAM_DB_ADDR` | | `off` | PostgreSQL session-proxy bind (Phase 15), e.g. `:5433`; `off` disables it. |
 | `PAM_SSH_HOST_KEY` | | (ephemeral) | Path to persist the proxy SSH host key. |
 | `PAM_SSH_KNOWN_HOSTS` | | (trust-any + warn) | OpenSSH known_hosts file pinning **upstream target** host keys. |
 | `PAM_RECORDING_DIR` | | `recordings` | Where session recordings are written. |
@@ -388,6 +389,44 @@ Guacamole protocol to the browser (`rdp.connect` / `rdp.end` in the audit). The
 in-browser display uses the [guacamole-common-js](https://guacamole.apache.org/doc/gug/writing-you-own-guacamole-app.html)
 client — bundling that viewer into the portal is the remaining step; the tunnel
 itself is usable by any Guacamole-compatible client today.
+
+### Database targets (PostgreSQL)
+
+The database session proxy (Phase 15) extends the same JIT chokepoint to
+**PostgreSQL**: an operator connects with `psql` and their PAM key, the proxy
+injects the vaulted database credential, and **every SQL statement is audited**
+(`db.query`) and recorded. The operator never sees the database password. Enable
+the listener:
+
+```bash
+PAM_DB_ADDR=:5433     # off by default
+```
+
+Create a `postgres` target and a credential for the database login:
+
+```bash
+curl -sX POST https://pam.example/api/targets -H "X-API-Key: $PAM_API_KEY" \
+  -d '{"name":"appdb","host":"10.0.0.20","port":5432,"os_type":"linux","protocol":"postgres"}'
+# then POST /api/targets/{id}/credentials with the DB username + password
+```
+
+Operators then connect through the proxy — the username selects the credential
+and target, the password is their PAM key (or per-user token):
+
+```bash
+psql "host=pam.example port=5433 user=dbuser@appdb dbname=orders"
+# Password: <your PAM key>
+```
+
+The proxy runs the same authorization gates as the SSH proxy (role capability,
+per-target grants, protocol allowlist, and the 4-eyes/approval gate), then
+authenticates upstream with the vaulted secret — supporting **SCRAM-SHA-256**
+(PostgreSQL 14+ default), MD5, and cleartext, and best-effort upstream TLS. Set
+`PAM_TLS_CERT`/`PAM_TLS_KEY` to also encrypt the operator-facing leg; otherwise
+terminate TLS at the ingress (the PAM key would otherwise travel in cleartext).
+Sessions appear in *Work with active sessions* (protocol `postgres`) and can be
+killed like any other. MySQL/MSSQL/Oracle are follow-on connectors on the same
+pattern.
 
 ## 7. Managing users & roles
 
@@ -834,6 +873,7 @@ evidence). Replay with [asciinema](https://asciinema.org/): `asciinema play <fil
 
 | Date | Change |
 |---|---|
+| 2026-07-20 | Phase 15: **PostgreSQL database session proxy** (`PAM_DB_ADDR`) — brokers `postgres` targets with JIT credential injection and **per-statement query audit** (`db.query`); operators use `psql user=<dbcred>@<target>` with their PAM key. Same authorization gates as the SSH proxy; upstream auth via SCRAM-SHA-256/MD5/cleartext. See §5 → *Database targets (PostgreSQL)* |
 | 2026-07-20 | Post-review hardening: directory logins grant the **union** of every mapped group's role (not the single highest); a parked agent approval is **re-validated at decision time** (revoked key / expired SVID refused); broker-audit append serializes under a Postgres advisory lock so a rolling-deploy/HA overlap can't fork the hash chain; numeric policy arguments match in plain decimal |
 | 2026-07-20 | Phase 14: **SOPS-encrypted Kubernetes secrets** — seal the Secret manifest with [SOPS](https://github.com/getsops/sops)+[age](https://age-encryption.org/) and keep it in Git; `deploy/k8s/sops/apply.sh` streams decrypt→`kubectl apply` (plaintext never on disk). See [deploy/k8s/sops/README.md](../deploy/k8s/sops/README.md) |
 | 2026-07-20 | Phase 13: **AI-agent access broker** — opt-in via `PAM_BROKER_POLICY_FILE`; policy-gated tool calls with JIT server-side execution, approval/resume + single-use tokens, an MCP transport (`POST /mcp`), SPIFFE JWT-SVID identity, and a keyed-HMAC verifiable audit chain (`GET /v1/audit/verify`/`/head`). See §7 → *AI-agent access broker* |
