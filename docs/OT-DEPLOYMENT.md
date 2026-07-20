@@ -129,12 +129,13 @@ PAM_OT_AIRGAP=true
 
 ## 5. Roadmap (not yet implemented)
 
-These OT items are designed-for but not built; do not assume them:
+Most OT items have since shipped — a **protocol allowlist** (`PAM_ALLOWED_PROTOCOLS`),
+**read-only observer** sessions (a `+observe` login suffix), **jump-host** bastion
+connectors, and the 4-eyes **access-request approval** workflow (surfaced in the
+portal's "Work with access requests" screen). The one item that remains genuinely
+unbuilt (it needs hardware to verify honestly) is:
 
-- Protocol allowlisting *per cell* beyond the target's single protocol
-- Read-only observer sessions for engineers (view without keystroke injection)
-- Serial / jump-host connectors for legacy equipment (RS-232, terminal servers)
-- Time-boxed vendor-access workflow UI on top of the approval API
+- **Serial connectors** for legacy equipment (RS-232 / terminal servers).
 
 ---
 

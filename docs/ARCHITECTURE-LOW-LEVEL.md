@@ -81,11 +81,12 @@ Schema is applied by an embedded **migration runner** (`pgstore/migrate.go`):
 ordered `migrations/*.sql` files run once each in a transaction, tracked in a
 `schema_migrations` table. `0001_init.sql` is the idempotent baseline (safe on a
 pre-migrations database); later changes are new numbered files (through
-`0006_totp_step.sql`), applied under a `pg_advisory_lock` so concurrent replicas
+`0007_broker.sql`), applied under a `pg_advisory_lock` so concurrent replicas
 don't race. Tables: `targets`, `credentials` (FK `ON DELETE CASCADE`),
 `target_grants`, `audit_events`, `users`, `sessions`, `mfa_enrollments`,
 `mfa_recovery_codes`, `access_requests`, `checkouts` (partial UNIQUE index — one
-active lease per credential), `oidc_states`.
+active lease per credential), `oidc_states`, `agent_keys`, `broker_audit_events`
+(the hash-chained agent-broker audit log).
 
 ### 2.3 `auth` *(Phase 3a)*
 
@@ -405,6 +406,9 @@ cancelled shutdown context so they are not dropped mid-drain.
 | `PAM_OIDC_AUTH_URL` / `_TOKEN_URL` / `_JWKS_URL` | — (discovered) | override endpoints |
 | `PAM_OIDC_ROLE_ADMIN` / `_USER` / `_AUDITOR` / `_APPROVER` | — | OIDC app-role/group → role |
 | `PAM_PORTAL_URL` | `/` | OIDC callback redirect base |
+| `PAM_BROKER_POLICY_FILE` | — (broker off) | AI-agent broker: YAML policy rules; set to enable the broker |
+| `PAM_BROKER_AUDIT_KEY` | — | base64 32-byte HMAC key for the broker audit chain (required when the broker is on) |
+| `PAM_BROKER_AUDIT_SIGN_SEED` | — | base64 32-byte ed25519 seed for signed head checkpoints (required when the broker is on) |
 
 ## 4a. Logging (operational, to stdout)
 
@@ -429,8 +433,10 @@ secrets. Format `json` (SIEM) or `text` (humans); collect from stdout.
 `mfa.enroll` · `mfa.confirm` · `mfa.disable` · `mfa.recovery_generated` ·
 `mfa.recovery_used` · `winrm.run` · `winrm.error` · `rdp.connect` · `rdp.end` ·
 `rdp.error` · `authz.denied` · `login.failed` · `breakglass.access` · `session.start` ·
-`session.record` · `session.record_failed` · `session.end` · `session.denied` · `session.error`. The actor is the Principal name
-(`bootstrap-admin`, `break-glass`, or a username).
+`session.record` · `session.record_failed` · `session.end` · `session.denied` · `session.error` ·
+`agent.create` · `agent.revoke` · `broker.tool_call.requested` · `broker.tool_call.executed` · `broker.tool_call.denied` · `broker.tool_call.pending_approval` · `broker.tool_call.failed`. The actor is the Principal name
+(`bootstrap-admin`, `break-glass`, a username, or an agent name). Agent-broker
+events are also written to the separate tamper-evident `broker_audit_events` chain.
 
 ## 6. Security-relevant invariants (do not regress)
 

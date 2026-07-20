@@ -111,8 +111,11 @@ deny   pam-server -> any                          # default deny
 deny   <operator-cidr>,<target-cidr> -> db:5432
 ```
 
-Kubernetes: pair a default-deny `NetworkPolicy` in the `pamv1` namespace with
-explicit allows mirroring the table above (planned with Phase 10).
+Kubernetes: pamv1 ships the pod-level restrictions (restricted PSS, non-root,
+read-only rootfs, dropped capabilities). The namespace-level `NetworkPolicy` — a
+default-deny paired with explicit allows mirroring the table above — is an
+operator step to apply via your CNI; pamv1 does not ship a `NetworkPolicy`
+manifest (it depends on your CNI and topology).
 
 ## 7. OT / industrial placement (Phase 8)
 

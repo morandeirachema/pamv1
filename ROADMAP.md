@@ -4,9 +4,11 @@ Guiding principle: **fully functional at every step**. Each phase ships somethin
 
 Status: ✅ done · 🚧 in progress · ⬜ planned
 
-**All 10 phases are shipped.** The only remaining items are four that genuinely
-require external infrastructure to build and verify honestly, so they are left as
-documented follow-ons rather than faked:
+**Phases 0–11 are shipped** (through the 5250 management console). **Phase 12**
+(configuration subsystem + custom-profile RBAC) is planned and **Phase 13** (the
+AI-agent access broker) is in progress — see their sections below. Beyond those,
+a few items genuinely require external infrastructure to build and verify
+honestly, so they are left as documented follow-ons rather than faked:
 
 - **Optional Kerberos bind** (Phase 3b) — needs a KDC.
 - **Browser RDP viewer** (Phase 4) — needs the vendored guacamole-common-js renderer + a real browser/guacd/RDP host (the server-side tunnel is done and tested).
@@ -43,7 +45,7 @@ The flagship: users connect *through* pamv1, never holding the credential.
 - [x] **Hash-chain the recordings**: each recording's chain hash = SHA-256(prev-chain-hash ‖ file-hash), head persisted; recorded in the `session.record` audit (`chain:`)
 - [x] Disable `reveal` by policy (`PAM_REVEAL_DISABLED`): reveal becomes break-glass-only, forcing the recorded proxy path
 
-## Phase 3 — Identity & access control 🚧
+## Phase 3 — Identity & access control ✅
 
 ### 3a — RBAC with four profiles ✅
 
@@ -67,7 +69,7 @@ The flagship: users connect *through* pamv1, never holding the credential.
 - [x] OIDC pending-state shared store for multi-replica HA — **shipped in Phase 10** (`store.PutOIDCState`/`TakeOIDCState`, migration `0004`)
 - [x] Local emergency admin kept for AD-down scenarios (bootstrap key + break-glass)
 
-## Phase 4 — Windows targets 🚧
+## Phase 4 — Windows targets ✅
 
 - [x] **WinRM command execution with JIT credentials** (`internal/winrm`): `POST /api/targets/{id}/winrm` decrypts the target's credential only at run time, executes over WinRM, records the transcript (SHA-256 in the audit), returns stdout/stderr/exit — the caller never sees the secret
 - [x] AD-joined target support: uses domain service accounts stored in the vault (the credential username may be `DOMAIN\\user` or UPN)

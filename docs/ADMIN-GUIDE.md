@@ -8,7 +8,7 @@ procedure, and read the logs and audit trail.
 > admin-facing behavior changes (config, deployment, management, logging). Add a
 > row to the [change log](#12-change-log) with each update.
 >
-> Last updated: 2026-07-18 · Reflects: **Phase 3a** (RBAC + four roles) + operational logging.
+> Last updated: 2026-07-20 · Reflects: **Phases 0–11** (through the 5250 management console); Phase 13 (AI-agent access broker) in progress. See the [ROADMAP](../ROADMAP.md).
 
 > ⚠️ **Educational / pre-production.** pamv1 is a learning project and is
 > currently intended for **pre-production** use. It has not been security-audited.
@@ -275,8 +275,9 @@ Every action is audited (`credential.rotate`, `credential.reconcile`,
 `credential.remediate`; the worker acts as `system-scheduler`). **Password**
 credentials rotate over SSH (`chpasswd`) / WinRM (`net user`); **`ssh_key`**
 credentials rotate over SSH by generating a fresh keypair and replacing the
-account's `authorized_keys` (the old key stops working). The AD/LDAPS
-password-change and identity-reconciliation connectors are on the roadmap.
+account's `authorized_keys` (the old key stops working). AD/LDAPS account
+password-change (`unicodePwd`) and identity reconciliation (revoking users the
+directory reports as disabled) shipped in Phase 7.
 
 **Checkout / check-in (exclusive lease).** For accounts a person or app must use
 the password directly, check it out: you get the secret exclusively for a lease
@@ -368,7 +369,7 @@ curl -H "X-API-Key: $PAM_API_KEY" -X DELETE http://localhost:8080/api/users/1
 | `auditor` | — | — | — | ✅ | — |
 | `approver` | — | — | — | ✅ | ✅ |
 
-`*` approval endpoints arrive in a later phase; the capability exists now.
+`*` the `approver` role wields the 4-eyes access-request approval workflow (shipped in Phase 8).
 
 Give the user their token; they use it in the portal Sign On or as the SSH proxy
 password (see the [User Guide](USER-GUIDE.md)).
@@ -457,8 +458,8 @@ Register `PAM_OIDC_REDIRECT_URL` as a redirect URI in the app registration. The
 authorize/token/JWKS endpoints are auto-discovered from the issuer. Users click
 **Single sign-on** on the portal (or hit `/api/auth/oidc/start`); after the IdP,
 the callback issues a pamv1 session and returns to the portal. Note: pamv1's own
-TOTP is not layered on OIDC (the IdP owns MFA there). A shared state store for
-multi-replica HA is on the roadmap.
+TOTP is not layered on OIDC (the IdP owns MFA there). The OIDC login state is
+held in a shared store (Phase 10), so the callback can land on any replica in HA.
 
 ### Multi-factor authentication (TOTP)
 
@@ -681,7 +682,7 @@ evidence). Replay with [asciinema](https://asciinema.org/): `asciinema play <fil
 - **Rotate** the bootstrap `PAM_API_KEY` and any per-user tokens periodically; delete users who no longer need access.
 - **Least privilege on the network:** see the [ports & flow matrix](PORTS-AND-FLOWS.md) for the firewall/NetworkPolicy baseline. The database must be unreachable from operator and target zones.
 - **Upgrades that cross the vault format are breaking (pre-1.0).** The current token format is `v2:` with a per-credential AAD; there is no in-place migration from earlier ciphertext (older AAD, or the pre-GCM PKCS#11 wrap). A deployment that carries vaulted secrets across such a change must re-enter its credentials. Fresh installs are unaffected.
-- Planned hardening (Postgres TLS enforcement, migrations, vault key rotation, native HTTPS, rate limiting) is [Phase 5](../ROADMAP.md#phase-5--hardening-database-vault-transport-).
+- Transport/data hardening — native HTTPS, security headers, per-IP rate limiting, versioned migrations, and vault key rotation — shipped in [Phase 5](../ROADMAP.md#phase-5--hardening-database-vault-transport-); enforce `sslmode=verify-full` to Postgres at deploy time.
 
 ## 11. Troubleshooting
 

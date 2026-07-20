@@ -8,7 +8,7 @@ review activity. If you deploy or administer pamv1, see the
 > user-facing behavior changes (portal, connecting, roles). Add a row to the
 > [change log](#8-change-log) with each update.
 >
-> Last updated: 2026-07-18 · Reflects: **Phase 3a** (RBAC + four roles).
+> Last updated: 2026-07-20 · Reflects: **Phases 0–11** (through the 5250 management console). See the [ROADMAP](../ROADMAP.md).
 
 > ⚠️ Educational / pre-production project — see the [README](../README.md).
 
@@ -41,7 +41,7 @@ An administrator assigns you one of four roles:
 | **approver** | Read inventory + audit, approve/deny access requests¹ | Connect to targets, change anything |
 | **admin** | Everything (see the Admin Guide) | — |
 
-¹ The approval workflow arrives in a later release.
+¹ The 4-eyes access-request approval workflow (shipped in Phase 8); approvers review requests in the portal's "Work with access requests" screen.
 
 ## 3. How you sign in
 
