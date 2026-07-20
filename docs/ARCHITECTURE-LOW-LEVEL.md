@@ -5,7 +5,7 @@
 > the codebase; the conceptual view lives in
 > [ARCHITECTURE-HIGH-LEVEL.md](ARCHITECTURE-HIGH-LEVEL.md).
 >
-> Last updated: 2026-07-19 · Reflects: **all 10 phases shipped** plus the security/correctness hardening pass. Commit the doc update with the code change.
+> Last updated: 2026-07-20 · Reflects: **Phases 0–11 shipped** (through the 5250 management console), the security/correctness hardening pass, and code-generated diagrams; **Phase 13** (AI-agent access broker) in progress and **Phase 12** (configuration subsystem + custom-profile RBAC) planned. See the [ROADMAP](../ROADMAP.md) for authoritative per-phase status. Commit the doc update with the code change.
 
 ## 1. Language, layout, dependencies
 

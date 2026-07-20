@@ -10,7 +10,7 @@
 
 Open-source **Privileged Access Management** (PAM) in Go: a hardened credential vault, target inventory for Linux/Windows, a **just-in-time credential-injection session proxy**, append-only audit trail, break-glass emergency access, and an unapologetically **AS/400-style admin portal** — because touching a PAM should *feel* serious.
 
-Built phase by phase with one rule: **every phase is functional end to end** — it runs, passes tests, and deploys as IaC. All **[ten roadmap phases](ROADMAP.md)** have now shipped, from the JIT SSH proxy and RBAC through AD/OIDC login, Windows targets, break-glass quorum, OT/industrial adaptation and NIS2 tooling. It remains an **alpha, educational** codebase — read it, run it, learn from it, but don't trust it with real secrets.
+Built phase by phase with one rule: **every phase is functional end to end** — it runs, passes tests, and deploys as IaC. The **[roadmap](ROADMAP.md)** runs 0–13: **phases 0–11 have shipped** — from the JIT SSH proxy and RBAC through AD/OIDC login, Windows targets, break-glass quorum, OT/industrial adaptation, NIS2 tooling, scale/HA, and the full AS/400 management console — **phase 12** (configuration subsystem + custom-profile RBAC) is planned, and **phase 13** (an AI-agent access broker) is in progress. It remains an **alpha, educational** codebase — read it, run it, learn from it, but don't trust it with real secrets.
 
 🔎 **Live overview:** [interactive project page](https://claude.ai/code/artifact/a1b34e5b-cd84-4fc7-8389-ebb1897495f7) — what works, architecture and roadmap at a glance.
 
@@ -60,9 +60,30 @@ flowchart LR
 
 All components above are implemented. Dashed edges mark optional/back-end paths (the AD/OIDC connector is used only when SSO is configured; Windows targets are brokered over WinRM/RDP).
 
+## Roadmap at a glance
+
+The full per-phase status lives in **[ROADMAP.md](ROADMAP.md)**; in brief:
+
+| Phase | Theme | Status |
+|---|---|---|
+| 0 | Project foundation | ✅ shipped |
+| 1 | Core: vault, inventory, audit, portal | ✅ shipped |
+| 2 | SSH session proxy with JIT injection | ✅ shipped |
+| 3 | Identity & access control (RBAC, AD/Entra/OIDC, MFA) | ✅ shipped |
+| 4 | Windows targets (WinRM + RDP via Guacamole) | ✅ shipped |
+| 5 | Hardening: database, vault, transport | ✅ shipped |
+| 6 | Break-glass v2 (M-of-N quorum) | ✅ shipped |
+| 7 | Credential lifecycle (rotation, reconciliation) | ✅ shipped |
+| 8 | OT adaptation (4-eyes approvals, air-gap) | ✅ shipped |
+| 9 | NIS2 compliance pack | ✅ shipped |
+| 10 | Scale & operations (metrics, Helm, HA, signed releases) | ✅ shipped |
+| 11 | Full 5250 management console | ✅ shipped |
+| 12 | Configuration subsystem + custom-profile RBAC | 🚧 planned |
+| 13 | AI-agent access broker (policy, JIT tool exec, verifiable audit) | 🚧 in progress |
+
 ## What works today
 
-All ten roadmap phases have shipped. Grouped by area:
+Grouped by area:
 
 ### Identity & access
 

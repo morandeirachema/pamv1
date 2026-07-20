@@ -16,10 +16,13 @@ credenciales just-in-time**, registro de auditoría de solo adición, acceso de 
 PAM debe *sentirse* serio.
 
 Construido fase a fase con una regla: **cada fase es funcional de principio a fin** — arranca,
-pasa los tests y se despliega como IaC. Ya han entregado las **[diez fases del roadmap](ROADMAP.md)**,
-desde el proxy SSH JIT y el RBAC hasta el login AD/OIDC, los objetivos Windows, el quórum de
-break-glass, la adaptación OT/industrial y las herramientas NIS2. Sigue siendo un proyecto
-**alpha y educativo** — léelo, ejecútalo, aprende de él, pero no le confíes secretos reales.
+pasa los tests y se despliega como IaC. El **[roadmap](ROADMAP.md)** abarca de la 0 a la 13:
+**las fases 0–11 ya se han entregado** — desde el proxy SSH JIT y el RBAC hasta el login AD/OIDC,
+los objetivos Windows, el quórum de break-glass, la adaptación OT/industrial, las herramientas
+NIS2, escala/HA y la consola de gestión completa estilo AS/400 —, la **fase 12** (subsistema de
+configuración + perfiles de permisos personalizados) está planificada y la **fase 13** (un bróker
+de acceso para agentes de IA) está en curso. Sigue siendo un proyecto **alpha y educativo** —
+léelo, ejecútalo, aprende de él, pero no le confíes secretos reales.
 
 🔎 **Resumen interactivo:** [página del proyecto](https://claude.ai/code/artifact/b9f19443-5ad1-42d2-955f-e43ca17ac542) — qué funciona, arquitectura y hoja de ruta de un vistazo.
 
@@ -65,9 +68,30 @@ Todos los componentes anteriores están implementados. Las líneas discontinuas 
 opcionales o de back-end (el conector AD/OIDC solo se usa con SSO configurado; los objetivos
 Windows se intermedian por WinRM/RDP).
 
+## El roadmap de un vistazo
+
+El estado por fase vive en **[ROADMAP.md](ROADMAP.md)**; en resumen:
+
+| Fase | Tema | Estado |
+|---|---|---|
+| 0 | Cimientos del proyecto | ✅ entregada |
+| 1 | Núcleo: bóveda, inventario, auditoría, portal | ✅ entregada |
+| 2 | Proxy de sesión SSH con inyección JIT | ✅ entregada |
+| 3 | Identidad y control de acceso (RBAC, AD/Entra/OIDC, MFA) | ✅ entregada |
+| 4 | Objetivos Windows (WinRM + RDP vía Guacamole) | ✅ entregada |
+| 5 | Endurecimiento: base de datos, bóveda, transporte | ✅ entregada |
+| 6 | Break-glass v2 (quórum M-de-N) | ✅ entregada |
+| 7 | Ciclo de vida de credenciales (rotación, reconciliación) | ✅ entregada |
+| 8 | Adaptación OT (aprobaciones a cuatro ojos, air-gap) | ✅ entregada |
+| 9 | Paquete de cumplimiento NIS2 | ✅ entregada |
+| 10 | Escala y operaciones (métricas, Helm, HA, releases firmados) | ✅ entregada |
+| 11 | Consola de gestión completa estilo 5250 | ✅ entregada |
+| 12 | Subsistema de configuración + perfiles personalizados | 🚧 planificada |
+| 13 | Bróker de acceso para agentes de IA (política, ejecución JIT, auditoría verificable) | 🚧 en curso |
+
 ## Qué funciona hoy
 
-Ya han entregado las diez fases del roadmap. Agrupado por área:
+Agrupado por área:
 
 ### Identidad y acceso
 
