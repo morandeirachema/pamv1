@@ -13,6 +13,7 @@ import (
 
 	"github.com/morandeirachema/pamv1/internal/auth"
 	"github.com/morandeirachema/pamv1/internal/proxy"
+	"github.com/morandeirachema/pamv1/internal/session"
 	"github.com/morandeirachema/pamv1/internal/store"
 	"github.com/morandeirachema/pamv1/internal/store/memstore"
 	"github.com/morandeirachema/pamv1/internal/vault"
@@ -138,6 +139,44 @@ func (f *fakePostgres) lastQuery() string {
 		return ""
 	}
 	return f.qs[len(f.qs)-1]
+}
+
+// allQueries returns every query the fake received.
+func (f *fakePostgres) allQueries() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.qs...)
+}
+
+// openDBSession connects to the proxy, authenticates with password, and returns
+// once the session is ready for queries.
+func openDBSession(t *testing.T, addr, user, db, password string) (*pgproto3.Frontend, net.Conn) {
+	t.Helper()
+	conn, err := net.DialTimeout("tcp", addr, 5*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fe := pgproto3.NewFrontend(conn, conn)
+	fe.Send(&pgproto3.StartupMessage{
+		ProtocolVersion: pgproto3.ProtocolVersionNumber,
+		Parameters:      map[string]string{"user": user, "database": db},
+	})
+	if err := fe.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	msg, err := fe.Receive()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := msg.(*pgproto3.AuthenticationCleartextPassword); !ok {
+		t.Fatalf("expected cleartext-password request, got %T", msg)
+	}
+	fe.Send(&pgproto3.PasswordMessage{Password: password})
+	if err := fe.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	waitReady(t, fe)
+	return fe, conn
 }
 
 // serveDBProxy serves dbx on an ephemeral port and returns its address, waiting
@@ -271,8 +310,8 @@ func TestDBProxyJITInjection(t *testing.T) {
 	}
 
 	// The SQL and the session start are audited.
-	assertDBAudit(t, st, "db.query", "SELECT 1")
-	assertDBAudit(t, st, "db.session.start", "pg-01")
+	assertAuditContains(t, st, "db.query", "SELECT 1")
+	assertAuditContains(t, st, "db.session.start", "pg-01")
 }
 
 // TestDBProxyWrongKeyRejected proves an unauthenticated operator (bad PAM key)
@@ -321,9 +360,116 @@ func TestDBProxyWrongKeyRejected(t *testing.T) {
 	}
 }
 
-// assertDBAudit fails unless some audit event has the given action and a detail
+// TestDBProxyCommandBlocked proves command control refuses a matching SQL
+// statement — the client gets an error, the session stays usable, and the
+// blocked statement never reaches the upstream database.
+func TestDBProxyCommandBlocked(t *testing.T) {
+	st := memstore.New()
+	v := mustVault(t)
+	fake := startFakePostgres(t, upstreamSecret)
+	seedPGTarget(t, st, v, fake.addr)
+	resolver, err := auth.NewResolver(st, proxyAPIKey, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	guard, err := proxy.NewCommandGuard([]string{`(?i)drop\s+table`})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dbx, err := proxy.NewDB(st, v, resolver, proxy.DBConfig{RecordingDir: t.TempDir(), DialTimeout: 5 * time.Second, CommandGuard: guard})
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := serveDBProxy(t, dbx)
+	fe, conn := openDBSession(t, addr, "dbuser@pg-01", "appdb", proxyAPIKey)
+	defer conn.Close()
+
+	fe.Send(&pgproto3.Query{String: "DROP TABLE users"})
+	if err := fe.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	msg, err := fe.Receive()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := msg.(*pgproto3.ErrorResponse); !ok {
+		t.Fatalf("blocked query: expected ErrorResponse, got %T", msg)
+	}
+	waitReady(t, fe) // session remains usable after a refusal
+
+	// A permitted query still flows through.
+	fe.Send(&pgproto3.Query{String: "SELECT 1"})
+	if err := fe.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	waitReady(t, fe)
+	fe.Send(&pgproto3.Terminate{})
+	_ = fe.Flush()
+
+	for _, q := range fake.allQueries() {
+		if strings.Contains(strings.ToUpper(q), "DROP TABLE") {
+			t.Fatalf("blocked statement reached the upstream: %q", q)
+		}
+	}
+	assertAuditContains(t, st, "command.blocked", "DROP TABLE")
+}
+
+// TestDBProxyLiveMonitor proves a supervisor watching the live hub sees the SQL
+// statements as they are brokered.
+func TestDBProxyLiveMonitor(t *testing.T) {
+	st := memstore.New()
+	v := mustVault(t)
+	fake := startFakePostgres(t, upstreamSecret)
+	seedPGTarget(t, st, v, fake.addr)
+	resolver, err := auth.NewResolver(st, proxyAPIKey, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	reg := session.NewRegistry()
+	hub := session.NewHub()
+	dbx, err := proxy.NewDB(st, v, resolver, proxy.DBConfig{RecordingDir: t.TempDir(), DialTimeout: 5 * time.Second, Sessions: reg, Live: hub})
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := serveDBProxy(t, dbx)
+	fe, conn := openDBSession(t, addr, "dbuser@pg-01", "appdb", proxyAPIKey)
+	defer conn.Close()
+
+	// The session is now registered; find its id and subscribe to its live output.
+	var sid string
+	for i := 0; i < 200 && sid == ""; i++ {
+		if ls := reg.List(); len(ls) > 0 {
+			sid = ls[0].ID
+		} else {
+			time.Sleep(5 * time.Millisecond)
+		}
+	}
+	if sid == "" {
+		t.Fatal("session was not registered")
+	}
+	frames, cancel := hub.Subscribe(sid)
+	defer cancel()
+
+	fe.Send(&pgproto3.Query{String: "SELECT 42"})
+	if err := fe.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case b := <-frames:
+		if !strings.Contains(string(b), "SELECT 42") {
+			t.Fatalf("live frame %q did not carry the query", b)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("no live frame received")
+	}
+	waitReady(t, fe)
+	fe.Send(&pgproto3.Terminate{})
+	_ = fe.Flush()
+}
+
+// assertAuditContains fails unless some audit event has the given action and a detail
 // containing want.
-func assertDBAudit(t *testing.T, st store.Store, action, want string) {
+func assertAuditContains(t *testing.T, st store.Store, action, want string) {
 	t.Helper()
 	events, err := st.ListAudit(context.Background(), 200)
 	if err != nil {

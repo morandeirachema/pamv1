@@ -55,6 +55,11 @@ type DBConfig struct {
 	ClientTLS *tls.Config
 	// OnSessionEnd forces post-session credential rotation, like the SSH proxy.
 	OnSessionEnd func(credentialID int64)
+	// CommandGuard blocks SQL statements matching its deny patterns (Phase 16).
+	CommandGuard *CommandGuard
+	// Live receives each recorded statement keyed by session id, so a supervisor
+	// can watch the session live (Phase 16).
+	Live *session.Hub
 }
 
 // DBProxy brokers PostgreSQL sessions with just-in-time credential injection.
@@ -71,6 +76,8 @@ type DBProxy struct {
 	dialTimeout  time.Duration
 	clientTLS    *tls.Config
 	onSessionEnd func(int64)
+	guard        *CommandGuard
+	live         *session.Hub
 	chain        *recordChain
 
 	bg sync.WaitGroup // background tasks (post-session rotation) drained on shutdown
@@ -106,6 +113,8 @@ func NewDB(st store.Store, v *vault.Vault, resolver *auth.Resolver, cfg DBConfig
 		dialTimeout:  cfg.DialTimeout,
 		clientTLS:    cfg.ClientTLS,
 		onSessionEnd: cfg.OnSessionEnd,
+		guard:        cfg.CommandGuard,
+		live:         cfg.Live,
 		chain:        newRecordChain(cfg.RecordingDir),
 		conns:        make(map[net.Conn]struct{}),
 	}
@@ -401,8 +410,9 @@ func (d *DBProxy) handleConn(ctx context.Context, nConn net.Conn) {
 		}
 	}
 
+	var sid string
 	if d.sessions != nil {
-		sid := d.sessions.Register(session.Info{
+		sid = d.sessions.Register(session.Info{
 			Actor: actor, Target: target.Name, Protocol: "postgres", Remote: remote, Started: time.Now(),
 		}, func() { conn.Close(); up.conn.Close() })
 		defer d.sessions.Remove(sid)
@@ -419,7 +429,7 @@ func (d *DBProxy) handleConn(ctx context.Context, nConn net.Conn) {
 		d.fireSessionEnd(cred.ID)
 	}()
 
-	d.relay(ctx, backend, up.fe, conn, up.conn, actor, target, rec)
+	d.relay(ctx, backend, up.fe, conn, up.conn, actor, target, rec, sid)
 }
 
 // upstreamPG is an authenticated connection to the real PostgreSQL server.
@@ -463,9 +473,21 @@ func (d *DBProxy) dialUpstream(ctx context.Context, target *store.Target, user, 
 // relay brokers messages both ways until either side closes. Client→upstream
 // Query/Parse statements are audited and recorded; everything else passes
 // through so result sets, prepared statements and COPY still work.
-func (d *DBProxy) relay(ctx context.Context, backend *pgproto3.Backend, fe *pgproto3.Frontend, clientConn, upConn net.Conn, actor string, target *store.Target, rec *Recording) {
+func (d *DBProxy) relay(ctx context.Context, backend *pgproto3.Backend, fe *pgproto3.Frontend, clientConn, upConn net.Conn, actor string, target *store.Target, rec *Recording, sid string) {
 	var once sync.Once
 	stop := func() { clientConn.Close(); upConn.Close() }
+	// The client-facing backend is written by BOTH directions — the upstream→
+	// client relay and a policy refusal on the client→upstream side — so every
+	// write goes through this mutex; pgproto3.Backend is not concurrency-safe.
+	var bmu sync.Mutex
+	sendClient := func(msgs ...pgproto3.BackendMessage) error {
+		bmu.Lock()
+		defer bmu.Unlock()
+		for _, m := range msgs {
+			backend.Send(m)
+		}
+		return backend.Flush()
+	}
 	var wg sync.WaitGroup
 	wg.Add(2)
 	go func() { // client → upstream
@@ -479,9 +501,15 @@ func (d *DBProxy) relay(ctx context.Context, backend *pgproto3.Backend, fe *pgpr
 			}
 			switch m := msg.(type) {
 			case *pgproto3.Query:
-				d.recordQuery(ctx, rec, actor, target, m.String)
+				if d.blockedStatement(ctx, sendClient, actor, target, m.String, false) {
+					continue // refused by policy; session stays usable
+				}
+				d.recordQuery(ctx, rec, actor, target, m.String, sid)
 			case *pgproto3.Parse:
-				d.recordQuery(ctx, rec, actor, target, m.Query)
+				if d.blockedStatement(ctx, sendClient, actor, target, m.Query, true) {
+					return // fail-closed: end the extended-protocol session
+				}
+				d.recordQuery(ctx, rec, actor, target, m.Query, sid)
 			case *pgproto3.Terminate:
 				fe.Send(msg)
 				_ = fe.Flush()
@@ -502,8 +530,7 @@ func (d *DBProxy) relay(ctx context.Context, backend *pgproto3.Backend, fe *pgpr
 			if err != nil {
 				return
 			}
-			backend.Send(msg)
-			if err := backend.Flush(); err != nil {
+			if err := sendClient(msg); err != nil {
 				return
 			}
 		}
@@ -511,16 +538,44 @@ func (d *DBProxy) relay(ctx context.Context, backend *pgproto3.Backend, fe *pgpr
 	wg.Wait()
 }
 
-// recordQuery audits and records a single SQL statement.
-func (d *DBProxy) recordQuery(ctx context.Context, rec *Recording, actor string, target *store.Target, sql string) {
+// recordQuery audits and records a single SQL statement, and publishes it to the
+// live hub so a supervisor can watch the session.
+func (d *DBProxy) recordQuery(ctx context.Context, rec *Recording, actor string, target *store.Target, sql, sid string) {
 	trimmed := strings.TrimSpace(sql)
 	if trimmed == "" {
 		return
 	}
 	d.audit(ctx, actor, "db.query", "target:"+target.Name+" sql:"+auditCmd(trimmed))
+	line := []byte("psql> " + trimmed + "\r\n")
 	if rec != nil {
-		_, _ = rec.Write([]byte("psql> " + trimmed + "\r\n"))
+		_, _ = rec.Write(line)
 	}
+	d.live.Publish(sid, line)
+}
+
+// blockedStatement reports whether sql is blocked by command control. When it is,
+// it audits command.blocked and sends the client an error: a graceful
+// ErrorResponse+ReadyForQuery for a simple query (extended=false, session stays
+// usable) or a FATAL error for an extended-protocol Parse (the caller ends it).
+func (d *DBProxy) blockedStatement(ctx context.Context, sendClient func(...pgproto3.BackendMessage) error, actor string, target *store.Target, sql string, extended bool) bool {
+	pat, blocked := d.guard.Blocked(sql)
+	if !blocked {
+		return false
+	}
+	d.audit(ctx, actor, "command.blocked", fmt.Sprintf("target:%s via:postgres pattern:%s sql:%s", target.Name, pat, auditCmd(sql)))
+	sev := "ERROR"
+	if extended {
+		sev = "FATAL"
+	}
+	errResp := &pgproto3.ErrorResponse{Severity: sev, Code: "42501", Message: "pamv1: command blocked by policy"}
+	if extended {
+		_ = sendClient(errResp)
+	} else {
+		// A simple query: report the error and a fresh ReadyForQuery so the
+		// session stays usable after the refusal.
+		_ = sendClient(errResp, &pgproto3.ReadyForQuery{TxStatus: 'I'})
+	}
+	return true
 }
 
 // fail sends a FATAL ErrorResponse to the operator's client.

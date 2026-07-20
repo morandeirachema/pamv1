@@ -26,15 +26,15 @@ de fósforo verde** sin concesiones, porque tocar un PAM debe *sentirse* serio.
 
 Construido fase a fase con una regla: **cada fase es funcional de principio a fin** — arranca,
 pasa los tests y se despliega como Infraestructura-como-Código. El **[roadmap](ROADMAP.md)**
-abarca de la 0 a la 15 y **se han entregado las dieciséis fases** — desde el proxy SSH JIT y el
+abarca de la 0 a la 16 y **se han entregado las diecisiete fases** — desde el proxy SSH JIT y el
 RBAC, pasando por el login AD/Entra/OIDC, los objetivos Windows, el quórum de break-glass, la
 adaptación OT/industrial, las herramientas NIS2, escala/HA y la consola 5250 completa, hasta un
 subsistema de configuración con hot-swap y RBAC de perfiles personalizados, un **bróker de
 acceso para agentes de IA** (motor de políticas, ejecución JIT de herramientas, auditoría
-verificable, transporte MCP e identidad SPIFFE), **secretos de Kubernetes cifrados con SOPS** y
-un **proxy de sesión de base de datos PostgreSQL** (inyección JIT + auditoría por sentencia SQL).
-Sigue siendo un proyecto **alpha y educativo** — léelo, ejecútalo, aprende de él, pero no le
-confíes secretos reales.
+verificable, transporte MCP e identidad SPIFFE), **secretos de Kubernetes cifrados con SOPS**,
+un **proxy de sesión de base de datos PostgreSQL** (inyección JIT + auditoría por sentencia SQL)
+y **sesiones supervisadas** (monitorización en vivo + control de comandos). Sigue siendo un
+proyecto **alpha y educativo** — léelo, ejecútalo, aprende de él, pero no le confíes secretos reales.
 
 🔎 **Resumen interactivo:** [página del proyecto](https://claude.ai/code/artifact/b9f19443-5ad1-42d2-955f-e43ca17ac542) — qué funciona, arquitectura y hoja de ruta de un vistazo &nbsp;·&nbsp; 📖 **[Read it in English →](README.md)**
 
@@ -138,6 +138,7 @@ Fases 0–14, agrupadas por área. Cada capacidad está cubierta por tests y se 
 - **Objetivos Windows (WinRM + RDP)** — ejecuta comandos en hosts Windows con `POST /api/targets/{id}/winrm` (auth básica o NTLM) o un bucle WinRM interactivo por el proxy, o intermedia un escritorio **RDP** completo con [Apache Guacamole](https://guacamole.apache.org/) (túnel WebSocket `GET /api/targets/{id}/rdp`, con verificación de certificado por defecto). En ambos casos la credencial se inyecta just-in-time (funcionan las cuentas de dominio), las sesiones se auditan y el operador nunca ve el secreto.
 - **Proxy de sesión de base de datos (PostgreSQL)** — apunta `psql` a pamv1 (`PAM_DB_ADDR`, p. ej. `:5433`) con `user=<credbd>@<objetivo>` y tu clave PAM como contraseña; el proxy aplica las mismas comprobaciones de autorización que el proxy SSH, inyecta la credencial de BD del vault just-in-time (auth upstream por cleartext / MD5 / **SCRAM-SHA-256**) e intermedia el protocolo — **auditando cada sentencia SQL** (`db.query`) y grabando la sesión. El operador nunca conoce la contraseña de la base de datos. Demostrado de extremo a extremo por un upstream falso que acepta *solo* el secreto del vault.
 - **Grabación de sesiones** — cada sesión (stdout **y** stderr, o cada sentencia SQL) capturada en [asciicast v2](https://docs.asciinema.org/manual/asciicast/v2/), encadenada por hash SHA-256 a prueba de manipulación, y el hash escrito en la auditoría. Los fallos de grabación se auditan y `PAM_REQUIRE_RECORDING` puede rechazar de plano una sesión no grabable.
+- **Sesiones supervisadas (monitorización en vivo + control de comandos)** — un supervisor puede **ver una sesión SSH o PostgreSQL en vivo** por `GET /api/sessions/{id}/stream` (Server-Sent Events, `CapReadAudit`), y una lista de denegación por regex (`PAM_COMMAND_DENY_FILE`) **bloquea un comando peligroso antes de que llegue al objetivo** en las rutas de exec, WinRM y SQL — rechazado y auditado (`command.blocked`). Para las shells SSH interactivas se usa el modo observador de solo lectura.
 
 ### Vault y ciclo de vida de credenciales
 
@@ -223,7 +224,7 @@ ves la credencial. Las grabaciones van a `PAM_RECORDING_DIR`; desactiva el proxy
 
 ## Hoja de ruta
 
-Se han entregado las dieciséis fases — detalle por fase en **[ROADMAP.md](ROADMAP.md)**:
+Se han entregado las diecisiete fases — detalle por fase en **[ROADMAP.md](ROADMAP.md)**:
 
 | Fase | Tema | Estado |
 |---|---|---|
@@ -243,6 +244,7 @@ Se han entregado las dieciséis fases — detalle por fase en **[ROADMAP.md](ROA
 | 13 | Bróker de acceso para agentes de IA (política, herramientas JIT, auditoría verificable, MCP, SPIFFE) | ✅ entregada |
 | 14 | Secretos de Kubernetes cifrados con SOPS (age; Flux/Argo/helm-secrets) | ✅ entregada |
 | 15 | Proxy de sesión de base de datos PostgreSQL (inyección JIT + auditoría de consultas) | ✅ entregada |
+| 16 | Monitorización de sesiones en vivo (SSE) + control de comandos | ✅ entregada |
 
 ## Cobertura frente al PAM comercial (CyberArk, Wallix, …)
 
@@ -269,7 +271,7 @@ posibles fases futuras.
 |---|---|---|---|
 | **Cajas fuertes (safes) / contenedores** con propiedad delegada | Todo el modelo de autorización de CyberArk son las [safes](https://docs.cyberark.com/pam-self-hosted/latest/en/content/pasref/safes-and-safe-members.htm) — contenedores de credenciales con sus propios miembros, flujos y administración delegada; Wallix usa dominios de objetivos | concesiones por objetivo + RBAC global — sin contenedor para agrupar credenciales, delegar la propiedad a un equipo o acotar política/aprobación a una colección | amplía el modelo de concesiones; el mayor salto estructural y la clave para el uso multiequipo / multiinquilino |
 | ~~**Proxy de sesión de base de datos** con auditoría por consulta~~ **✅ entregado (Fase 15, PostgreSQL)** | [Teleport](https://goteleport.com/docs/enroll-resources/database-access/), [StrongDM](https://www.strongdm.com/), CyberArk y Wallix intermedian Postgres/MySQL/MSSQL/Oracle nativos con auditoría por consulta + inyección JIT | **PostgreSQL intermediado** (`PAM_DB_ADDR`): inyección JIT, auth upstream SCRAM/MD5/cleartext, auditoría `db.query` por sentencia. MySQL/MSSQL/Oracle aún por llegar | hecho para Postgres — el mismo patrón de listener se generaliza a los demás protocolos |
-| **Monitorización en vivo + control de comandos** | [CyberArk PSM](https://www.cyberark.com/products/privileged-session-manager/) y Wallix permiten a un supervisor ver una sesión en vivo, bloquear un comando peligroso a mitad de flujo (`rm -rf /`, `DROP TABLE`) y terminarla de forma interactiva | solo grabación asíncrona + corte de sesión; sin observación en vivo ni bloqueo de comandos | **excelente** — replicar el flujo de grabación hacia un observador; añadir un hook de filtrado en el bucle de E/S |
+| ~~**Monitorización en vivo + control de comandos**~~ **✅ entregado (Fase 16)** | [CyberArk PSM](https://www.cyberark.com/products/privileged-session-manager/) y Wallix permiten a un supervisor ver una sesión en vivo, bloquear un comando peligroso a mitad de flujo (`rm -rf /`, `DROP TABLE`) y terminarla de forma interactiva | **stream SSE en vivo** (`GET /api/sessions/{id}/stream`) + **control de comandos** (lista de denegación regex en exec/WinRM/SQL, `command.blocked`); el corte interactivo ya existía | hecho — el filtrado de shell interactiva y el visor en el portal son posteriores |
 | **Propagación a cuentas dependientes** al rotar | El CPM de CyberArk actualiza cada [consumidor](https://docs.cyberark.com/pam-self-hosted/latest/en/content/pasimp/managing-service-accounts-service.htm) de una cuenta de servicio rotada (Servicios de Windows, Tareas programadas, App Pools de IIS, COM+) | rota la credencial en el objetivo; sin noción de consumidores | hace **segura la rotación automática de cuentas de servicio** en un parque Windows real — hoy un bloqueante de adopción real |
 
 ### Nivel 2 — profundidad de gobierno de accesos
@@ -310,7 +312,7 @@ por diseño.
 ### Fases candidatas siguientes
 
 1. ~~**Fase 15 — Proxy de sesión de base de datos**~~ ✅ **entregada** (PostgreSQL; MySQL/MSSQL/Oracle son conectores posteriores sobre el mismo patrón).
-2. **Fase 16 — Monitorización en vivo + control de comandos**: convierte la grabación + corte existentes en sesiones supervisadas.
+2. ~~**Fase 16 — Monitorización en vivo + control de comandos**~~ ✅ **entregada** (stream SSE en vivo + control de comandos regex en exec/WinRM/SQL).
 3. **Fase 17 — Safes / contenedores + propagación a cuentas dependientes**: la mejora de autorización para el uso multiequipo y la rotación *segura* de cuentas de servicio.
 
 ## Inicio rápido

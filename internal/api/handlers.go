@@ -3,9 +3,11 @@ package api
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/morandeirachema/pamv1/internal/store"
 )
@@ -16,6 +18,54 @@ func (s *Server) listSessions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, s.sessions.List())
+}
+
+// streamSession streams a live session's output to a supervisor as Server-Sent
+// Events (Phase 16 live monitoring). Each output frame is one `data:` event; the
+// stream ends when the client disconnects or the session ends. Requires
+// CapReadAudit and audits the start of monitoring.
+func (s *Server) streamSession(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if s.live == nil {
+		writeError(w, http.StatusNotFound, "live monitoring is not enabled")
+		return
+	}
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		writeError(w, http.StatusInternalServerError, "streaming unsupported")
+		return
+	}
+	frames, cancel := s.live.Subscribe(id)
+	defer cancel()
+
+	s.audit(r.Context(), "session.monitor", "session:"+id)
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no") // disable proxy buffering
+	w.WriteHeader(http.StatusOK)
+	flusher.Flush()
+
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case b := <-frames:
+			// SSE frames are newline-delimited; encode as one data: field per
+			// output chunk (any embedded newlines are re-prefixed by the client).
+			if _, err := fmt.Fprintf(w, "data: %s\n\n", sseEscape(b)); err != nil {
+				return
+			}
+			flusher.Flush()
+		}
+	}
+}
+
+// sseEscape renders an output frame safe for a single SSE data: line by
+// replacing raw newlines (which would otherwise split the event) with a literal
+// marker; the terminal content is otherwise passed through.
+func sseEscape(b []byte) string {
+	return strings.ReplaceAll(string(b), "\n", "\\n")
 }
 
 // killSession terminates a live session by id via the registry and audits it; an

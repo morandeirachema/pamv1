@@ -95,6 +95,10 @@ type Config struct {
 	// connected to (comma-separated, e.g. "ssh,winrm"); empty = all allowed. Used
 	// in OT zones to forbid protocols like RDP.
 	AllowedProtocols string
+	// CommandDenyFile is a file of regular expressions (one per line, '#'
+	// comments) that block matching commands on the exec/WinRM/SQL paths
+	// (Phase 16 command control). Empty disables command control.
+	CommandDenyFile string
 
 	// Broker (Phase 13, AI-agent access broker). Setting BrokerPolicyFile enables
 	// the broker; the audit key + seed are then required (fail-loud).
@@ -257,6 +261,7 @@ func Load() (*Config, error) {
 		AirGap:              boolean("PAM_OT_AIRGAP", false),
 		CheckoutTTL:         time.Duration(integer("PAM_CHECKOUT_TTL_MIN", 30)) * time.Minute,
 		AllowedProtocols:    os.Getenv("PAM_ALLOWED_PROTOCOLS"),
+		CommandDenyFile:     os.Getenv("PAM_COMMAND_DENY_FILE"),
 		BrokerPolicyFile:    os.Getenv("PAM_BROKER_POLICY_FILE"),
 		BrokerAuditKey:      os.Getenv("PAM_BROKER_AUDIT_KEY"),
 		BrokerAuditSignSeed: os.Getenv("PAM_BROKER_AUDIT_SIGN_SEED"),

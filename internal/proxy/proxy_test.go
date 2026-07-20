@@ -503,3 +503,47 @@ func fieldAfter(s, key string) string {
 	}
 	return rest
 }
+
+// TestProxyExecBlocked proves command control blocks a matching `ssh target
+// "cmd"` exec: the command is refused, never runs upstream, and is audited.
+func TestProxyExecBlocked(t *testing.T) {
+	host, port := startUpstream(t, upstreamUser, upstreamSecret, targetOutput)
+	st := memstore.New()
+	v := mustVault(t)
+	seedTarget(t, st, v, host, port)
+	resolver, err := auth.NewResolver(st, proxyAPIKey, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	guard, err := proxy.NewCommandGuard([]string{`rm\s+-rf`})
+	if err != nil {
+		t.Fatal(err)
+	}
+	px, err := proxy.New(st, v, resolver, proxy.Config{
+		HostKey: mustSigner(t), RecordingDir: t.TempDir(), DialTimeout: 5 * time.Second,
+		CommandGuard: guard,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := serveProxy(t, px)
+
+	client, err := dialProxy(t, addr, upstreamUser+"@web-01", proxyAPIKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	sess, err := client.NewSession()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sess.Close()
+	out, err := sess.CombinedOutput("rm -rf /tmp/x")
+	if err == nil {
+		t.Fatalf("a blocked exec must fail; got output %q", out)
+	}
+	if strings.Contains(string(out), targetOutput) {
+		t.Fatalf("blocked command still produced target output: %q", out)
+	}
+	assertAuditContains(t, st, "command.blocked", "rm -rf")
+}

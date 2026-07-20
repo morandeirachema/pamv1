@@ -180,6 +180,7 @@ All configuration is environment variables (12-factor). Full descriptions in
 | `PAM_LISTEN_ADDR` | | `:8080` | HTTP portal/API bind. |
 | `PAM_SSH_ADDR` | | `:2222` | SSH proxy bind; `off` disables the proxy. |
 | `PAM_DB_ADDR` | | `off` | PostgreSQL session-proxy bind (Phase 15), e.g. `:5433`; `off` disables it. |
+| `PAM_COMMAND_DENY_FILE` | | (off) | Regex denylist file for command control (Phase 16); blocks matching commands on exec/WinRM/SQL. |
 | `PAM_SSH_HOST_KEY` | | (ephemeral) | Path to persist the proxy SSH host key. |
 | `PAM_SSH_KNOWN_HOSTS` | | (trust-any + warn) | OpenSSH known_hosts file pinning **upstream target** host keys. |
 | `PAM_RECORDING_DIR` | | `recordings` | Where session recordings are written. |
@@ -825,7 +826,45 @@ Each proxied session is recorded in [asciicast v2](https://docs.asciinema.org/ma
 under `PAM_RECORDING_DIR`, and its SHA-256 is written to the audit trail (tamper
 evidence). Replay with [asciinema](https://asciinema.org/): `asciinema play <file>.cast`.
 
-### 9.4 Metrics & probes
+### 9.4 Supervising live sessions & command control (Phase 16)
+
+Beyond after-the-fact recordings, a supervisor can **watch a session as it
+happens** and policy can **block a dangerous command mid-stream**.
+
+**Live monitoring.** `GET /api/sessions/{id}/stream` streams a live session's
+output as [Server-Sent Events](https://developer.mozilla.org/docs/Web/API/Server-sent_events)
+(requires `CapReadAudit`; the watch is audited `session.monitor`). List the live
+sessions first to get an id, then follow one:
+
+```bash
+curl -s https://pam.example/api/sessions -H "X-API-Key: $PAM_API_KEY"
+curl -N https://pam.example/api/sessions/<id>/stream -H "X-API-Key: $PAM_API_KEY"
+```
+
+It works for SSH and PostgreSQL sessions; delivery is non-blocking (a slow
+watcher drops frames and never stalls the session being observed).
+
+**Command control.** Point `PAM_COMMAND_DENY_FILE` at a file of regular
+expressions (one per line, `#` comments). A command matching any pattern is
+**refused before it reaches the target** and audited `command.blocked`:
+
+```
+# /data/command-deny.txt — deny destructive commands
+rm\s+-rf\s+/
+(?i)drop\s+(table|database)
+(?i)truncate\s+table
+:\s*\(\s*\)\s*\{         # shell fork bomb
+```
+
+Enforcement covers the paths where a discrete command is visible: SSH `exec`
+(`ssh target "cmd"` — the request is refused, never forwarded), each interactive
+**WinRM** command-loop line, and each **PostgreSQL** statement (a simple query is
+refused but the session stays usable; an extended/prepared statement fails
+closed). Interactive SSH **shells** stream a raw terminal and are *not* parsed —
+use read-only observer sessions (`ssh <cred>@<target>+observe@pam`) or restrict
+shell access where you need that guarantee.
+
+### 9.5 Metrics & probes
 
 - `GET /metrics` — a Prometheus exposition: `pam_http_requests_total{status}`,
   `pam_audit_events_total`, `pam_breakglass_access_total`,
@@ -873,6 +912,7 @@ evidence). Replay with [asciinema](https://asciinema.org/): `asciinema play <fil
 
 | Date | Change |
 |---|---|
+| 2026-07-21 | Phase 16: **live session monitoring + command control** — watch an SSH/PostgreSQL session live over `GET /api/sessions/{id}/stream` (SSE, `CapReadAudit`); block dangerous commands on exec/WinRM/SQL via a regex denylist (`PAM_COMMAND_DENY_FILE`, audited `command.blocked`). See §9.4 |
 | 2026-07-20 | Phase 15: **PostgreSQL database session proxy** (`PAM_DB_ADDR`) — brokers `postgres` targets with JIT credential injection and **per-statement query audit** (`db.query`); operators use `psql user=<dbcred>@<target>` with their PAM key. Same authorization gates as the SSH proxy; upstream auth via SCRAM-SHA-256/MD5/cleartext. See §5 → *Database targets (PostgreSQL)* |
 | 2026-07-20 | Post-review hardening: directory logins grant the **union** of every mapped group's role (not the single highest); a parked agent approval is **re-validated at decision time** (revoked key / expired SVID refused); broker-audit append serializes under a Postgres advisory lock so a rolling-deploy/HA overlap can't fork the hash chain; numeric policy arguments match in plain decimal |
 | 2026-07-20 | Phase 14: **SOPS-encrypted Kubernetes secrets** — seal the Secret manifest with [SOPS](https://github.com/getsops/sops)+[age](https://age-encryption.org/) and keep it in Git; `deploy/k8s/sops/apply.sh` streams decrypt→`kubectl apply` (plaintext never on disk). See [deploy/k8s/sops/README.md](../deploy/k8s/sops/README.md) |

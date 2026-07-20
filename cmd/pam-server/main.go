@@ -427,6 +427,22 @@ func run() error {
 	}
 
 	sessions := session.NewRegistry()
+	liveHub := session.NewHub()
+
+	// Command control (Phase 16): compile the deny file, if configured, into a
+	// guard shared by the SSH and database proxies. Fail-loud on a bad pattern.
+	var cmdGuard *proxy.CommandGuard
+	if cfg.CommandDenyFile != "" {
+		denyBytes, derr := os.ReadFile(cfg.CommandDenyFile)
+		if derr != nil {
+			return fmt.Errorf("command deny file %q: %w", cfg.CommandDenyFile, derr)
+		}
+		cmdGuard, derr = proxy.NewCommandGuard(proxy.ParseCommandDeny(string(denyBytes)))
+		if derr != nil {
+			return fmt.Errorf("command deny file %q: %w", cfg.CommandDenyFile, derr)
+		}
+		log.Info("command control enabled", "patterns", cmdGuard.Size())
+	}
 
 	winrmClient := winrm.Client{HTTPS: cfg.WinRMHTTPS, Insecure: cfg.WinRMInsecure, NTLM: cfg.WinRMNTLM, Timeout: 30 * time.Second}
 
@@ -493,6 +509,7 @@ func run() error {
 
 	handler, err := api.New(st, v, resolver, authn, api.Options{
 		Sessions:            sessions,
+		Live:                liveHub,
 		SSHHostKeyCallback:  upstreamHostKey,
 		MFARequired:         cfg.MFARequired,
 		RecordingDir:        cfg.RecordingDir,
@@ -593,6 +610,8 @@ func run() error {
 			WinRMRunner:      proxyWinRM,
 			Jump:             jump,
 			RequireRecording: cfg.RequireRecording,
+			CommandGuard:     cmdGuard,
+			Live:             liveHub,
 		})
 		if err != nil {
 			return err
@@ -634,6 +653,8 @@ func run() error {
 			RequireRecording: cfg.RequireRecording,
 			ClientTLS:        dbClientTLS,
 			OnSessionEnd:     dbOnSessionEnd,
+			CommandGuard:     cmdGuard,
+			Live:             liveHub,
 		})
 		if err != nil {
 			return err

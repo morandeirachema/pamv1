@@ -101,6 +101,9 @@ type Options struct {
 	RevealDisabled bool
 	// Sessions is the live-session registry (shared with the proxy).
 	Sessions *session.Registry
+	// Live is the live-session output hub (shared with the proxy) that backs the
+	// GET /api/sessions/{id}/stream monitoring endpoint (Phase 16).
+	Live *session.Hub
 	// BreakGlassHashHex is the hex SHA-256 of the emergency key (for quorum unseal).
 	BreakGlassHashHex string
 	// BreakGlassThreshold (M) enables M-of-N quorum unseal when >= 2.
@@ -175,6 +178,7 @@ type Server struct {
 	guacdIgnoreCert    bool
 	authLimiter        *rateLimiter
 	sessions           *session.Registry
+	live               *session.Hub
 	breakGlassHash     []byte
 	bgThreshold        int
 	bgTTL              time.Duration
@@ -344,6 +348,7 @@ func New(st store.Store, v *vault.Vault, resolver *auth.Resolver, authn auth.Aut
 		guacdIgnoreCert:    opts.GuacdIgnoreCert,
 		authLimiter:        newRateLimiter(opts.AuthRatePerMin),
 		sessions:           opts.Sessions,
+		live:               opts.Live,
 		breakGlassHash:     bgHash,
 		bgThreshold:        opts.BreakGlassThreshold,
 		bgTTL:              bgTTL,
@@ -412,6 +417,18 @@ func (w *statusWriter) Write(b []byte) (int, error) {
 	n, err := w.ResponseWriter.Write(b)
 	w.bytes += n
 	return n, err
+}
+
+// Flush forwards to the underlying writer so streaming handlers (the live
+// session SSE endpoint) can push frames — the embedded http.ResponseWriter
+// interface does not promote Flush on its own.
+func (w *statusWriter) Flush() {
+	if f, ok := w.ResponseWriter.(http.Flusher); ok {
+		if w.status == 0 {
+			w.status = http.StatusOK
+		}
+		f.Flush()
+	}
 }
 
 // withAccessLog logs one line per HTTP request (method, path, status, bytes,
@@ -500,6 +517,7 @@ func (s *Server) routes() {
 	s.mux.Handle("GET /api/audit/export", s.authz(auth.CapReadAudit, s.exportAudit))
 
 	s.mux.Handle("GET /api/sessions", s.authz(auth.CapReadAudit, s.listSessions))
+	s.mux.Handle("GET /api/sessions/{id}/stream", s.authz(auth.CapReadAudit, s.streamSession))
 	s.mux.Handle("DELETE /api/sessions/{id}", s.authz(auth.CapManageTargets, s.killSession))
 
 	s.mux.Handle("POST /api/users", s.authz(auth.CapManageUsers, s.createUser))

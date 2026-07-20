@@ -64,6 +64,12 @@ type Config struct {
 	// RequireRecording refuses a session when its recording cannot be created,
 	// rather than proceeding unrecorded (fail-closed session auditing).
 	RequireRecording bool
+	// CommandGuard, when set, blocks commands matching its deny patterns on the
+	// exec and WinRM paths (Phase 16 command control). nil disables it.
+	CommandGuard *CommandGuard
+	// Live, when set, receives a copy of every recorded output byte keyed by
+	// session id, so a supervisor can watch a session live (Phase 16).
+	Live *session.Hub
 }
 
 // JumpConfig configures reaching SSH targets through an SSH bastion.
@@ -92,6 +98,8 @@ type Proxy struct {
 	upstreamDial func(addr string) (net.Conn, error)
 	chain        *recordChain
 	requireRec   bool
+	guard        *CommandGuard
+	live         *session.Hub
 
 	bg sync.WaitGroup // background tasks (post-session rotation) to drain on shutdown
 
@@ -134,6 +142,8 @@ func New(st store.Store, v *vault.Vault, resolver *auth.Resolver, cfg Config) (*
 		winrm:        cfg.WinRMRunner,
 		chain:        newRecordChain(cfg.RecordingDir),
 		requireRec:   cfg.RequireRecording,
+		guard:        cfg.CommandGuard,
+		live:         cfg.Live,
 		conns:        make(map[net.Conn]struct{}),
 	}
 	if p.upstreamHKCB == nil {
@@ -486,8 +496,9 @@ func (p *Proxy) handleConn(ctx context.Context, nConn net.Conn) {
 		"host", fmt.Sprintf("%s:%d", target.Host, target.Port), "cred_user", cred.Username, "mode", mode)
 	p.audit(ctx, actor, "session.start",
 		fmt.Sprintf("target:%s host:%s:%d cred_user:%s mode:%s", target.Name, target.Host, target.Port, cred.Username, mode))
+	var sid string
 	if p.sessions != nil {
-		sid := p.sessions.Register(session.Info{
+		sid = p.sessions.Register(session.Info{
 			Actor: actor, Target: target.Name, Protocol: "ssh", Remote: remote, Started: time.Now(),
 		}, func() { sconn.Close() })
 		defer p.sessions.Remove(sid)
@@ -510,7 +521,7 @@ func (p *Proxy) handleConn(ctx context.Context, nConn net.Conn) {
 		go func(nc ssh.NewChannel) {
 			defer wg.Done()
 			defer p.recoverPanic("session")
-			p.handleSession(ctx, nc, upstream, target, cred, actor, observe)
+			p.handleSession(ctx, nc, upstream, target, cred, actor, observe, sid)
 		}(nc)
 	}
 	// The chans range ends when the client connection closes — the true
@@ -627,7 +638,7 @@ func (j *jumpConn) Close() error {
 // channel, forwarding channel requests and stdin/stdout/stderr both directions
 // and tee'ing the target's output into an asciicast recording. On close the
 // recording's SHA-256 and its position in the tamper-evident chain are audited.
-func (p *Proxy) handleSession(ctx context.Context, nc ssh.NewChannel, upstream *ssh.Client, target *store.Target, cred *store.Credential, actor string, observe bool) {
+func (p *Proxy) handleSession(ctx context.Context, nc ssh.NewChannel, upstream *ssh.Client, target *store.Target, cred *store.Credential, actor string, observe bool, sid string) {
 	clientChan, clientReqs, err := nc.Accept()
 	if err != nil {
 		return
@@ -664,13 +675,21 @@ func (p *Proxy) handleSession(ctx context.Context, nc ssh.NewChannel, upstream *
 	// Capture a non-interactive `ssh <target> "<cmd>"` into the recording + audit:
 	// the command rides the exec request payload, not the tee'd channel data, so
 	// without this it would appear in neither the .cast nor the audit trail.
-	onExec := func(payload []byte) {
+	onExec := func(payload []byte) bool {
 		var m struct{ Command string }
 		_ = ssh.Unmarshal(payload, &m)
+		if pat, blocked := p.guard.Blocked(m.Command); blocked {
+			if rec != nil {
+				_, _ = io.WriteString(rec, "$ "+m.Command+"\r\npamv1: command blocked by policy\r\n")
+			}
+			p.audit(ctx, actor, "command.blocked", fmt.Sprintf("target:%s via:proxy pattern:%s cmd:%s", target.Name, pat, auditCmd(m.Command)))
+			return false // do not forward the exec request upstream
+		}
 		if rec != nil {
 			_, _ = io.WriteString(rec, "$ "+m.Command+"\r\n")
 		}
 		p.audit(ctx, actor, "ssh.exec", fmt.Sprintf("target:%s cred_user:%s via:proxy cmd:%s", target.Name, cred.Username, auditCmd(m.Command)))
+		return true
 	}
 	clientReqDone := make(chan struct{}) // stops the pump between requests
 	var clientReqPump sync.WaitGroup
@@ -700,6 +719,7 @@ func (p *Proxy) handleSession(ctx context.Context, nc ssh.NewChannel, upstream *
 	if rec != nil {
 		errOut = io.MultiWriter(clientChan.Stderr(), rec)
 	}
+	errOut = p.teeLive(errOut, sid)
 	var errCopyDone sync.WaitGroup
 	errCopyDone.Add(1)
 	go func() {
@@ -720,11 +740,12 @@ func (p *Proxy) handleSession(ctx context.Context, nc ssh.NewChannel, upstream *
 		}()
 	}
 
-	// Target output -> operator, tee'd into the recording.
+	// Target output -> operator, tee'd into the recording and the live hub.
 	var out io.Writer = clientChan
 	if rec != nil {
 		out = io.MultiWriter(clientChan, rec)
 	}
+	out = p.teeLive(out, sid)
 	io.Copy(out, upChan)
 	upReqDone.Wait() // make sure exit-status reached the client
 
@@ -887,6 +908,11 @@ func (p *Proxy) winrmRun(ctx context.Context, ch ssh.Channel, target *store.Targ
 		p.audit(ctx, actor, "access.denied", "target:"+target.Name+" reason:observer-winrm cmd:"+auditCmd(command))
 		return 1
 	}
+	if pat, blocked := p.guard.Blocked(command); blocked {
+		fmt.Fprint(out, "pamv1: command blocked by policy\r\n")
+		p.audit(ctx, actor, "command.blocked", fmt.Sprintf("target:%s via:proxy pattern:%s cmd:%s", target.Name, pat, auditCmd(command)))
+		return 1
+	}
 	res, err := p.winrm.Run(ctx, target.Host, target.Port, cred.Username, secret, command)
 	if err != nil {
 		fmt.Fprintf(out, "pamv1: winrm error: %v\r\n", err)
@@ -922,6 +948,29 @@ func recWriter(ch ssh.Channel, rec io.Writer) io.Writer {
 	return io.MultiWriter(ch, rec)
 }
 
+// liveWriter publishes everything written to it to a live-session hub under a
+// session id, so a supervisor can watch the session as it happens. Writes never
+// fail (a slow watcher drops frames), so it is safe to tee into.
+type liveWriter struct {
+	hub *session.Hub
+	id  string
+}
+
+// Write publishes p to the hub and reports it fully written.
+func (w liveWriter) Write(p []byte) (int, error) {
+	w.hub.Publish(w.id, p)
+	return len(p), nil
+}
+
+// teeLive returns w plus a live tee to the hub when live monitoring is enabled
+// for sid; otherwise it returns w unchanged.
+func (p *Proxy) teeLive(w io.Writer, sid string) io.Writer {
+	if p.live == nil || sid == "" {
+		return w
+	}
+	return io.MultiWriter(w, liveWriter{hub: p.live, id: sid})
+}
+
 // crlf normalizes bare LF line endings to CRLF for terminal display.
 func crlf(s string) string {
 	return strings.ReplaceAll(strings.ReplaceAll(s, "\r\n", "\n"), "\n", "\r\n")
@@ -935,8 +984,9 @@ func crlf(s string) string {
 // torn down. A nil done means "run until in closes".
 // onExec, when non-nil, is invoked with each "exec" request's payload before it
 // is forwarded, so the caller can capture the command into the recording + audit
-// (the request payload never appears in the tee'd channel data).
-func pumpRequests(in <-chan *ssh.Request, dst ssh.Channel, done <-chan struct{}, onExec func([]byte)) {
+// (the request payload never appears in the tee'd channel data) and can veto it:
+// returning false blocks the command (it is not forwarded and the reply is false).
+func pumpRequests(in <-chan *ssh.Request, dst ssh.Channel, done <-chan struct{}, onExec func([]byte) bool) {
 	for {
 		select {
 		case req, ok := <-in:
@@ -944,7 +994,14 @@ func pumpRequests(in <-chan *ssh.Request, dst ssh.Channel, done <-chan struct{},
 				return
 			}
 			if onExec != nil && req.Type == "exec" {
-				onExec(req.Payload)
+				// onExec captures the command and reports whether to forward it;
+				// a command blocked by policy is not sent upstream (reply false).
+				if !onExec(req.Payload) {
+					if req.WantReply {
+						req.Reply(false, nil)
+					}
+					continue
+				}
 			}
 			okr, err := dst.SendRequest(req.Type, req.WantReply, req.Payload)
 			if req.WantReply {
