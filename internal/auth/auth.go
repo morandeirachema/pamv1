@@ -76,6 +76,9 @@ const (
 	CapManageUsers                         // create/delete users
 	CapApprove                             // review and approve/deny access requests
 	CapCallTool                            // invoke a brokered tool call (AI agents)
+
+	capCount // sentinel: keep LAST. Loops range [CapReadInventory, capCount) so a
+	// new capability added above is picked up everywhere automatically.
 )
 
 // roleCaps is the authoritative role → capability matrix.
@@ -107,7 +110,7 @@ func (r Role) Can(c Capability) bool {
 // CapabilitySet returns the concrete capability set a built-in role confers.
 func (r Role) CapabilitySet() CapSet {
 	out := make(CapSet)
-	for c := CapReadInventory; c <= CapCallTool; c++ {
+	for c := CapReadInventory; c < capCount; c++ {
 		if r.Can(c) {
 			out[c] = true
 		}
@@ -142,7 +145,7 @@ func (c Capability) String() string {
 // in capability-enum order.
 func (r Role) Capabilities() []string {
 	out := make([]string, 0, len(capNames))
-	for c := CapReadInventory; c <= CapCallTool; c++ {
+	for c := CapReadInventory; c < capCount; c++ {
 		if r.Can(c) {
 			out = append(out, c.String())
 		}
@@ -256,7 +259,7 @@ func (p *Principal) CapabilityNames() []string {
 		return p.Role.Capabilities()
 	}
 	out := make([]string, 0, len(p.Caps))
-	for c := CapReadInventory; c <= CapCallTool; c++ {
+	for c := CapReadInventory; c < capCount; c++ {
 		if p.Caps[c] {
 			out = append(out, c.String())
 		}
@@ -299,7 +302,7 @@ type ProfileSource interface {
 type Resolver struct {
 	dir            Directory
 	profiles       ProfileSource
-	apiKey         []byte
+	apiKeyHash     []byte // SHA-256 of the bootstrap API key (empty = disabled)
 	breakGlassHash []byte
 }
 
@@ -313,7 +316,14 @@ func (r *Resolver) WithProfiles(ps ProfileSource) *Resolver {
 // NewResolver builds a Resolver. breakGlassHashHex may be empty to disable the
 // break-glass path; otherwise it must be a hex-encoded SHA-256.
 func NewResolver(dir Directory, apiKey, breakGlassHashHex string) (*Resolver, error) {
-	r := &Resolver{dir: dir, apiKey: []byte(apiKey)}
+	r := &Resolver{dir: dir}
+	if apiKey != "" {
+		// Store the SHA-256 so the bootstrap-key comparison is over a fixed 32-byte
+		// value, not raw bytes (a raw ConstantTimeCompare short-circuits on length,
+		// leaking the key's length via timing).
+		h := sha256.Sum256([]byte(apiKey))
+		r.apiKeyHash = h[:]
+	}
 	if breakGlassHashHex != "" {
 		b, err := hex.DecodeString(breakGlassHashHex)
 		if err != nil || len(b) != sha256.Size {
@@ -330,10 +340,10 @@ func (r *Resolver) Resolve(ctx context.Context, key string) (*Principal, error) 
 	if len(kb) == 0 {
 		return nil, ErrUnauthorized
 	}
-	if len(r.apiKey) != 0 && subtle.ConstantTimeCompare(kb, r.apiKey) == 1 {
+	sum := sha256.Sum256(kb)
+	if len(r.apiKeyHash) != 0 && subtle.ConstantTimeCompare(sum[:], r.apiKeyHash) == 1 {
 		return &Principal{Name: "bootstrap-admin", Role: RoleAdmin}, nil
 	}
-	sum := sha256.Sum256(kb)
 	if len(r.breakGlassHash) != 0 && subtle.ConstantTimeCompare(sum[:], r.breakGlassHash) == 1 {
 		return &Principal{Name: "break-glass", Role: RoleAdmin, BreakGlass: true}, nil
 	}

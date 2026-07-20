@@ -148,7 +148,10 @@ func (a *LDAPAuthenticator) Authenticate(ctx context.Context, username, password
 	if !ok {
 		return nil, fmt.Errorf("%w: user is in no pamv1 group", ErrUnauthorized)
 	}
-	return &Principal{Name: username, Role: role}, nil
+	// Normalize the login to lower-case: AD/LDAP binds are case-insensitive, so
+	// "Alice" and "alice" authenticate identically — canonicalizing keeps one actor
+	// spelling in the audit trail and makes user grants match consistently.
+	return &Principal{Name: strings.ToLower(username), Role: role}, nil
 }
 
 // roleForGroups returns the highest-privilege role among the user's groups.

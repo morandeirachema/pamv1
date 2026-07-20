@@ -100,6 +100,11 @@ func (k *TransitKEK) Unwrap(ctx context.Context, wrapped []byte) ([]byte, error)
 	if err != nil {
 		return nil, fmt.Errorf("vault: transit decode plaintext: %w", err)
 	}
+	// Reject a wrong-sized key rather than silently downgrading the inner cipher
+	// (a 16/24-byte key would build AES-128/192-GCM in newGCM).
+	if len(dek) != dekSize {
+		return nil, fmt.Errorf("vault: transit returned a %d-byte data key, want %d", len(dek), dekSize)
+	}
 	return dek, nil
 }
 

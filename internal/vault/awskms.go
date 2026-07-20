@@ -3,6 +3,7 @@ package vault
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awscfg "github.com/aws/aws-sdk-go-v2/config"
@@ -72,6 +73,10 @@ func (k *AWSKMSKEK) Unwrap(ctx context.Context, wrapped []byte) ([]byte, error) 
 	})
 	if err != nil {
 		return nil, err
+	}
+	// Reject a wrong-sized key rather than silently downgrading the inner cipher.
+	if len(out.Plaintext) != dekSize {
+		return nil, fmt.Errorf("vault: kms returned a %d-byte data key, want %d", len(out.Plaintext), dekSize)
 	}
 	return out.Plaintext, nil
 }
