@@ -271,6 +271,71 @@ func RunStoreContract(t *testing.T, st store.Store) {
 		t.Fatal("expired OIDC state must not be returned")
 	}
 
+	// --- ListUsers ---
+	if err := st.CreateUser(ctx, &store.User{Username: "list-check", Role: "auditor", TokenHash: "listuserhash"}); err != nil {
+		t.Fatalf("CreateUser(list): %v", err)
+	}
+	if users, err := st.ListUsers(ctx); err != nil || len(users) == 0 {
+		t.Fatalf("ListUsers: %d users, err %v", len(users), err)
+	}
+
+	// --- delete cascades (memstore hand-codes what pgstore FK ON DELETE CASCADE does; assert parity) ---
+	checkoutGone := func(credID int64) bool {
+		cos, _ := st.ListCheckouts(ctx, false, now)
+		for _, c := range cos {
+			if c.CredentialID == credID {
+				return false
+			}
+		}
+		return true
+	}
+	casc := &store.Target{Name: "cascade-tgt", Host: "h", OSType: "linux", Protocol: "ssh"}
+	if err := st.CreateTarget(ctx, casc); err != nil {
+		t.Fatalf("CreateTarget(cascade): %v", err)
+	}
+	cc := &store.Credential{TargetID: casc.ID, Username: "root", SecretType: "password", SecretEnc: "v2:x"}
+	if err := st.CreateCredential(ctx, cc); err != nil {
+		t.Fatalf("CreateCredential(cascade): %v", err)
+	}
+	if err := st.CreateTargetGrant(ctx, &store.TargetGrant{TargetID: casc.ID, SubjectType: "role", Subject: "user"}); err != nil {
+		t.Fatalf("CreateTargetGrant(cascade): %v", err)
+	}
+	if err := st.CreateCheckout(ctx, &store.Checkout{CredentialID: cc.ID, TargetID: casc.ID, Holder: "h", ExpiresAt: future}, now); err != nil {
+		t.Fatalf("CreateCheckout(cascade): %v", err)
+	}
+	// Deleting the target cascades to its credentials, grants and checkouts.
+	if err := st.DeleteTarget(ctx, casc.ID); err != nil {
+		t.Fatalf("DeleteTarget: %v", err)
+	}
+	if _, err := st.GetCredential(ctx, cc.ID); !errors.Is(err, store.ErrNotFound) {
+		t.Fatal("credential was not cascaded on target delete")
+	}
+	if g, _ := st.ListTargetGrants(ctx, casc.ID); len(g) != 0 {
+		t.Fatalf("grants not cascaded on target delete: %d", len(g))
+	}
+	if !checkoutGone(cc.ID) {
+		t.Fatal("checkout not cascaded on target delete")
+	}
+
+	// Deleting a credential cascades its checkouts.
+	casc2 := &store.Target{Name: "cascade-tgt2", Host: "h", OSType: "linux", Protocol: "ssh"}
+	if err := st.CreateTarget(ctx, casc2); err != nil {
+		t.Fatal(err)
+	}
+	cc2 := &store.Credential{TargetID: casc2.ID, Username: "root", SecretType: "password", SecretEnc: "v2:x"}
+	if err := st.CreateCredential(ctx, cc2); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.CreateCheckout(ctx, &store.Checkout{CredentialID: cc2.ID, TargetID: casc2.ID, Holder: "h", ExpiresAt: future}, now); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.DeleteCredential(ctx, cc2.ID); err != nil {
+		t.Fatalf("DeleteCredential: %v", err)
+	}
+	if !checkoutGone(cc2.ID) {
+		t.Fatal("checkout not cascaded on credential delete")
+	}
+
 	// --- agent keys + broker audit chain (Phase 13) ---
 	if head, err := st.GetBrokerAuditHead(ctx); err != nil || head != nil {
 		t.Fatalf("GetBrokerAuditHead(empty): head=%v err=%v", head, err)

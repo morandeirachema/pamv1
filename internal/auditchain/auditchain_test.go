@@ -55,6 +55,47 @@ func appendN(t *testing.T, c *Chain, n int) {
 	}
 }
 
+// TestChainRestartContinuity proves a fresh Chain built over an existing store
+// (a server restart) resumes the chain — it seeds its head from the store, and
+// events appended after the restart still verify from genesis.
+func TestChainRestartContinuity(t *testing.T) {
+	ctx := context.Background()
+	st := memstore.New()
+	key := make([]byte, KeySize)
+	if _, err := rand.Read(key); err != nil {
+		t.Fatal(err)
+	}
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	newC := func() *Chain {
+		c, err := New(ctx, key, priv, st)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return c
+	}
+	c1 := newC()
+	for i := 0; i < 3; i++ {
+		if _, err := c1.Append(ctx, store.BrokerAuditEvent{Actor: "a", Action: "x", Detail: fmt.Sprintf("pre:%d", i)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// "Restart": same key + store, new Chain instance.
+	c2 := newC()
+	if _, err := c2.Append(ctx, store.BrokerAuditEvent{Actor: "a", Action: "x", Detail: "post"}); err != nil {
+		t.Fatal(err)
+	}
+	ok, id, err := c2.Verify(ctx)
+	if err != nil || !ok || id != 0 {
+		t.Fatalf("post-restart verify: ok=%v brokeAt=%d err=%v", ok, id, err)
+	}
+	if cp, _ := c2.Head(ctx, time.Now()); cp.LastID != 4 {
+		t.Fatalf("head after restart+append = %d, want 4", cp.LastID)
+	}
+}
+
 // TestVerifyCleanChain proves an untampered chain verifies.
 func TestVerifyCleanChain(t *testing.T) {
 	c := newChain(t, memstore.New())

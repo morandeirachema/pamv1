@@ -173,6 +173,51 @@ func TestBrokerDenyAndAudit(t *testing.T) {
 	}
 }
 
+// TestBrokerLookupAndAuditRoutes covers GET /v1/tool-calls/{id} (found + 404),
+// GET /v1/audit, and the signed GET /v1/audit/head checkpoint.
+func TestBrokerLookupAndAuditRoutes(t *testing.T) {
+	fake := &fakeWinRM{result: winrm.Result{Stdout: "ok", ExitCode: 0}}
+	srv, _ := newTestServerOpts(t, nil, brokerOpts(t, fake, brokerRules))
+	seedWinRMTarget(t, srv, "win-l", "pw")
+	_, ad := do(t, srv, http.MethodPost, "/v1/agents", testAPIKey, map[string]any{"name": "bot-l"})
+	tok, _ := jsonMap(t, ad)["token"].(string)
+	_, data := doBearer(t, srv, http.MethodPost, "/v1/tool-calls", tok, map[string]any{"tool": "winrm_exec", "args": map[string]any{"target": "win-l", "command": "x"}})
+	callID, _ := jsonMap(t, data)["call_id"].(string)
+
+	if st, gd := doBearer(t, srv, http.MethodGet, "/v1/tool-calls/"+callID, tok, nil); st != http.StatusOK || jsonMap(t, gd)["status"] != "executed" {
+		t.Fatalf("get tool-call: %d %s", st, gd)
+	}
+	if st, _ := doBearer(t, srv, http.MethodGet, "/v1/tool-calls/nope", tok, nil); st != http.StatusNotFound {
+		t.Fatalf("unknown call id: want 404, got %d", st)
+	}
+	if _, aud := do(t, srv, http.MethodGet, "/v1/audit", testAPIKey, nil); !strings.Contains(string(aud), "broker.tool_call") {
+		t.Fatalf("audit list missing broker events: %s", aud)
+	}
+	_, hd := do(t, srv, http.MethodGet, "/v1/audit/head", testAPIKey, nil)
+	if m := jsonMap(t, hd); m["signature"] == nil || m["last_id"] == nil {
+		t.Fatalf("head checkpoint incomplete: %s", hd)
+	}
+}
+
+// TestBrokerRequireApproval proves a require_approval rule parks the call
+// (pending_approval, no execution) — the seam the resume flow will extend.
+func TestBrokerRequireApproval(t *testing.T) {
+	const rules = "rules:\n  - id: needs-human\n    tool: winrm_exec\n    effect: require_approval\n    approvers: [team]\n    scope: \"t:{target}:x\"\n"
+	fake := &fakeWinRM{}
+	srv, _ := newTestServerOpts(t, nil, brokerOpts(t, fake, rules))
+	seedWinRMTarget(t, srv, "win-appr", "pw")
+	_, ad := do(t, srv, http.MethodPost, "/v1/agents", testAPIKey, map[string]any{"name": "bot-appr"})
+	tok, _ := jsonMap(t, ad)["token"].(string)
+	_, data := doBearer(t, srv, http.MethodPost, "/v1/tool-calls", tok, map[string]any{"tool": "winrm_exec", "args": map[string]any{"target": "win-appr", "command": "x"}})
+	m := jsonMap(t, data)
+	if m["status"] != "pending_approval" || m["approval_id"] == nil {
+		t.Fatalf("want pending_approval with an approval_id: %s", data)
+	}
+	if fake.gotPass != "" {
+		t.Fatal("credential injected for a pending-approval call")
+	}
+}
+
 // TestBrokerObeysApproval proves an agent is subject to the same approval gate as
 // a human: an allow policy does NOT let it reach an approval-required target
 // without an approved request (fail-closed).
