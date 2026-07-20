@@ -523,6 +523,7 @@ func (s *Server) routes() {
 		s.mux.HandleFunc("POST /v1/tool-calls", s.agentAuth(s.processToolCall))
 		s.mux.HandleFunc("GET /v1/tool-calls/{id}", s.agentAuth(s.getToolCall))
 		s.mux.HandleFunc("POST /v1/tool-calls/{id}/resume", s.agentAuth(s.resumeToolCall))
+		s.mux.HandleFunc("POST /mcp", s.agentAuth(s.serveMCP))
 		s.mux.Handle("GET /v1/approvals", s.authz(auth.CapApprove, s.listBrokerApprovals))
 		s.mux.Handle("POST /v1/approvals/{id}/decision", s.authz(auth.CapApprove, s.decideBrokerApproval))
 		s.mux.Handle("POST /v1/agents", s.authz(auth.CapManageUsers, s.createAgentKey))

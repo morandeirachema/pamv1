@@ -51,6 +51,7 @@ flowchart LR
     n_agentid[agentid]
     n_auditchain[auditchain]
     n_broker[broker]
+    n_mcp[mcp]
     n_policy[policy]
   end
   subgraph n_Platform["Platform"]
@@ -73,6 +74,7 @@ flowchart LR
   n_api --> n_discovery
   n_api --> n_guacd
   n_api --> n_logging
+  n_api --> n_mcp
   n_api --> n_metrics
   n_api --> n_mfa
   n_api --> n_oidc
@@ -248,7 +250,7 @@ erDiagram
 
 ## 3. REST API surface
 
-The 66 routes registered on the API mux, with the capability or guard each enforces (see `internal/auth` for the role → capability matrix).
+The 67 routes registered on the API mux, with the capability or guard each enforces (see `internal/auth` for the role → capability matrix).
 
 | Method | Path | Guard |
 |---|---|---|
@@ -304,6 +306,7 @@ The 66 routes registered on the API mux, with the capability or guard each enfor
 | POST | `/api/users` | CapManageUsers |
 | DELETE | `/api/users/{id}` | CapManageUsers |
 | GET | `/healthz` | public |
+| POST | `/mcp` | public |
 | GET | `/metrics` | public |
 | GET | `/readyz` | public |
 | GET | `/v1/agents` | CapManageUsers |
