@@ -20,8 +20,8 @@ import (
 // test can simulate the audit chain being unavailable.
 type failAppendStore struct{ *memstore.Memstore }
 
-func (failAppendStore) AppendBrokerAudit(context.Context, *store.BrokerAuditEvent) error {
-	return errors.New("audit store unavailable")
+func (failAppendStore) AppendBrokerAuditLinked(context.Context, func(*store.BrokerAuditEvent) store.BrokerAuditEvent) (store.BrokerAuditEvent, error) {
+	return store.BrokerAuditEvent{}, errors.New("audit store unavailable")
 }
 
 // recordingTool notes whether Execute ran.

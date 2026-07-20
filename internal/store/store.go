@@ -337,10 +337,16 @@ type Store interface {
 	// DeleteProfile removes a profile by ID, or ErrNotFound.
 	DeleteProfile(ctx context.Context, id int64) error
 
-	// AppendBrokerAudit appends a pre-chained broker audit event (HMAC and
-	// PrevHash already computed by the caller), populating its ID and TS. The
-	// broker is the sole writer so rows chain in insertion order.
-	AppendBrokerAudit(ctx context.Context, e *BrokerAuditEvent) error
+	// AppendBrokerAuditLinked appends one broker audit event whose hash-chain
+	// link is computed from the CURRENT persisted head under a serialization
+	// that also holds across processes (a Postgres advisory lock in pgstore),
+	// so two writers — e.g. an old and a new pod overlapping during a rolling
+	// deploy, or HA replicas — cannot fork the chain. link receives the current
+	// head (nil at genesis) and returns the fully-linked event (its PrevHash and
+	// HMAC set from that head); the store assigns ID and TS, inserts it, and
+	// returns the stored event. Reading the head and inserting are one atomic
+	// step, so the in-memory head an appender may cache is only advisory.
+	AppendBrokerAuditLinked(ctx context.Context, link func(head *BrokerAuditEvent) BrokerAuditEvent) (BrokerAuditEvent, error)
 	// ListBrokerAudit returns broker audit events ordered oldest-first (id ASC);
 	// limit <= 0 returns all (used by the chain verifier).
 	ListBrokerAudit(ctx context.Context, limit int) ([]BrokerAuditEvent, error)

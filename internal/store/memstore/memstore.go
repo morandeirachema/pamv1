@@ -738,16 +738,25 @@ func (m *Memstore) DeleteProfile(_ context.Context, id int64) error {
 	return nil
 }
 
-// AppendBrokerAudit appends a pre-chained broker audit event, assigning ID and TS.
-func (m *Memstore) AppendBrokerAudit(_ context.Context, e *store.BrokerAuditEvent) error {
+// AppendBrokerAuditLinked links the event to the current head and appends it
+// under the store mutex — the single-process analogue of pgstore's advisory
+// lock — assigning ID and TS. Reading the head and appending are one atomic
+// step, so an appender's cached head is only advisory.
+func (m *Memstore) AppendBrokerAuditLinked(_ context.Context, link func(head *store.BrokerAuditEvent) store.BrokerAuditEvent) (store.BrokerAuditEvent, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	e.ID = m.id()
-	e.TS = time.Now().UTC()
+	var head *store.BrokerAuditEvent
+	if n := len(m.brokerLog); n > 0 {
+		h := cloneBrokerEvent(m.brokerLog[n-1])
+		head = &h
+	}
+	ev := link(head)
+	ev.ID = m.id()
+	ev.TS = time.Now().UTC()
 	// Deep-copy the hash-chain byte slices so the stored row can't alias (and be
-	// mutated through) the caller's event — parity with pgstore's fresh scans.
-	m.brokerLog = append(m.brokerLog, cloneBrokerEvent(*e))
-	return nil
+	// mutated through) the returned event — parity with pgstore's fresh scans.
+	m.brokerLog = append(m.brokerLog, cloneBrokerEvent(ev))
+	return ev, nil
 }
 
 // cloneBrokerEvent returns a copy whose PrevHash/HMAC byte slices are independent

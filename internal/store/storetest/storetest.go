@@ -428,14 +428,24 @@ func RunStoreContract(t *testing.T, st store.Store) {
 		t.Fatal("a deleted agent key must not resolve")
 	}
 
-	// Broker audit is append-only; head follows the latest, list is chain order.
-	e1 := &store.BrokerAuditEvent{Actor: "bot", Action: "broker.tool_call.executed", Detail: "one", PrevHash: []byte{}, HMAC: []byte{0x01}}
-	if err := st.AppendBrokerAudit(ctx, e1); err != nil {
-		t.Fatalf("AppendBrokerAudit: %v", err)
+	// Broker audit is append-only; the store reads the head under its append lock
+	// and threads it to the linker (nil at genesis), so appends can't fork the
+	// chain. Head follows the latest, list is chain order.
+	if _, err := st.AppendBrokerAuditLinked(ctx, func(head *store.BrokerAuditEvent) store.BrokerAuditEvent {
+		if head != nil {
+			t.Fatalf("first append: want nil head at genesis, got %+v", head)
+		}
+		return store.BrokerAuditEvent{Actor: "bot", Action: "broker.tool_call.executed", Detail: "one", PrevHash: []byte{}, HMAC: []byte{0x01}}
+	}); err != nil {
+		t.Fatalf("AppendBrokerAuditLinked: %v", err)
 	}
-	e2 := &store.BrokerAuditEvent{Actor: "bot", Action: "broker.tool_call.denied", Detail: "two", PrevHash: []byte{0x01}, HMAC: []byte{0x02}}
-	if err := st.AppendBrokerAudit(ctx, e2); err != nil {
-		t.Fatalf("AppendBrokerAudit: %v", err)
+	if _, err := st.AppendBrokerAuditLinked(ctx, func(head *store.BrokerAuditEvent) store.BrokerAuditEvent {
+		if head == nil || len(head.HMAC) != 1 || head.HMAC[0] != 0x01 {
+			t.Fatalf("second append: want head HMAC 0x01, got %+v", head)
+		}
+		return store.BrokerAuditEvent{Actor: "bot", Action: "broker.tool_call.denied", Detail: "two", PrevHash: head.HMAC, HMAC: []byte{0x02}}
+	}); err != nil {
+		t.Fatalf("AppendBrokerAuditLinked: %v", err)
 	}
 	if head, err := st.GetBrokerAuditHead(ctx); err != nil || head == nil || head.Detail != "two" {
 		t.Fatalf("GetBrokerAuditHead: %+v err %v", head, err)

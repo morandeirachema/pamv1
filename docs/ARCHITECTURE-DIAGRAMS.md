@@ -210,6 +210,7 @@ erDiagram
     int64 ID
     string Username
     string Role
+    string Roles
     string Scope
     time_Time CreatedAt
     time_Time ExpiresAt

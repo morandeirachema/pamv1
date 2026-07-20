@@ -653,13 +653,47 @@ func scanProfile(row pgx.CollectableRow) (store.Profile, error) {
 
 const brokerAuditCols = `id, ts, actor, on_behalf_of, actor_chain, action, detail, scope, prev_hash, hmac`
 
-// AppendBrokerAudit inserts a pre-chained broker audit event, populating ID and TS.
-func (s *PGStore) AppendBrokerAudit(ctx context.Context, e *store.BrokerAuditEvent) error {
-	return s.pool.QueryRow(ctx,
+// brokerChainLockKey serializes broker-audit appends across every process that
+// shares this database (rolling-deploy pod overlap, HA replicas), so the
+// keyed-HMAC chain cannot fork. Distinct from the migration advisory-lock key.
+const brokerChainLockKey = int64(0x70616d5f6272) // "pam_br"
+
+// AppendBrokerAuditLinked reads the current chain head and inserts the linked
+// event as one atomic step, under a Postgres advisory lock held for the whole
+// transaction so concurrent writers serialize instead of forking the chain.
+func (s *PGStore) AppendBrokerAuditLinked(ctx context.Context, link func(head *store.BrokerAuditEvent) store.BrokerAuditEvent) (store.BrokerAuditEvent, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return store.BrokerAuditEvent{}, err
+	}
+	defer tx.Rollback(ctx)
+	// The xact lock is released automatically on commit or rollback.
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, brokerChainLockKey); err != nil {
+		return store.BrokerAuditEvent{}, err
+	}
+	var head *store.BrokerAuditEvent
+	rows, err := tx.Query(ctx, `SELECT `+brokerAuditCols+` FROM broker_audit_events ORDER BY id DESC LIMIT 1`)
+	if err != nil {
+		return store.BrokerAuditEvent{}, err
+	}
+	h, err := pgx.CollectExactlyOneRow(rows, scanBrokerAudit)
+	if err == nil {
+		head = &h
+	} else if !errors.Is(err, pgx.ErrNoRows) {
+		return store.BrokerAuditEvent{}, err
+	}
+	ev := link(head)
+	if err := tx.QueryRow(ctx,
 		`INSERT INTO broker_audit_events (actor, on_behalf_of, actor_chain, action, detail, scope, prev_hash, hmac)
 		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id, ts`,
-		e.Actor, e.OnBehalfOf, e.ActorChain, e.Action, e.Detail, e.Scope, e.PrevHash, e.HMAC,
-	).Scan(&e.ID, &e.TS)
+		ev.Actor, ev.OnBehalfOf, ev.ActorChain, ev.Action, ev.Detail, ev.Scope, ev.PrevHash, ev.HMAC,
+	).Scan(&ev.ID, &ev.TS); err != nil {
+		return store.BrokerAuditEvent{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return store.BrokerAuditEvent{}, err
+	}
+	return ev, nil
 }
 
 // ListBrokerAudit returns broker audit events oldest-first (id ASC). limit <= 0

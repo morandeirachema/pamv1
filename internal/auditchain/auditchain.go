@@ -57,22 +57,32 @@ func New(ctx context.Context, key []byte, signKey ed25519.PrivateKey, st store.S
 }
 
 // Append chains and persists ev; its PrevHash/HMAC (and ID/TS from the store) are
-// set on the returned copy.
+// set on the returned copy. The HMAC is computed from the head the store reads
+// back under its append lock, not from c.head, so concurrent writers (rolling
+// deploy, HA) can't fork the chain; c.head is kept only as an advisory hint.
 func (c *Chain) Append(ctx context.Context, ev store.BrokerAuditEvent) (store.BrokerAuditEvent, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	ev.HMAC = c.mac(c.head, ev)
-	// Store an empty (non-nil) prev_hash at genesis so a NOT NULL column accepts
-	// it; verify recomputes from the running head, so the value is informational.
-	ev.PrevHash = c.head
-	if ev.PrevHash == nil {
-		ev.PrevHash = []byte{}
-	}
-	if err := c.st.AppendBrokerAudit(ctx, &ev); err != nil {
+	out, err := c.st.AppendBrokerAuditLinked(ctx, func(head *store.BrokerAuditEvent) store.BrokerAuditEvent {
+		var prev []byte
+		if head != nil {
+			prev = head.HMAC
+		}
+		ev.HMAC = c.mac(prev, ev)
+		// Store an empty (non-nil) prev_hash at genesis so a NOT NULL column
+		// accepts it; verify recomputes from the running head, so the value is
+		// informational.
+		ev.PrevHash = prev
+		if ev.PrevHash == nil {
+			ev.PrevHash = []byte{}
+		}
+		return ev
+	})
+	if err != nil {
 		return store.BrokerAuditEvent{}, err
 	}
-	c.head = ev.HMAC
-	return ev, nil
+	c.head = out.HMAC
+	return out, nil
 }
 
 // Verify walks the whole chain oldest-first, recomputing each HMAC. It returns
