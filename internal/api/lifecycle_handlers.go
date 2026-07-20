@@ -99,12 +99,23 @@ func (s *Server) rotateCredential(ctx context.Context, cred *store.Credential, t
 	// detached from cancellation: a client disconnect or graceful shutdown here
 	// must not lose the new secret, which would lock PAM out of the target.
 	pctx := context.WithoutCancel(ctx)
+	// From here the target's secret is already changed; a persist failure orphans
+	// the account (the vault still holds the now-invalid old secret). We can't undo
+	// the external change without the new secret, so make the orphan LOUD and
+	// actionable rather than a silent lockout.
+	orphan := func(reason string, cause error) {
+		s.audit(pctx, "credential.rotate_orphaned",
+			fmt.Sprintf("credential:%d target:%s reason:%s ACTION:target password was changed but NOT vaulted — recover manually", cred.ID, target.Name, reason))
+		s.log.Error("CREDENTIAL ORPHANED: target secret rotated but not persisted", "credential", cred.ID, "target", target.Name, "reason", reason, "err", cause)
+	}
 	enc, err := s.vault.Encrypt(pctx, newSecret, store.CredentialAAD(target.ID, cred.ID))
 	if err != nil {
+		orphan("vault-encrypt-failed", err)
 		return time.Time{}, fmt.Errorf("re-encrypt after rotation failed: %w", err)
 	}
 	now := time.Now().UTC()
 	if err := s.store.RotateCredentialSecret(pctx, cred.ID, enc, now); err != nil {
+		orphan("persist-failed", err)
 		return time.Time{}, fmt.Errorf("persist rotated secret failed: %w", err)
 	}
 	return now, nil

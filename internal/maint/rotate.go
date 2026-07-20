@@ -9,8 +9,9 @@ import (
 	"github.com/morandeirachema/pamv1/internal/vault"
 )
 
-// RotateVaultKEK re-encrypts every vaulted secret (credentials and TOTP
-// enrollments) from the `from` vault to the `to` vault, preserving each secret's
+// RotateVaultKEK re-encrypts every vaulted secret — credentials, TOTP
+// enrollments, and vault-encrypted config settings (bind password, client
+// secrets) — from the `from` vault to the `to` vault, preserving each secret's
 // AAD binding. It returns the number of secrets re-encrypted. Run it offline
 // (nothing else writing secrets), then switch the server to the new key.
 func RotateVaultKEK(ctx context.Context, st store.Store, from, to *vault.Vault) (int, error) {
@@ -62,6 +63,36 @@ func RotateVaultKEK(ctx context.Context, st store.Store, from, to *vault.Vault) 
 		e.SecretEnc = enc
 		if err := st.UpsertMFAEnrollment(ctx, &e); err != nil {
 			return n, fmt.Errorf("mfa %s update: %w", e.Username, err)
+		}
+		n++
+	}
+
+	// Config settings (Phase 12): the secret ones (LDAP bind password, SSO client
+	// secrets) are vault-encrypted with ConfigAAD and MUST be re-wrapped too, or the
+	// server can't decrypt them after the master key is switched (and can't boot).
+	settings, err := st.ListSettings(ctx)
+	if err != nil {
+		return n, fmt.Errorf("list settings: %w", err)
+	}
+	for _, sg := range settings {
+		if !sg.Secret {
+			continue
+		}
+		aad := store.ConfigAAD(sg.Key)
+		if _, err := to.Decrypt(ctx, sg.Value, aad); err == nil {
+			continue // already rotated under the new KEK
+		}
+		plain, err := from.Decrypt(ctx, sg.Value, aad)
+		if err != nil {
+			return n, fmt.Errorf("setting %s decrypt: %w", sg.Key, err)
+		}
+		enc, err := to.Encrypt(ctx, plain, aad)
+		if err != nil {
+			return n, fmt.Errorf("setting %s encrypt: %w", sg.Key, err)
+		}
+		sg.Value = enc
+		if err := st.PutSetting(ctx, &sg); err != nil {
+			return n, fmt.Errorf("setting %s update: %w", sg.Key, err)
 		}
 		n++
 	}

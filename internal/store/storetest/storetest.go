@@ -231,6 +231,11 @@ func RunStoreContract(t *testing.T, st store.Store) {
 	if ok, err := st.ConsumeTOTPStep(ctx, "u1", 101); err != nil || !ok {
 		t.Fatalf("ConsumeTOTPStep(101) = %v, %v; want true", ok, err)
 	}
+	// ListMFAEnrollments must preserve last_totp_step too (a KEK-rotation re-Upsert
+	// of a listed enrollment would otherwise reset the anti-replay counter to 0).
+	if es, err := st.ListMFAEnrollments(ctx); err != nil || len(es) != 1 || es[0].LastTOTPStep != 101 {
+		t.Fatalf("ListMFAEnrollments last step = %v err %v; want [101]", es, err)
+	}
 	if e, err := st.GetMFAEnrollment(ctx, "u1"); err != nil || e.LastTOTPStep != 101 {
 		t.Fatalf("GetMFAEnrollment last step = %d err %v; want 101", e.LastTOTPStep, err)
 	}

@@ -757,13 +757,16 @@ func (s *PGStore) ConsumeTOTPStep(ctx context.Context, username string, step int
 // ListMFAEnrollments returns all enrollments ordered by username.
 func (s *PGStore) ListMFAEnrollments(ctx context.Context) ([]store.MFAEnrollment, error) {
 	rows, err := s.pool.Query(ctx,
-		`SELECT username, secret_enc, confirmed, created_at FROM mfa_enrollments ORDER BY username`)
+		`SELECT username, secret_enc, confirmed, created_at, last_totp_step FROM mfa_enrollments ORDER BY username`)
 	if err != nil {
 		return nil, err
 	}
 	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (store.MFAEnrollment, error) {
 		var m store.MFAEnrollment
-		err := row.Scan(&m.Username, &m.SecretEnc, &m.Confirmed, &m.CreatedAt)
+		// last_totp_step must be selected/scanned: a caller that re-Upserts a listed
+		// enrollment (KEK rotation) would otherwise reset the TOTP anti-replay
+		// high-water mark to 0 and reopen replay.
+		err := row.Scan(&m.Username, &m.SecretEnc, &m.Confirmed, &m.CreatedAt, &m.LastTOTPStep)
 		return m, err
 	})
 }

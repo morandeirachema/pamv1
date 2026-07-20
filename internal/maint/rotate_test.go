@@ -23,6 +23,39 @@ func newVault(t *testing.T) *vault.Vault {
 	return v
 }
 
+// TestRotateVaultKEKSettings proves the KEK rotation also re-wraps vault-encrypted
+// config settings (Phase 12) — without this the server can't decrypt them after
+// the master key changes.
+func TestRotateVaultKEKSettings(t *testing.T) {
+	ctx := context.Background()
+	st := memstore.New()
+	from, to := newVault(t), newVault(t)
+
+	secEnc, _ := from.Encrypt(ctx, "bind-pw", store.ConfigAAD("PAM_LDAP_BIND_PASSWORD"))
+	if err := st.PutSetting(ctx, &store.Setting{Key: "PAM_LDAP_BIND_PASSWORD", Value: secEnc, Secret: true}); err != nil {
+		t.Fatal(err)
+	}
+	// A non-secret setting must be left untouched (not double-processed).
+	if err := st.PutSetting(ctx, &store.Setting{Key: "PAM_LDAP_URL", Value: "ldaps://dc", Secret: false}); err != nil {
+		t.Fatal(err)
+	}
+
+	n, err := RotateVaultKEK(ctx, st, from, to)
+	if err != nil {
+		t.Fatalf("rotate: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("rotated %d, want 1 (the secret setting)", n)
+	}
+	got, _ := st.GetSetting(ctx, "PAM_LDAP_BIND_PASSWORD")
+	if pt, err := to.Decrypt(ctx, got.Value, store.ConfigAAD("PAM_LDAP_BIND_PASSWORD")); err != nil || pt != "bind-pw" {
+		t.Fatalf("secret setting not re-wrapped under new KEK: pt=%q err=%v", pt, err)
+	}
+	if plain, _ := st.GetSetting(ctx, "PAM_LDAP_URL"); plain.Value != "ldaps://dc" {
+		t.Fatalf("non-secret setting was altered: %q", plain.Value)
+	}
+}
+
 // TestRotateVaultKEK checks re-encryption moves every secret from the old vault
 // to the new one, preserving plaintext, AAD binding, and the confirmed flag.
 func TestRotateVaultKEK(t *testing.T) {
