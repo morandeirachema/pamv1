@@ -147,6 +147,15 @@ func (b *Broker) ProcessCall(ctx context.Context, id *agentid.Identity, c Call) 
 			out.Status, out.Reason = StatusFailed, "unknown tool: "+c.Tool
 			break
 		}
+		// Record the intent in the tamper-evident chain BEFORE running a
+		// side-effecting action, so an executed action can never be missing from
+		// the authoritative log. If the chain is unavailable, refuse to run (fail
+		// closed) rather than execute unauditably.
+		if err := b.chainEvent(ctx, id, c, "broker.tool_call.requested", out, ""); err != nil {
+			b.log.Error("broker audit chain unavailable; refusing tool call", "call", out.CallID, "err", err)
+			out.Status, out.Reason = StatusFailed, "audit log unavailable; call refused"
+			break
+		}
 		res, err := tool.Execute(ctx, id.Principal(), c.Args)
 		if err != nil {
 			out.Status, out.Reason = StatusFailed, err.Error()
@@ -156,7 +165,14 @@ func (b *Broker) ProcessCall(ctx context.Context, id *agentid.Identity, c Call) 
 	default:
 		out.Status, out.Reason = StatusFailed, "policy returned no effect"
 	}
-	return b.finish(ctx, id, c, out)
+
+	b.remember(out)
+	// Record the terminal outcome (best-effort: for a side-effecting call the
+	// "requested" event above already durably captured it in the chain).
+	if err := b.chainEvent(ctx, id, c, "broker.tool_call."+string(out.Status), out, out.Reason); err != nil {
+		b.log.Error("broker audit chain append failed", "call", out.CallID, "err", err)
+	}
+	return out
 }
 
 // Lookup returns the latest known outcome for a call id.
@@ -165,13 +181,6 @@ func (b *Broker) Lookup(callID string) (Outcome, bool) {
 	defer b.mu.Unlock()
 	o, ok := b.calls[callID]
 	return o, ok
-}
-
-// finish records the outcome (in memory + hash-chained audit) and returns it.
-func (b *Broker) finish(ctx context.Context, id *agentid.Identity, c Call, out Outcome) Outcome {
-	b.remember(out)
-	b.auditChain(ctx, id, c, out)
-	return out
 }
 
 // remember stores the outcome, evicting the oldest when over the cap.
@@ -188,25 +197,24 @@ func (b *Broker) remember(out Outcome) {
 	b.calls[out.CallID] = out
 }
 
-// auditChain appends the outcome to the tamper-evident broker audit log. The
-// request arguments (never a credential — the broker injects that) are recorded
-// so the trail shows what was asked; a chain failure is logged, not swallowed.
-func (b *Broker) auditChain(ctx context.Context, id *agentid.Identity, c Call, out Outcome) {
+// chainEvent appends one broker audit event (a pre-execution "requested" record
+// or a terminal outcome) to the tamper-evident chain and returns any error so the
+// caller can fail closed. The request arguments (never a credential — the broker
+// injects that) are recorded so the trail shows what was asked.
+func (b *Broker) chainEvent(ctx context.Context, id *agentid.Identity, c Call, action string, out Outcome, reason string) error {
 	detail := fmt.Sprintf("tool:%s call:%s rule:%s args:%s", c.Tool, out.CallID, out.RuleID, argsSummary(c.Args))
-	if out.Reason != "" {
-		detail += " reason:" + out.Reason
+	if reason != "" {
+		detail += " reason:" + reason
 	}
-	ev := store.BrokerAuditEvent{
+	_, err := b.chain.Append(ctx, store.BrokerAuditEvent{
 		Actor:      id.AgentName,
 		OnBehalfOf: id.OnBehalfOf,
 		ActorChain: chainJSON(id.ActorChain),
-		Action:     "broker.tool_call." + string(out.Status),
+		Action:     action,
 		Detail:     detail,
 		Scope:      out.Scope,
-	}
-	if _, err := b.chain.Append(ctx, ev); err != nil {
-		b.log.Error("broker audit chain append failed", "call", out.CallID, "err", err)
-	}
+	})
+	return err
 }
 
 // argsSummary renders the call arguments as compact JSON, capped so a large or

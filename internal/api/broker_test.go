@@ -5,6 +5,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -169,5 +170,109 @@ func TestBrokerDenyAndAudit(t *testing.T) {
 	// A missing/invalid agent credential is rejected at the transport layer (401).
 	if st, _ := doBearer(t, srv, http.MethodPost, "/v1/tool-calls", "bogus", map[string]any{"tool": "winrm_exec"}); st != http.StatusUnauthorized {
 		t.Fatalf("bad agent token: want 401, got %d", st)
+	}
+}
+
+// TestBrokerObeysApproval proves an agent is subject to the same approval gate as
+// a human: an allow policy does NOT let it reach an approval-required target
+// without an approved request (fail-closed).
+func TestBrokerObeysApproval(t *testing.T) {
+	fake := &fakeWinRM{result: winrm.Result{Stdout: "ok", ExitCode: 0}}
+	srv, _ := newTestServerOpts(t, nil, brokerOpts(t, fake, brokerRules))
+	_, td := do(t, srv, http.MethodPost, "/api/targets", testAPIKey, map[string]any{
+		"name": "prod-win", "host": "10.0.0.9", "port": 5985, "os_type": "windows", "protocol": "winrm", "require_approval": true,
+	})
+	tid := int64(jsonMap(t, td)["id"].(float64))
+	do(t, srv, http.MethodPost, "/api/credentials", testAPIKey, map[string]any{"target_id": tid, "username": "svc", "secret": "pw"})
+	_, ad := do(t, srv, http.MethodPost, "/v1/agents", testAPIKey, map[string]any{"name": "bot", "owner": "a"})
+	tok, _ := jsonMap(t, ad)["token"].(string)
+
+	_, data := doBearer(t, srv, http.MethodPost, "/v1/tool-calls", tok, map[string]any{
+		"tool": "winrm_exec", "args": map[string]any{"target": "prod-win", "command": "whoami"},
+	})
+	if jsonMap(t, data)["status"] == "executed" {
+		t.Fatalf("agent executed on an approval-required target without approval: %s", data)
+	}
+	if fake.gotPass != "" {
+		t.Fatal("credential was injected despite no approval")
+	}
+}
+
+// TestAgentRoleGrant proves a role:agent grant is creatable (regression: it was
+// rejected) and that it scopes a target to agents.
+func TestAgentRoleGrant(t *testing.T) {
+	fake := &fakeWinRM{result: winrm.Result{Stdout: "ok", ExitCode: 0}}
+	srv, _ := newTestServerOpts(t, nil, brokerOpts(t, fake, brokerRules))
+	_, td := do(t, srv, http.MethodPost, "/api/targets", testAPIKey, map[string]any{
+		"name": "granted-win", "host": "10.0.0.9", "port": 5985, "os_type": "windows", "protocol": "winrm",
+	})
+	tid := int64(jsonMap(t, td)["id"].(float64))
+	do(t, srv, http.MethodPost, "/api/credentials", testAPIKey, map[string]any{"target_id": tid, "username": "svc", "secret": "pw"})
+
+	// A user grant (not agent) means the agent is NOT authorized...
+	do(t, srv, http.MethodPost, fmt.Sprintf("/api/targets/%d/grants", tid), testAPIKey, map[string]any{"subject_type": "role", "subject": "user"})
+	_, ad := do(t, srv, http.MethodPost, "/v1/agents", testAPIKey, map[string]any{"name": "bot"})
+	tok, _ := jsonMap(t, ad)["token"].(string)
+	if _, d := doBearer(t, srv, http.MethodPost, "/v1/tool-calls", tok, map[string]any{"tool": "winrm_exec", "args": map[string]any{"target": "granted-win", "command": "x"}}); jsonMap(t, d)["status"] == "executed" {
+		t.Fatal("agent executed on a target granted only to role:user")
+	}
+	// ...but a role:agent grant is creatable and authorizes the agent.
+	if st, d := do(t, srv, http.MethodPost, fmt.Sprintf("/api/targets/%d/grants", tid), testAPIKey, map[string]any{"subject_type": "role", "subject": "agent"}); st != http.StatusCreated {
+		t.Fatalf("role:agent grant: want 201, got %d %s", st, d)
+	}
+	if _, d := doBearer(t, srv, http.MethodPost, "/v1/tool-calls", tok, map[string]any{"tool": "winrm_exec", "args": map[string]any{"target": "granted-win", "command": "x"}}); jsonMap(t, d)["status"] != "executed" {
+		t.Fatalf("agent with role:agent grant should execute: %s", d)
+	}
+}
+
+// TestAgentKeyRevocation proves an admin can list agent keys and revoke one, and
+// that a revoked token stops authenticating.
+func TestAgentKeyRevocation(t *testing.T) {
+	srv, _ := newTestServerOpts(t, nil, brokerOpts(t, &fakeWinRM{}, brokerRules))
+	_, ad := do(t, srv, http.MethodPost, "/v1/agents", testAPIKey, map[string]any{"name": "bot-rev", "owner": "a"})
+	m := jsonMap(t, ad)
+	tok, _ := m["token"].(string)
+	id := int64(m["id"].(float64))
+
+	if _, ld := do(t, srv, http.MethodGet, "/v1/agents", testAPIKey, nil); !strings.Contains(string(ld), "bot-rev") {
+		t.Fatalf("agent not listed: %s", ld)
+	}
+	if st, _ := doBearer(t, srv, http.MethodPost, "/v1/tool-calls", tok, map[string]any{"tool": "nope"}); st != http.StatusOK {
+		t.Fatalf("token should authenticate before revoke, got %d", st)
+	}
+	if st, _ := do(t, srv, http.MethodDelete, fmt.Sprintf("/v1/agents/%d", id), testAPIKey, nil); st != http.StatusNoContent {
+		t.Fatalf("revoke: want 204, got %d", st)
+	}
+	if st, _ := doBearer(t, srv, http.MethodPost, "/v1/tool-calls", tok, map[string]any{"tool": "nope"}); st != http.StatusUnauthorized {
+		t.Fatalf("revoked token must 401, got %d", st)
+	}
+}
+
+// TestBrokerAttributesAudit proves the sensitive winrm.run audit event is
+// attributed to the agent, not the "unknown" fallback.
+func TestBrokerAttributesAudit(t *testing.T) {
+	fake := &fakeWinRM{result: winrm.Result{Stdout: "ok", ExitCode: 0}}
+	srv, _ := newTestServerOpts(t, nil, brokerOpts(t, fake, brokerRules))
+	seedWinRMTarget(t, srv, "win-attr", "pw")
+	_, ad := do(t, srv, http.MethodPost, "/v1/agents", testAPIKey, map[string]any{"name": "bot-attr", "owner": "a"})
+	tok, _ := jsonMap(t, ad)["token"].(string)
+	doBearer(t, srv, http.MethodPost, "/v1/tool-calls", tok, map[string]any{"tool": "winrm_exec", "args": map[string]any{"target": "win-attr", "command": "x"}})
+
+	_, aud := do(t, srv, http.MethodGet, "/api/audit?limit=100", testAPIKey, nil)
+	var events []map[string]any
+	if err := json.Unmarshal(aud, &events); err != nil {
+		t.Fatal(err)
+	}
+	var found bool
+	for _, e := range events {
+		if e["action"] == "winrm.run" {
+			found = true
+			if e["actor"] != "bot-attr" {
+				t.Fatalf("winrm.run actor = %v, want bot-attr", e["actor"])
+			}
+		}
+	}
+	if !found {
+		t.Fatal("no winrm.run audit event was recorded")
 	}
 }

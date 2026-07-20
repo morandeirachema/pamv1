@@ -27,6 +27,11 @@ func (s *Server) agentAuth(next agentHandler) http.HandlerFunc {
 			writeError(w, http.StatusUnauthorized, "invalid or missing agent credential")
 			return
 		}
+		// Put the agent principal in the request context so reused helpers (e.g.
+		// execWinRM's s.audit) attribute the sensitive action to the agent, not the
+		// "unknown" fallback, and the access log records the agent.
+		r = r.WithContext(withPrincipal(r.Context(), id.Principal()))
+		setActor(r.Context(), id.AgentName)
 		next(w, r, id)
 	}
 }
@@ -108,6 +113,30 @@ func (s *Server) createAgentKey(w http.ResponseWriter, r *http.Request) {
 		"id": k.ID, "name": k.Name, "owner": k.Owner, "token": token,
 		"note": "Give this token to the agent; only its hash is stored.",
 	})
+}
+
+// listAgentKeys returns the registered agent identities (never their token hash).
+func (s *Server) listAgentKeys(w http.ResponseWriter, r *http.Request) {
+	keys, err := s.store.ListAgentKeys(r.Context())
+	if err != nil {
+		storeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, keys)
+}
+
+// deleteAgentKey revokes an agent identity so its bearer token stops resolving.
+func (s *Server) deleteAgentKey(w http.ResponseWriter, r *http.Request) {
+	id, ok := idParam(w, r)
+	if !ok {
+		return
+	}
+	if err := s.store.DeleteAgentKey(r.Context(), id); err != nil {
+		storeError(w, err)
+		return
+	}
+	s.audit(r.Context(), "agent.revoke", fmt.Sprintf("agent:%d", id))
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // listBrokerAudit returns recent broker audit events (oldest-first, chain order).

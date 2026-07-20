@@ -129,8 +129,8 @@ func (s *Server) createTargetGrant(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if in.SubjectType == "role" {
-		if _, err := auth.ParseRole(in.Subject); err != nil {
-			writeError(w, http.StatusUnprocessableEntity, "subject must be a valid role")
+		if _, err := auth.ParseGrantRole(in.Subject); err != nil {
+			writeError(w, http.StatusUnprocessableEntity, `subject must be a valid role (admin|user|auditor|approver|agent)`)
 			return
 		}
 	}

@@ -77,6 +77,15 @@ func (t *winrmExecTool) Execute(ctx context.Context, p *auth.Principal, args bro
 	if !auth.CanConnectTarget(p, grants) {
 		return broker.Result{}, fmt.Errorf("agent not authorized for target %q", name)
 	}
+	// Agents obey the same approval gate as humans: a target (or global OT policy)
+	// that requires an approved access request blocks the agent too. In this
+	// increment an agent has no way to obtain approval, so an approval-required
+	// target is fail-closed for agents until the broker approval flow lands.
+	if ok, err := t.s.enforceApproval(ctx, target); err != nil {
+		return broker.Result{}, err
+	} else if !ok {
+		return broker.Result{}, fmt.Errorf("target %q requires an approved access request", name)
+	}
 	creds, err := t.s.store.ListCredentials(ctx, target.ID)
 	if err != nil {
 		return broker.Result{}, err

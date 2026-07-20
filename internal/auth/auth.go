@@ -52,6 +52,17 @@ func ParseRole(s string) (Role, error) {
 	}
 }
 
+// ParseGrantRole validates a role name usable as a target-grant subject. Unlike
+// ParseRole it also accepts RoleAgent, so a target can be scoped to AI agents
+// (a "role:agent" grant), without letting an agent be provisioned as a human
+// user or session token.
+func ParseGrantRole(s string) (Role, error) {
+	if Role(s) == RoleAgent {
+		return RoleAgent, nil
+	}
+	return ParseRole(s)
+}
+
 // Capability is a single permission checked at each protected operation.
 type Capability int
 
