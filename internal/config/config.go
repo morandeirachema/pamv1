@@ -101,6 +101,11 @@ type Config struct {
 	BrokerTokenTTL      time.Duration // PAM_BROKER_TOKEN_TTL_MIN — approval resume-token lifetime (default 15m)
 	BrokerMaxArgBytes   int           // PAM_BROKER_MAX_ARG_BYTES — cap on a tool call's serialized args (0 = off)
 	BrokerRatePerMin    int           // PAM_BROKER_RATE_PER_MIN — per-agent tool-call rate limit (0 = off)
+	// SPIFFE JWT-SVID agent identity (Phase 13d). Setting the JWKS path enables it.
+	BrokerTrustDomainJWKS string // PAM_BROKER_TRUST_DOMAIN_JWKS — file with the trust-domain JWKS
+	BrokerTrustDomain     string // PAM_BROKER_TRUST_DOMAIN — SPIFFE trust domain host (e.g. example.org)
+	BrokerAudience        string // PAM_BROKER_AUDIENCE — required SVID audience
+	BrokerMaxDelegation   int    // PAM_BROKER_MAX_DELEGATION_DEPTH — RFC 8693 act-chain cap (default 1)
 
 	// WinRMHTTPS uses HTTPS (5986) for WinRM; WinRMInsecure skips TLS verify (dev).
 	WinRMHTTPS    bool
@@ -254,24 +259,29 @@ func Load() (*Config, error) {
 		BrokerTokenTTL:      time.Duration(integer("PAM_BROKER_TOKEN_TTL_MIN", 15)) * time.Minute,
 		BrokerMaxArgBytes:   integer("PAM_BROKER_MAX_ARG_BYTES", 16384),
 		BrokerRatePerMin:    integer("PAM_BROKER_RATE_PER_MIN", 0),
-		WinRMHTTPS:          boolean("PAM_WINRM_HTTPS", true), // default HTTPS
-		WinRMInsecure:       boolean("PAM_WINRM_INSECURE_SKIP_VERIFY", false),
-		WinRMNTLM:           os.Getenv("PAM_WINRM_AUTH") == "ntlm",
-		ProxyWinRM:          boolean("PAM_PROXY_WINRM", false),
-		GuacdAddr:           os.Getenv("PAM_GUACD_ADDR"),
-		GuacdRecordingPath:  os.Getenv("PAM_GUACD_RECORDING_PATH"),
-		GuacdRDPSecurity:    os.Getenv("PAM_GUACD_RDP_SECURITY"),
-		GuacdIgnoreCert:     boolean("PAM_GUACD_IGNORE_CERT", false),
-		KEKProvider:         getenv("PAM_KEK_PROVIDER", "local"),
-		TransitAddr:         os.Getenv("PAM_KEK_TRANSIT_ADDR"),
-		TransitToken:        os.Getenv("PAM_KEK_TRANSIT_TOKEN"),
-		TransitKey:          os.Getenv("PAM_KEK_TRANSIT_KEY"),
-		AWSKMSKeyID:         os.Getenv("PAM_KEK_AWS_KEY_ID"),
-		AWSRegion:           os.Getenv("PAM_KEK_AWS_REGION"),
-		PKCS11Module:        os.Getenv("PAM_KEK_PKCS11_MODULE"),
-		PKCS11Pin:           os.Getenv("PAM_KEK_PKCS11_PIN"),
-		PKCS11KeyLabel:      os.Getenv("PAM_KEK_PKCS11_KEY_LABEL"),
-		PKCS11TokenLabel:    os.Getenv("PAM_KEK_PKCS11_TOKEN_LABEL"),
+
+		BrokerTrustDomainJWKS: os.Getenv("PAM_BROKER_TRUST_DOMAIN_JWKS"),
+		BrokerTrustDomain:     os.Getenv("PAM_BROKER_TRUST_DOMAIN"),
+		BrokerAudience:        os.Getenv("PAM_BROKER_AUDIENCE"),
+		BrokerMaxDelegation:   integer("PAM_BROKER_MAX_DELEGATION_DEPTH", 1),
+		WinRMHTTPS:            boolean("PAM_WINRM_HTTPS", true), // default HTTPS
+		WinRMInsecure:         boolean("PAM_WINRM_INSECURE_SKIP_VERIFY", false),
+		WinRMNTLM:             os.Getenv("PAM_WINRM_AUTH") == "ntlm",
+		ProxyWinRM:            boolean("PAM_PROXY_WINRM", false),
+		GuacdAddr:             os.Getenv("PAM_GUACD_ADDR"),
+		GuacdRecordingPath:    os.Getenv("PAM_GUACD_RECORDING_PATH"),
+		GuacdRDPSecurity:      os.Getenv("PAM_GUACD_RDP_SECURITY"),
+		GuacdIgnoreCert:       boolean("PAM_GUACD_IGNORE_CERT", false),
+		KEKProvider:           getenv("PAM_KEK_PROVIDER", "local"),
+		TransitAddr:           os.Getenv("PAM_KEK_TRANSIT_ADDR"),
+		TransitToken:          os.Getenv("PAM_KEK_TRANSIT_TOKEN"),
+		TransitKey:            os.Getenv("PAM_KEK_TRANSIT_KEY"),
+		AWSKMSKeyID:           os.Getenv("PAM_KEK_AWS_KEY_ID"),
+		AWSRegion:             os.Getenv("PAM_KEK_AWS_REGION"),
+		PKCS11Module:          os.Getenv("PAM_KEK_PKCS11_MODULE"),
+		PKCS11Pin:             os.Getenv("PAM_KEK_PKCS11_PIN"),
+		PKCS11KeyLabel:        os.Getenv("PAM_KEK_PKCS11_KEY_LABEL"),
+		PKCS11TokenLabel:      os.Getenv("PAM_KEK_PKCS11_TOKEN_LABEL"),
 
 		LDAPURL:                os.Getenv("PAM_LDAP_URL"),
 		LDAPBindDN:             os.Getenv("PAM_LDAP_BIND_DN"),
@@ -342,6 +352,12 @@ func Load() (*Config, error) {
 	// verifiable log with no key would silently be unverifiable.
 	if cfg.BrokerPolicyFile != "" && (cfg.BrokerAuditKey == "" || cfg.BrokerAuditSignSeed == "") {
 		errs = append(errs, "PAM_BROKER_AUDIT_KEY and PAM_BROKER_AUDIT_SIGN_SEED (base64 32-byte values) are required when PAM_BROKER_POLICY_FILE is set")
+	}
+	// SPIFFE SVID identity needs its trust domain and audience to verify a subject
+	// and reject cross-audience token replay; a JWKS file with neither would accept
+	// any well-formed token in any trust domain.
+	if cfg.BrokerTrustDomainJWKS != "" && (cfg.BrokerTrustDomain == "" || cfg.BrokerAudience == "") {
+		errs = append(errs, "PAM_BROKER_TRUST_DOMAIN and PAM_BROKER_AUDIENCE are required when PAM_BROKER_TRUST_DOMAIN_JWKS is set")
 	}
 	if len(errs) > 0 {
 		return nil, fmt.Errorf("config: %s", strings.Join(errs, "; "))

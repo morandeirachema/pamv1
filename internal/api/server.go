@@ -157,6 +157,9 @@ type Options struct {
 	BrokerTokenTTL    time.Duration
 	BrokerMaxArgBytes int
 	BrokerRatePerMin  int
+	// BrokerSVIDVerifier (optional) accepts SPIFFE JWT-SVIDs in addition to static
+	// agent keys (Phase 13d); nil = static keys only.
+	BrokerSVIDVerifier agentid.Verifier
 }
 
 type Server struct {

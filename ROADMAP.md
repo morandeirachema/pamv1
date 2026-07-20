@@ -4,9 +4,9 @@ Guiding principle: **fully functional at every step**. Each phase ships somethin
 
 Status: ✅ done · 🚧 in progress · ⬜ planned
 
-**Phases 0–12 are shipped** (through the configuration subsystem, custom-profile
-RBAC, hot-swap, and the CyberArk/Wallix-style console). **Phase 13** (the
-AI-agent access broker) is in progress — see their sections below. Beyond those,
+**Phases 0–13 are shipped** (through the configuration subsystem, custom-profile
+RBAC, hot-swap, the CyberArk/Wallix-style console, and the AI-agent access
+broker with MCP + SPIFFE identity) — see their sections below. Beyond those,
 a few items genuinely require external infrastructure to build and verify
 honestly, so they are left as documented follow-ons rather than faked:
 
@@ -178,7 +178,7 @@ that respects the project's IaC-first roots.
 - [x] **Custom permission profiles**: named capability sets assignable to users (a configurable RBAC engine), with the current 4 roles as built-in defaults; assignment surfaced in *Work with users & profiles* — *shipped*: `profiles` table (migration `0009`), `POST/GET /api/profiles` + `DELETE /api/profiles/{id}`, `auth.Principal.Can` resolving a capability set (built-in roles unchanged), `createUser` accepting a profile name, and the console role/profile picker now loading custom profiles live
 - [x] Console screens (5250 style) to manage profiles (menu 12), identity/SSO/policy configuration (menu 13), and effective config + backend health with IaC export (menu 14); Kerberos *config* is expressible via the generic `PAM_*` override editor even though live Kerberos auth needs a KDC to exercise (see the infra-bound list above)
 
-## Phase 13 — AI-agent access broker 🚧
+## Phase 13 — AI-agent access broker ✅
 
 PAM for AI agents (ports [`morandeirachema/pam-research`](https://github.com/morandeirachema/pam-research)): an agent holds only an identity key; a policy engine decides `allow / require_approval / deny` on a tool call **and its arguments**; approved actions execute **server-side** with a just-in-time credential; the agent receives only the result. "Trust the chokepoint, not the agent." Opt-in via `PAM_BROKER_POLICY_FILE`; brokers pamv1's own operations with JIT vault injection.
 
@@ -189,5 +189,5 @@ PAM for AI agents (ports [`morandeirachema/pam-research`](https://github.com/mor
 - [x] **REST surface**: `POST /v1/tool-calls`, `GET /v1/tool-calls/{id}`, `POST /v1/agents`, `GET /v1/audit[/verify|/head]`; HTTP-200-with-status error model
 - [x] **Approval + resume + short-lived single-use tokens + more tools**: the `require_approval` effect parks a call, an approver decides via `GET /v1/approvals` + `POST /v1/approvals/{id}/decision`, execute-on-approve injects JIT (the human decision satisfies the target four-eyes gate), and the agent collects the result once with a single-use `broker_tokens` JTI (`POST /v1/tool-calls/{id}/resume`); per-agent rate limits + argument-size caps. Tools: `winrm_exec`, `ssh_exec`, `list_targets`, `list_credentials`, `rotate_credential`, and `reveal_credential` (default-deny)
 - [x] **MCP server** (`internal/mcp`): hand-rolled JSON-RPC 2.0 at `POST /mcp` (`initialize`, `tools/list`, `tools/call`, `ping`, `broker/resume`) behind the same agent auth and sharing the one `broker.ProcessCall`/`Resume` loop — proven at parity with REST (same policy, JIT injection, single-use resume, audit)
-- [ ] **SPIFFE JWT-SVID + RFC 8693 delegation**: verified agent identity + actor-chains (reusing the `internal/oidc` JWT/JWKS machinery)
+- [x] **SPIFFE JWT-SVID + RFC 8693 delegation**: `agentid.SVIDVerifier` validates JWT-SVIDs against a file trust-domain JWKS (RS256/ES256/EdDSA), enforcing SPIFFE subject + audience + expiry (fail-closed), with nested `act` claims capped by `PAM_BROKER_MAX_DELEGATION_DEPTH`; a `MultiVerifier` accepts SVIDs alongside static keys (reuses the `internal/oidc` JWT/JWKS approach, no new dependency)
 - Deferred (documented): SPIRE workload attestation, RFC 8693 token-**exchange** minting, MCP SSE/elicitation, KEK-wrapping the audit keys, multi-replica chain writer

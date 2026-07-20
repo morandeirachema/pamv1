@@ -27,7 +27,13 @@ func (s *Server) setupBroker(opts Options) error {
 		WithApproval(s.store, s.alerter, opts.BrokerTokenTTL).
 		WithArgCap(opts.BrokerMaxArgBytes)
 	s.brokerLimiter = newRateLimiter(opts.BrokerRatePerMin)
-	s.agentVerifier = agentid.NewStaticVerifier(s.store)
+	// Static agent keys are always accepted; a SPIFFE SVID verifier, when
+	// configured, is tried alongside them (Phase 13d).
+	verifier := agentid.MultiVerifier{agentid.NewStaticVerifier(s.store)}
+	if opts.BrokerSVIDVerifier != nil {
+		verifier = append(verifier, opts.BrokerSVIDVerifier)
+	}
+	s.agentVerifier = verifier
 	s.log.Info("agent access broker enabled", "tools", len(reg.List()), "policy_rules", opts.BrokerPolicy.Rules())
 	return nil
 }

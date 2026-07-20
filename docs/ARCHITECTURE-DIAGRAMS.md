@@ -99,6 +99,7 @@ flowchart LR
   n_maint --> n_store
   n_maint --> n_vault
   n_memstore --> n_store
+  n_pam_server --> n_agentid
   n_pam_server --> n_alert
   n_pam_server --> n_api
   n_pam_server --> n_auditchain

@@ -30,6 +30,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/morandeirachema/pamv1/internal/agentid"
 	"github.com/morandeirachema/pamv1/internal/alert"
 	"github.com/morandeirachema/pamv1/internal/api"
 	"github.com/morandeirachema/pamv1/internal/auditchain"
@@ -448,6 +449,18 @@ func run() error {
 		return err
 	}
 
+	// SPIFFE JWT-SVID agent identity (Phase 13d): accepted alongside static agent
+	// keys when a trust-domain JWKS is configured. Load-time failure is fatal.
+	var svidVerifier agentid.Verifier
+	if cfg.BrokerTrustDomainJWKS != "" {
+		sv, err := agentid.NewSVIDVerifier(cfg.BrokerTrustDomainJWKS, cfg.BrokerTrustDomain, cfg.BrokerAudience, cfg.BrokerMaxDelegation)
+		if err != nil {
+			return fmt.Errorf("broker SVID verifier: %w", err)
+		}
+		svidVerifier = sv
+		log.Info("agent broker accepts SPIFFE SVIDs", "trust_domain", cfg.BrokerTrustDomain, "max_delegation", cfg.BrokerMaxDelegation)
+	}
+
 	// reconfigure reproduces the hot-swappable RuntimeConfig from the pristine env
 	// baseline plus the current DB overrides, so PUT/DELETE /api/config can rebuild
 	// the identity backends and operational policy without a restart (Phase 12).
@@ -510,6 +523,7 @@ func run() error {
 		BrokerTokenTTL:      cfg.BrokerTokenTTL,
 		BrokerMaxArgBytes:   cfg.BrokerMaxArgBytes,
 		BrokerRatePerMin:    cfg.BrokerRatePerMin,
+		BrokerSVIDVerifier:  svidVerifier,
 	})
 	if err != nil {
 		return err

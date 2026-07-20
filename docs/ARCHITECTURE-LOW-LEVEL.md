@@ -5,7 +5,7 @@
 > the codebase; the conceptual view lives in
 > [ARCHITECTURE-HIGH-LEVEL.md](ARCHITECTURE-HIGH-LEVEL.md).
 >
-> Last updated: 2026-07-20 · Reflects: **Phases 0–11 shipped** (through the 5250 management console), the security/correctness hardening pass, and code-generated diagrams; **Phase 12** (configuration subsystem + custom-profile RBAC + hot-swap + console/IaC) shipped and **Phase 13** (AI-agent access broker) in progress. See the [ROADMAP](../ROADMAP.md) for authoritative per-phase status. Commit the doc update with the code change.
+> Last updated: 2026-07-20 · Reflects: **Phases 0–11 shipped** (through the 5250 management console), the security/correctness hardening pass, and code-generated diagrams; **Phase 12** (configuration subsystem + custom-profile RBAC + hot-swap + console/IaC) and **Phase 13** (AI-agent access broker: policy, JIT tools, verifiable audit, approval/resume, MCP, SPIFFE SVID) shipped. See the [ROADMAP](../ROADMAP.md) for authoritative per-phase status. Commit the doc update with the code change.
 
 ## 1. Language, layout, dependencies
 
@@ -412,6 +412,10 @@ cancelled shutdown context so they are not dropped mid-drain.
 | `PAM_BROKER_TOKEN_TTL_MIN` | `15` | Lifetime (minutes) of a single-use approval resume token |
 | `PAM_BROKER_MAX_ARG_BYTES` | `16384` | Cap on a tool call's serialized arguments; `0` disables |
 | `PAM_BROKER_RATE_PER_MIN` | `0` (off) | Per-agent tool-call rate limit (calls per minute) |
+| `PAM_BROKER_TRUST_DOMAIN_JWKS` | — (SVID off) | File with the SPIFFE trust-domain JWKS; set to accept JWT-SVIDs |
+| `PAM_BROKER_TRUST_DOMAIN` | — | SPIFFE trust domain host (e.g. `example.org`); required with the JWKS |
+| `PAM_BROKER_AUDIENCE` | — | Required SVID audience; required with the JWKS |
+| `PAM_BROKER_MAX_DELEGATION_DEPTH` | `1` | RFC 8693 `act`-chain depth cap (fail-closed beyond it) |
 
 ## 4a. Logging (operational, to stdout)
 
@@ -491,6 +495,7 @@ events are also written to the separate tamper-evident `broker_audit_events` cha
 
 | Date | Change |
 |---|---|
+| 2026-07-20 | Phase 13 (SPIFFE SVID + delegation, increment D): `internal/agentid` gains an `SVIDVerifier` that validates SPIFFE JWT-SVIDs against a **file** trust-domain JWKS (`PAM_BROKER_TRUST_DOMAIN_JWKS`) — RS256/ES256/EdDSA (stdlib `crypto/rsa`·`ecdsa`·`ed25519`), requiring `sub = spiffe://<PAM_BROKER_TRUST_DOMAIN>/…`, `aud = PAM_BROKER_AUDIENCE`, and a present, unexpired `exp` (all fail-closed). Nested RFC 8693 `act` claims become an `ActorChain` capped at `PAM_BROKER_MAX_DELEGATION_DEPTH`. A `MultiVerifier` composes it with the static-key verifier so `agentAuth` accepts either. Mirrors the `internal/oidc` JWT/JWKS machinery; no new crypto dependency. Deferred (documented): live SPIRE workload attestation and an RFC 8693 token-exchange minting endpoint |
 | 2026-07-20 | Phase 13 (MCP server, increment C): new `internal/mcp` — a hand-rolled JSON-RPC 2.0 core (stdlib only: `Request`/`Response`/`Error`, a `Dispatcher` method table) — served at `POST /mcp` behind the same `agentAuth` as REST. Methods `initialize`, `tools/list` (from the broker registry, tool input maps rendered as JSON Schema), `tools/call`, `ping`, and `broker/resume` route through the **same `broker.ProcessCall`/`Resume`**, so an MCP tool call is policy-gated, JIT-injected, single-use-resumed, and audited identically to REST (`broker.tool_call … via:mcp`). Notifications (no id) get no response; unknown methods return `-32601`. Proven at parity with an in-process test |
 | 2026-07-20 | Phase 13 (broker toolset, increment B cont.): five more agent tools alongside `winrm_exec` — `ssh_exec` (one-shot SSH command via the new `rotate.SSHConnector.Exec`; JIT credential, only output returns), `list_targets`/`list_credentials` (metadata only — no secret ever), `rotate_credential` (reuses `rotateCredential`; the new secret stays vaulted), and `reveal_credential`, the deliberate secret-returning tool shipped **default-deny** (no rule allows it unless an operator adds one) that also honors `PAM_REVEAL_DISABLED` and keeps the plaintext out of every audit record. Shared gates refactored into `authorizeAgentTarget`/`authorizeAgentCredential` (protocol allowlist + target grants + four-eyes). New audit action `ssh.exec` |
 | 2026-07-20 | Phase 13 (broker approval + resume + tokens, increment B): the `require_approval` policy effect now **parks** a tool call for a human decision instead of dead-ending. The broker mints a **single-use resume token** (`broker_tokens`, migration `0010`; only its SHA-256 JTI is stored, spent by an atomic `UPDATE … RETURNING`) and alerts an approver. Operator routes `GET /v1/approvals` + `POST /v1/approvals/{id}/decision` (`CapApprove`) — on approve the broker **executes the parked call server-side** (JIT injection; the human approval satisfies the target four-eyes gate via `broker.WithApproved`), on reject it denies. The agent collects the result once via `POST /v1/tool-calls/{id}/resume` (spends the token). Per-agent **rate limit** (`PAM_BROKER_RATE_PER_MIN`) in `agentAuth` and an **argument-size cap** (`PAM_BROKER_MAX_ARG_BYTES`) in `ProcessCall`. New env `PAM_BROKER_TOKEN_TTL_MIN`; audit vocab `broker.approval.granted`/`broker.approval.denied`/`broker.tool_call.resumed` |

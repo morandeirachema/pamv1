@@ -1,7 +1,8 @@
 // Package agentid establishes and verifies AI-agent identity for the access
-// broker. This increment supports static bearer keys (SHA-256 hash lookup, like
-// user tokens); SPIFFE JWT-SVID verification and RFC 8693 delegation chains land
-// in a later increment behind the same Verifier interface.
+// broker. Two verifiers implement the same Verifier interface: static bearer
+// keys (SHA-256 hash lookup, like user tokens) and SPIFFE JWT-SVIDs (file-JWKS
+// signature check with RFC 8693 delegation chains, see svid.go). MultiVerifier
+// composes them so a deployment can accept both.
 package agentid
 
 import (
