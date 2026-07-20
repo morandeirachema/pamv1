@@ -689,9 +689,9 @@ func (s *PGStore) GetBrokerAuditHead(ctx context.Context) (*store.BrokerAuditEve
 // CreateSession inserts a session, populating its ID and CreatedAt.
 func (s *PGStore) CreateSession(ctx context.Context, sess *store.Session) error {
 	err := s.pool.QueryRow(ctx,
-		`INSERT INTO sessions (username, role, scope, token_hash, expires_at)
-		 VALUES ($1, $2, $3, $4, $5) RETURNING id, created_at`,
-		sess.Username, sess.Role, sess.Scope, sess.TokenHash, sess.ExpiresAt,
+		`INSERT INTO sessions (username, role, roles, scope, token_hash, expires_at)
+		 VALUES ($1, $2, $3, $4, $5, $6) RETURNING id, created_at`,
+		sess.Username, sess.Role, sess.Roles, sess.Scope, sess.TokenHash, sess.ExpiresAt,
 	).Scan(&sess.ID, &sess.CreatedAt)
 	if pgCode(err) == pgUniqueViolation {
 		return store.ErrConflict
@@ -703,7 +703,7 @@ func (s *PGStore) CreateSession(ctx context.Context, sess *store.Session) error 
 // or ErrNotFound.
 func (s *PGStore) GetSessionByTokenHash(ctx context.Context, tokenHashHex string) (*store.Session, error) {
 	return getOne(ctx, s.pool, scanSession,
-		`SELECT id, username, role, scope, token_hash, created_at, expires_at
+		`SELECT id, username, role, roles, scope, token_hash, created_at, expires_at
 		 FROM sessions WHERE token_hash = $1 AND expires_at > now()`, tokenHashHex)
 }
 
@@ -907,7 +907,7 @@ func scanUser(row pgx.CollectableRow) (store.User, error) {
 // scanSession maps one result row into a store.Session.
 func scanSession(row pgx.CollectableRow) (store.Session, error) {
 	var s store.Session
-	err := row.Scan(&s.ID, &s.Username, &s.Role, &s.Scope, &s.TokenHash, &s.CreatedAt, &s.ExpiresAt)
+	err := row.Scan(&s.ID, &s.Username, &s.Role, &s.Roles, &s.Scope, &s.TokenHash, &s.CreatedAt, &s.ExpiresAt)
 	return s, err
 }
 

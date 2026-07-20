@@ -98,7 +98,7 @@ func (s *Server) oidcCallback(w http.ResponseWriter, r *http.Request) {
 		s.redirectPortal(w, r, "pam_error=login_failed")
 		return
 	}
-	role, ok := auth.HighestRole(append(append([]string{}, claims.Roles...), claims.Groups...), rt.oidcRoleMap)
+	role, roles, ok := auth.MatchedRoles(append(append([]string{}, claims.Roles...), claims.Groups...), rt.oidcRoleMap)
 	if !ok {
 		s.log.Warn("oidc login: no mapped role", "user", claims.PreferredUsername)
 		s.redirectPortal(w, r, "pam_error=no_role")
@@ -108,7 +108,7 @@ func (s *Server) oidcCallback(w http.ResponseWriter, r *http.Request) {
 	if name == "" {
 		name = claims.Subject
 	}
-	principal := &auth.Principal{Name: name, Role: role}
+	principal := &auth.Principal{Name: name, Role: role, Roles: roles}
 	token, _, err := s.issueSession(r.Context(), principal, "")
 	if err != nil {
 		s.redirectPortal(w, r, "pam_error=session_failed")

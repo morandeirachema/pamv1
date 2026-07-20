@@ -143,20 +143,16 @@ func (a *LDAPAuthenticator) Authenticate(ctx context.Context, username, password
 		return nil, ErrUnauthorized
 	}
 
-	// 4. Map groups → role (highest privilege wins).
-	role, ok := a.roleForGroups(groups)
+	// 4. Map groups → roles. The highest is the primary; the full set gives the
+	// capability union so a multi-group user keeps every capability.
+	role, roles, ok := MatchedRoles(groups, a.cfg.GroupRoleMap)
 	if !ok {
 		return nil, fmt.Errorf("%w: user is in no pamv1 group", ErrUnauthorized)
 	}
 	// Normalize the login to lower-case: AD/LDAP binds are case-insensitive, so
 	// "Alice" and "alice" authenticate identically — canonicalizing keeps one actor
 	// spelling in the audit trail and makes user grants match consistently.
-	return &Principal{Name: strings.ToLower(username), Role: role}, nil
-}
-
-// roleForGroups returns the highest-privilege role among the user's groups.
-func (a *LDAPAuthenticator) roleForGroups(groups []string) (Role, bool) {
-	return HighestRole(groups, a.cfg.GroupRoleMap)
+	return &Principal{Name: strings.ToLower(username), Role: role, Roles: roles}, nil
 }
 
 // adAccountDisable is the ACCOUNTDISABLE bit in AD's userAccountControl.

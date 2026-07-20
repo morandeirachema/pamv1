@@ -157,8 +157,11 @@ func (r Role) Capabilities() []string {
 // its grants. A target with no grants is open to any connect-capable principal;
 // admins may always connect; otherwise a grant must match the user or its role.
 func CanConnectTarget(p *Principal, grants []store.TargetGrant) bool {
-	if p.Role == RoleAdmin {
-		return true
+	roles := p.effectiveRoles()
+	for _, r := range roles {
+		if r == RoleAdmin {
+			return true
+		}
 	}
 	if len(grants) == 0 {
 		return true
@@ -166,8 +169,10 @@ func CanConnectTarget(p *Principal, grants []store.TargetGrant) bool {
 	for _, g := range grants {
 		switch g.SubjectType {
 		case "role":
-			if g.Subject == string(p.Role) {
-				return true
+			for _, r := range roles {
+				if g.Subject == string(r) {
+					return true
+				}
 			}
 		case "user":
 			if g.Subject == p.Name {
@@ -182,6 +187,15 @@ func CanConnectTarget(p *Principal, grants []store.TargetGrant) bool {
 // a role via m (keys compared lower-cased) and returns the highest-privilege
 // match. Shared by the LDAP, Entra and OIDC identity sources.
 func HighestRole(claims []string, m map[string]Role) (Role, bool) {
+	display, _, ok := MatchedRoles(claims, m)
+	return display, ok
+}
+
+// MatchedRoles maps directory claims to roles via m (keys lower-cased) and
+// returns the highest-privilege role (for display/audit) plus EVERY matched role
+// in precedence order, so an identity in multiple mapped groups gets the union of
+// their capabilities and role-grants. ok is false when nothing matches.
+func MatchedRoles(claims []string, m map[string]Role) (display Role, all []Role, ok bool) {
 	have := make(map[Role]bool)
 	for _, c := range claims {
 		if r, ok := m[strings.ToLower(c)]; ok {
@@ -190,10 +204,36 @@ func HighestRole(claims []string, m map[string]Role) (Role, bool) {
 	}
 	for _, r := range []Role{RoleAdmin, RoleApprover, RoleAuditor, RoleUser} {
 		if have[r] {
-			return r, true
+			if display == "" {
+				display = r
+			}
+			all = append(all, r)
 		}
 	}
-	return "", false
+	return display, all, len(all) > 0
+}
+
+// JoinRoles / SplitRoles serialize a role set for session persistence.
+func JoinRoles(roles []Role) string {
+	parts := make([]string, len(roles))
+	for i, r := range roles {
+		parts[i] = string(r)
+	}
+	return strings.Join(parts, ",")
+}
+
+// SplitRoles parses a comma-separated role set (empty ⇒ nil), ignoring unknowns.
+func SplitRoles(s string) []Role {
+	if s == "" {
+		return nil
+	}
+	var out []Role
+	for _, p := range strings.Split(s, ",") {
+		if r, err := ParseGrantRole(p); err == nil {
+			out = append(out, r)
+		}
+	}
+	return out
 }
 
 // SessionScopeEnroll marks a login session that may only be used to complete
@@ -210,11 +250,25 @@ type CapSet map[Capability]bool
 // Principal is an authenticated identity for the duration of a request or
 // session.
 type Principal struct {
-	Name       string
-	Role       Role
+	Name string
+	Role Role // primary/highest role (display, audit, IsAdmin)
+	// Roles holds every directory-matched role when an identity is in more than one
+	// mapped group, so its capabilities and role-grants are the UNION of them (a
+	// user+auditor member keeps `connect`). nil ⇒ just [Role]. Ignored when Caps is
+	// set (a custom profile carries its own capability set).
+	Roles      []Role
 	Caps       CapSet // resolved custom-profile capabilities; nil for a built-in role
 	BreakGlass bool   // authenticated via the emergency key; use is audited loudly
 	EnrollOnly bool   // session may only complete MFA enrollment, nothing else
+}
+
+// effectiveRoles returns the role set to evaluate capabilities and role-grants
+// against: the multi-group set when present, otherwise just the primary role.
+func (p *Principal) effectiveRoles() []Role {
+	if len(p.Roles) > 0 {
+		return p.Roles
+	}
+	return []Role{p.Role}
 }
 
 // Can reports whether the principal holds capability c. A custom profile carries
@@ -224,7 +278,12 @@ func (p *Principal) Can(c Capability) bool {
 	if p.Caps != nil {
 		return p.Caps[c]
 	}
-	return p.Role.Can(c)
+	for _, r := range p.effectiveRoles() {
+		if r.Can(c) {
+			return true
+		}
+	}
+	return false
 }
 
 // IsAdmin reports whether the principal is a built-in administrator — the
@@ -252,15 +311,13 @@ func (p *Principal) Covers(want CapSet) bool {
 	return true
 }
 
-// CapabilityNames returns the stable names of the principal's capabilities
-// (from its custom profile, or its built-in role).
+// CapabilityNames returns the stable names of every capability the principal
+// holds — from its custom profile, or the union of its (possibly multiple)
+// built-in roles — so /api/me reflects a multi-group user's full set.
 func (p *Principal) CapabilityNames() []string {
-	if p.Caps == nil {
-		return p.Role.Capabilities()
-	}
-	out := make([]string, 0, len(p.Caps))
+	out := make([]string, 0, int(capCount))
 	for c := CapReadInventory; c < capCount; c++ {
-		if p.Caps[c] {
+		if p.Can(c) {
 			out = append(out, c.String())
 		}
 	}
@@ -358,7 +415,11 @@ func (r *Resolver) Resolve(ctx context.Context, key string) (*Principal, error) 
 			if s.Scope == SessionScopeBreakGlass {
 				return &Principal{Name: s.Username, Role: RoleAdmin, BreakGlass: true}, nil
 			}
-			return r.principalFor(ctx, s.Username, s.Role, s.Scope == SessionScopeEnroll)
+			p, perr := r.principalFor(ctx, s.Username, s.Role, s.Scope == SessionScopeEnroll)
+			if perr == nil {
+				p.Roles = SplitRoles(s.Roles) // restore the multi-group union
+			}
+			return p, perr
 		}
 	}
 	return nil, ErrUnauthorized

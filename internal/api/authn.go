@@ -116,9 +116,16 @@ func (s *Server) issueSessionTTL(ctx context.Context, p *auth.Principal, scope s
 	if err != nil {
 		return "", store.Session{}, err
 	}
+	// Persist the full matched role set only when it's a genuine multi-group union
+	// (more than the primary role), so single-role sessions stay unchanged.
+	roles := ""
+	if len(p.Roles) > 1 {
+		roles = auth.JoinRoles(p.Roles)
+	}
 	sess := store.Session{
 		Username:  p.Name,
 		Role:      string(p.Role),
+		Roles:     roles,
 		Scope:     scope,
 		TokenHash: hashHex(token),
 		ExpiresAt: time.Now().Add(ttl).UTC(),

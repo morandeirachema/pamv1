@@ -141,17 +141,18 @@ func (a *EntraAuthenticator) Authenticate(ctx context.Context, username, passwor
 	if claims.Tid == "" || claims.Tid != a.cfg.TenantID {
 		return nil, fmt.Errorf("%w: id_token tenant %q is not the configured tenant", ErrUnauthorized, claims.Tid)
 	}
-	role, ok := a.roleFor(claims.Roles, claims.Groups)
+	role, roles, ok := a.roleFor(claims.Roles, claims.Groups)
 	if !ok {
 		return nil, fmt.Errorf("%w: user has no mapped Entra app role or group", ErrUnauthorized)
 	}
 	name := firstNonEmpty(claims.PreferredUsername, claims.UPN, username)
-	return &Principal{Name: name, Role: role}, nil
+	return &Principal{Name: name, Role: role, Roles: roles}, nil
 }
 
-// roleFor maps the combined app-role and group claims to the highest role.
-func (a *EntraAuthenticator) roleFor(roles, groups []string) (Role, bool) {
-	return HighestRole(append(append([]string{}, roles...), groups...), a.cfg.RoleMap)
+// roleFor maps the combined app-role and group claims to the primary role and the
+// full matched set (for the capability union).
+func (a *EntraAuthenticator) roleFor(roles, groups []string) (Role, []Role, bool) {
+	return MatchedRoles(append(append([]string{}, roles...), groups...), a.cfg.RoleMap)
 }
 
 // withOpenID ensures the requested scope string contains "openid" (required for

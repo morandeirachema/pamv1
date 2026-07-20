@@ -189,9 +189,12 @@ type BrokerAuditEvent struct {
 // Session is a short-lived bearer token issued after a password login (e.g.
 // Active Directory). Only the token's hex SHA-256 is stored (never serialized).
 type Session struct {
-	ID        int64     `json:"id"`
-	Username  string    `json:"username"`
-	Role      string    `json:"role"`
+	ID       int64  `json:"id"`
+	Username string `json:"username"`
+	Role     string `json:"role"`
+	// Roles is the comma-separated set of directory-matched roles for a multi-group
+	// login (empty for a single role), so the resolved principal gets their union.
+	Roles     string    `json:"roles,omitempty"`
 	Scope     string    `json:"scope"` // "" (full) | "enroll" (MFA enrollment only)
 	TokenHash string    `json:"-"`
 	CreatedAt time.Time `json:"created_at"`

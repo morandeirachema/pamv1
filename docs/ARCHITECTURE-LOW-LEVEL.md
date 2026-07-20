@@ -81,7 +81,7 @@ Schema is applied by an embedded **migration runner** (`pgstore/migrate.go`):
 ordered `migrations/*.sql` files run once each in a transaction, tracked in a
 `schema_migrations` table. `0001_init.sql` is the idempotent baseline (safe on a
 pre-migrations database); later changes are new numbered files (through
-`0010_broker_tokens.sql`), applied under a `pg_advisory_lock` so concurrent replicas
+`0011_session_roles.sql`), applied under a `pg_advisory_lock` so concurrent replicas
 don't race. Tables: `targets`, `credentials` (FK `ON DELETE CASCADE`),
 `target_grants`, `audit_events`, `users`, `sessions`, `mfa_enrollments`,
 `mfa_recovery_codes`, `access_requests`, `checkouts` (partial UNIQUE index — one
