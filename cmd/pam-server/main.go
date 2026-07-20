@@ -128,6 +128,37 @@ func runHealthcheck() error {
 	return nil
 }
 
+// applyStoredConfig overlays DB-persisted configuration overrides (Phase 12) onto
+// cfg, decrypting secret settings with the vault. Overrides cover identity
+// backends, SSO, and operational policy; bootstrap/transport settings are not
+// overridable. Applied at startup, so changes take effect on the next restart.
+func applyStoredConfig(ctx context.Context, st store.Store, v *vault.Vault, cfg *config.Config, log *slog.Logger) error {
+	settings, err := st.ListSettings(ctx)
+	if err != nil {
+		return fmt.Errorf("load config overrides: %w", err)
+	}
+	if len(settings) == 0 {
+		return nil
+	}
+	kv := make(map[string]string, len(settings))
+	for _, s := range settings {
+		val := s.Value
+		if s.Secret {
+			pt, derr := v.Decrypt(ctx, s.Value, store.ConfigAAD(s.Key))
+			if derr != nil {
+				return fmt.Errorf("decrypt config setting %s: %w", s.Key, derr)
+			}
+			val = pt
+		}
+		kv[s.Key] = val
+	}
+	if err := config.ApplyOverrides(cfg, kv); err != nil {
+		return err
+	}
+	log.Info("applied stored configuration overrides", "count", len(kv))
+	return nil
+}
+
 // buildBroker loads the AI-agent access-broker policy and decodes its
 // audit-chain keys when PAM_BROKER_POLICY_FILE is set. It returns all-nil when
 // the broker is disabled; config.Load already guarantees the keys are present
@@ -367,6 +398,14 @@ func run() error {
 		}
 	}
 	defer st.Close()
+
+	// Phase 12: overlay DB-persisted configuration onto the env-derived config
+	// before building the identity backends and policy-driven components, so
+	// stored settings take effect (identity/SSO/policy only; bootstrap/transport
+	// stay environment-only).
+	if err := applyStoredConfig(ctx, st, v, cfg, log); err != nil {
+		return err
+	}
 
 	resolver, err := auth.NewResolver(st, cfg.APIKey, cfg.BreakGlassKeyHash)
 	if err != nil {

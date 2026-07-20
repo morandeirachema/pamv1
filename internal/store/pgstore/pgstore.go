@@ -525,6 +525,34 @@ func (s *PGStore) DeleteAgentKey(ctx context.Context, id int64) error {
 	return execExpectingRow(ctx, s.pool, `DELETE FROM agent_keys WHERE id = $1`, id)
 }
 
+// PutSetting upserts a configuration override, stamping UpdatedAt.
+func (s *PGStore) PutSetting(ctx context.Context, st *store.Setting) error {
+	return s.pool.QueryRow(ctx,
+		`INSERT INTO settings (key, value, secret) VALUES ($1, $2, $3)
+		 ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, secret = EXCLUDED.secret, updated_at = now()
+		 RETURNING updated_at`, st.Key, st.Value, st.Secret).Scan(&st.UpdatedAt)
+}
+
+// GetSetting returns the override for key, or ErrNotFound.
+func (s *PGStore) GetSetting(ctx context.Context, key string) (*store.Setting, error) {
+	return getOne(ctx, s.pool, scanSetting,
+		`SELECT key, value, secret, updated_at FROM settings WHERE key = $1`, key)
+}
+
+// ListSettings returns all configuration overrides ordered by key.
+func (s *PGStore) ListSettings(ctx context.Context) ([]store.Setting, error) {
+	rows, err := s.pool.Query(ctx, `SELECT key, value, secret, updated_at FROM settings ORDER BY key`)
+	if err != nil {
+		return nil, err
+	}
+	return pgx.CollectRows(rows, scanSetting)
+}
+
+// DeleteSetting removes the override for key; ErrNotFound if absent.
+func (s *PGStore) DeleteSetting(ctx context.Context, key string) error {
+	return execExpectingRow(ctx, s.pool, `DELETE FROM settings WHERE key = $1`, key)
+}
+
 const brokerAuditCols = `id, ts, actor, on_behalf_of, actor_chain, action, detail, scope, prev_hash, hmac`
 
 // AppendBrokerAudit inserts a pre-chained broker audit event, populating ID and TS.
@@ -793,6 +821,13 @@ func scanAgentKey(row pgx.CollectableRow) (store.AgentKey, error) {
 	var k store.AgentKey
 	err := row.Scan(&k.ID, &k.Name, &k.Owner, &k.TokenHash, &k.Disabled, &k.CreatedAt)
 	return k, err
+}
+
+// scanSetting maps one result row into a store.Setting.
+func scanSetting(row pgx.CollectableRow) (store.Setting, error) {
+	var s store.Setting
+	err := row.Scan(&s.Key, &s.Value, &s.Secret, &s.UpdatedAt)
+	return s, err
 }
 
 // scanBrokerAudit maps one result row into a store.BrokerAuditEvent.

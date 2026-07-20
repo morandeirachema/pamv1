@@ -412,6 +412,11 @@ func (s *Server) routes() {
 	s.mux.Handle("DELETE /api/users/{id}", s.authz(auth.CapManageUsers, s.deleteUser))
 	s.mux.Handle("POST /api/identity/reconcile", s.authz(auth.CapManageUsers, s.reconcileIdentities))
 
+	// System configuration overrides (Phase 12): DB-persisted PAM_* settings.
+	s.mux.Handle("GET /api/config", s.authz(auth.CapManageUsers, s.listConfig))
+	s.mux.Handle("PUT /api/config", s.authz(auth.CapManageUsers, s.putConfig))
+	s.mux.Handle("DELETE /api/config/{key}", s.authz(auth.CapManageUsers, s.deleteConfig))
+
 	// AI-agent access broker (Phase 13), served only when a policy is configured.
 	// Agent-facing routes authenticate an agent bearer key/SVID; operator-facing
 	// routes reuse the human RBAC capabilities.

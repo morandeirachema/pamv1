@@ -69,6 +69,7 @@ flowchart LR
   n_api --> n_auditchain
   n_api --> n_auth
   n_api --> n_broker
+  n_api --> n_config
   n_api --> n_discovery
   n_api --> n_guacd
   n_api --> n_logging
@@ -198,6 +199,12 @@ erDiagram
     time_Time CreatedAt
     time_Time ExpiresAt
   }
+  Setting {
+    string Key
+    string Value
+    bool Secret
+    time_Time UpdatedAt
+  }
   Target {
     int64 ID
     string Name
@@ -229,7 +236,7 @@ erDiagram
 
 ## 3. REST API surface
 
-The 55 routes registered on the API mux, with the capability or guard each enforces (see `internal/auth` for the role → capability matrix).
+The 58 routes registered on the API mux, with the capability or guard each enforces (see `internal/auth` for the role → capability matrix).
 
 | Method | Path | Guard |
 |---|---|---|
@@ -243,6 +250,9 @@ The 55 routes registered on the API mux, with the capability or guard each enfor
 | GET | `/api/auth/oidc/start` | public (rate-limited) |
 | POST | `/api/breakglass/unseal` | public (rate-limited) |
 | GET | `/api/checkouts` | CapReadAudit |
+| GET | `/api/config` | CapManageUsers |
+| PUT | `/api/config` | CapManageUsers |
+| DELETE | `/api/config/{key}` | CapManageUsers |
 | GET | `/api/credentials` | CapReadInventory |
 | POST | `/api/credentials` | CapManageCredentials |
 | DELETE | `/api/credentials/{id}` | CapManageCredentials |

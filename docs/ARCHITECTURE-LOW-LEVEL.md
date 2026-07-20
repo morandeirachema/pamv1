@@ -81,12 +81,12 @@ Schema is applied by an embedded **migration runner** (`pgstore/migrate.go`):
 ordered `migrations/*.sql` files run once each in a transaction, tracked in a
 `schema_migrations` table. `0001_init.sql` is the idempotent baseline (safe on a
 pre-migrations database); later changes are new numbered files (through
-`0007_broker.sql`), applied under a `pg_advisory_lock` so concurrent replicas
+`0008_settings.sql`), applied under a `pg_advisory_lock` so concurrent replicas
 don't race. Tables: `targets`, `credentials` (FK `ON DELETE CASCADE`),
 `target_grants`, `audit_events`, `users`, `sessions`, `mfa_enrollments`,
 `mfa_recovery_codes`, `access_requests`, `checkouts` (partial UNIQUE index — one
 active lease per credential), `oidc_states`, `agent_keys`, `broker_audit_events`
-(the hash-chained agent-broker audit log).
+(the hash-chained agent-broker audit log), `settings` (config overrides).
 
 ### 2.3 `auth` *(Phase 3a)*
 
@@ -434,7 +434,8 @@ secrets. Format `json` (SIEM) or `text` (humans); collect from stdout.
 `mfa.recovery_used` · `winrm.run` · `winrm.error` · `rdp.connect` · `rdp.end` ·
 `rdp.error` · `authz.denied` · `login.failed` · `breakglass.access` · `session.start` ·
 `session.record` · `session.record_failed` · `session.end` · `session.denied` · `session.error` ·
-`agent.create` · `agent.revoke` · `broker.tool_call.requested` · `broker.tool_call.executed` · `broker.tool_call.denied` · `broker.tool_call.pending_approval` · `broker.tool_call.failed`. The actor is the Principal name
+`agent.create` · `agent.revoke` · `broker.tool_call.requested` · `broker.tool_call.executed` · `broker.tool_call.denied` · `broker.tool_call.pending_approval` · `broker.tool_call.failed` ·
+`config.update` · `config.revert`. The actor is the Principal name
 (`bootstrap-admin`, `break-glass`, a username, or an agent name). Agent-broker
 events are also written to the separate tamper-evident `broker_audit_events` chain.
 
@@ -487,6 +488,7 @@ events are also written to the separate tamper-evident `broker_audit_events` cha
 
 | Date | Change |
 |---|---|
+| 2026-07-20 | Phase 12 (configuration subsystem, increment A): DB-persisted, editable `PAM_*` overrides for the identity backends, SSO, and operational policy. New `settings` table (migration `0008`) + `store.Setting`/`PutSetting`/`GetSetting`/`ListSettings`/`DeleteSetting`; secret settings (bind password, client secrets) are vault-encrypted (`store.ConfigAAD`). A whitelist (`config.OverridableKeys`/`ApplyOverrides`) overlays stored values onto the env-derived config at startup — bootstrap/transport keys (DB URL, master key, listen/TLS, KEK) stay environment-only. Admin API `GET/PUT /api/config` + `DELETE /api/config/{key}` (`CapManageUsers`; secrets masked); audit `config.update`/`config.revert`. Hot-swap (no restart), the custom-profile RBAC engine, and console screens land in later increments |
 | 2026-07-20 | Phase 13 broker hardening (self-review fixes): agents now obey the same **approval gate** as humans (`winrm_exec` calls `enforceApproval`); a **`role:agent` target grant** is creatable (`auth.ParseGrantRole`) so targets can be scoped to agents; the broker records a tamper-evident **`broker.tool_call.requested`** event *before* executing and **fails closed** if the chain is unavailable (no more silent unaudited executions); `agentAuth` now `withPrincipal`s the agent so the `winrm.run` audit event is attributed to the agent, not "unknown"; agent keys are revocable/listable — `GET /v1/agents` + `DELETE /v1/agents/{id}` (new audit action `agent.revoke`) |
 | 2026-07-20 | Phase 13 (AI-agent access broker, increment A): opt-in via `PAM_BROKER_POLICY_FILE`. New packages `internal/policy` (YAML rule engine: eq/not/in/not_in, first-match-wins, implicit deny, scope templating), `internal/agentid` (static agent-key verifier; `RoleAgent`+`CapCallTool`), `internal/auditchain` (keyed-HMAC per-event hash chain + ed25519 signed head), `internal/broker` (Tool registry + `ProcessCall`). New store types/tables `agent_keys` + `broker_audit_events` (migration `0007`). `winrm_exec` tool runs over the refactored `Server.execWinRM` (JIT decrypt → run → result; credential never returned). Routes `POST /v1/tool-calls`, `GET /v1/tool-calls/{id}`, `POST /v1/agents`, `GET /v1/audit[/verify|/head]` (HTTP-200-with-`status` error model; agent Bearer auth via `agentAuth`). New env: `PAM_BROKER_POLICY_FILE`, `PAM_BROKER_AUDIT_KEY`, `PAM_BROKER_AUDIT_SIGN_SEED`. Audit vocab: `broker.tool_call.{executed,denied,pending_approval,failed}`, `agent.create`. Approval/resume, MCP, and SPIFFE land in later increments (see ROADMAP Phase 13) |
 | 2026-07-20 | Code-derived architecture diagrams: `cmd/archgen` regenerates `docs/ARCHITECTURE-DIAGRAMS.md` (Mermaid package-dependency graph from imports, domain ER model from `store` structs, REST route→capability map from the mux). Deterministic output; a CI step (`go run ./cmd/archgen && git diff --exit-code`) fails if it drifts, so the diagrams stay current on every change. Wired via `go:generate` |

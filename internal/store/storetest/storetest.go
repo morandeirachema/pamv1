@@ -336,6 +336,32 @@ func RunStoreContract(t *testing.T, st store.Store) {
 		t.Fatal("checkout not cascaded on credential delete")
 	}
 
+	// --- settings (config overrides, Phase 12) ---
+	if _, err := st.GetSetting(ctx, "PAM_MFA_REQUIRED"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("GetSetting(missing): want ErrNotFound, got %v", err)
+	}
+	if err := st.PutSetting(ctx, &store.Setting{Key: "PAM_MFA_REQUIRED", Value: "true"}); err != nil {
+		t.Fatalf("PutSetting: %v", err)
+	}
+	if err := st.PutSetting(ctx, &store.Setting{Key: "PAM_MFA_REQUIRED", Value: "false"}); err != nil { // upsert
+		t.Fatalf("PutSetting(upsert): %v", err)
+	}
+	if got, err := st.GetSetting(ctx, "PAM_MFA_REQUIRED"); err != nil || got.Value != "false" {
+		t.Fatalf("GetSetting: %+v err %v", got, err)
+	}
+	if err := st.PutSetting(ctx, &store.Setting{Key: "PAM_LDAP_BIND_PASSWORD", Value: "v2:enc", Secret: true}); err != nil {
+		t.Fatalf("PutSetting(secret): %v", err)
+	}
+	if ss, err := st.ListSettings(ctx); err != nil || len(ss) != 2 {
+		t.Fatalf("ListSettings: %d err %v", len(ss), err)
+	}
+	if err := st.DeleteSetting(ctx, "PAM_MFA_REQUIRED"); err != nil {
+		t.Fatalf("DeleteSetting: %v", err)
+	}
+	if _, err := st.GetSetting(ctx, "PAM_MFA_REQUIRED"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatal("deleted setting must be gone")
+	}
+
 	// --- agent keys + broker audit chain (Phase 13) ---
 	if head, err := st.GetBrokerAuditHead(ctx); err != nil || head != nil {
 		t.Fatalf("GetBrokerAuditHead(empty): head=%v err=%v", head, err)

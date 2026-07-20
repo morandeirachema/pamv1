@@ -31,6 +31,12 @@ func MFAAAD(username string) string {
 	return "mfa:" + username
 }
 
+// ConfigAAD binds a vault-encrypted configuration setting (e.g. an LDAP bind
+// password or an OIDC client secret) to its key.
+func ConfigAAD(key string) string {
+	return "config:" + key
+}
+
 // Target is a machine reachable through the PAM (a future proxy session
 // connects to it injecting a vaulted credential just-in-time).
 type Target struct {
@@ -129,6 +135,17 @@ type AgentKey struct {
 	TokenHash string    `json:"-"`
 	Disabled  bool      `json:"disabled"`
 	CreatedAt time.Time `json:"created_at"`
+}
+
+// Setting is a persisted configuration override (Phase 12): a PAM_* key whose
+// value takes precedence over the environment for the identity backends, SSO,
+// and operational policy. Secret values (bind passwords, client secrets) are
+// stored vault-encrypted (Value is a "v2:" token, Secret is true).
+type Setting struct {
+	Key       string    `json:"key"`
+	Value     string    `json:"value"`
+	Secret    bool      `json:"secret"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 // BrokerAuditEvent is one entry in the broker's tamper-evident, keyed-HMAC
@@ -258,6 +275,15 @@ type Store interface {
 	ListAgentKeys(ctx context.Context) ([]AgentKey, error)
 	// DeleteAgentKey removes an agent key by ID, or ErrNotFound.
 	DeleteAgentKey(ctx context.Context, id int64) error
+
+	// PutSetting upserts a configuration override, stamping UpdatedAt.
+	PutSetting(ctx context.Context, s *Setting) error
+	// GetSetting returns the override for key, or ErrNotFound.
+	GetSetting(ctx context.Context, key string) (*Setting, error)
+	// ListSettings returns all configuration overrides.
+	ListSettings(ctx context.Context) ([]Setting, error)
+	// DeleteSetting removes the override for key, or ErrNotFound.
+	DeleteSetting(ctx context.Context, key string) error
 
 	// AppendBrokerAudit appends a pre-chained broker audit event (HMAC and
 	// PrevHash already computed by the caller), populating its ID and TS. The

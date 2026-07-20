@@ -173,7 +173,7 @@ Make identity backends, policies, and permission profiles configurable from the
 console — the CyberArk/Wallix administration surface — using a **hybrid** model
 that respects the project's IaC-first roots.
 
-- [ ] **Hybrid config model**: directory bindings (LDAP/AD, **Kerberos**), SSO (Entra/OIDC), and policies become editable settings **persisted in the DB** and applied on save (with restart-on-change where a listener must rebind); the authenticator chain is rebuilt from stored config
+- [~] **Hybrid config model**: directory bindings (LDAP/AD, **Kerberos**), SSO (Entra/OIDC), and policies become editable settings **persisted in the DB** and applied on save (with restart-on-change where a listener must rebind); the authenticator chain is rebuilt from stored config — *increment A shipped*: the DB-persisted, vault-encrypted settings store + `GET/PUT/DELETE /api/config`, overlaid onto the env config at startup (bootstrap/transport stay env-only); hot-swap-without-restart lands in a later increment
 - [ ] **Networking/TLS stays IaC**: a read-only effective-config + backend-health screen plus a generator that emits the env/Helm/Terraform to apply (listeners/ports/TLS cannot be safely rebound at runtime)
 - [ ] **Custom permission profiles**: named capability sets assignable to users and directory groups (a configurable RBAC engine), with the current 4 roles as built-in defaults; assignment surfaced in *Work with users & profiles*
 - [ ] Console screens to manage directory bindings, SSO, profiles, and network status (Kerberos *config* is buildable here even though live Kerberos auth needs a KDC to exercise — see the infra-bound list above)

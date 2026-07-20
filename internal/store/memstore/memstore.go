@@ -27,6 +27,7 @@ type Memstore struct {
 	audit      []store.AuditEvent
 	agentKeys  map[int64]store.AgentKey
 	brokerLog  []store.BrokerAuditEvent
+	settings   map[string]store.Setting
 }
 
 // New returns an empty in-memory store ready for use.
@@ -42,6 +43,7 @@ func New() *Memstore {
 		accessReq: make(map[int64]store.AccessRequest),
 		checkouts: make(map[int64]store.Checkout),
 		agentKeys: make(map[int64]store.AgentKey),
+		settings:  make(map[string]store.Setting),
 	}
 }
 
@@ -566,6 +568,49 @@ func (m *Memstore) DeleteAgentKey(_ context.Context, id int64) error {
 		return store.ErrNotFound
 	}
 	delete(m.agentKeys, id)
+	return nil
+}
+
+// PutSetting upserts a configuration override, stamping UpdatedAt.
+func (m *Memstore) PutSetting(_ context.Context, s *store.Setting) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	s.UpdatedAt = time.Now().UTC()
+	m.settings[s.Key] = *s
+	return nil
+}
+
+// GetSetting returns the override for key, or ErrNotFound.
+func (m *Memstore) GetSetting(_ context.Context, key string) (*store.Setting, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if s, ok := m.settings[key]; ok {
+		out := s
+		return &out, nil
+	}
+	return nil, store.ErrNotFound
+}
+
+// ListSettings returns all configuration overrides ordered by key.
+func (m *Memstore) ListSettings(_ context.Context) ([]store.Setting, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]store.Setting, 0, len(m.settings))
+	for _, s := range m.settings {
+		out = append(out, s)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Key < out[j].Key })
+	return out, nil
+}
+
+// DeleteSetting removes the override for key; ErrNotFound if absent.
+func (m *Memstore) DeleteSetting(_ context.Context, key string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.settings[key]; !ok {
+		return store.ErrNotFound
+	}
+	delete(m.settings, key)
 	return nil
 }
 
