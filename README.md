@@ -25,12 +25,13 @@ unapologetically **AS/400 / IBM 5250 green-screen console**, because touching a 
 
 Built phase by phase with a single rule: **every phase is functional end to end** — it
 runs, passes tests, and deploys as Infrastructure-as-Code. The **[roadmap](ROADMAP.md)** runs
-0–13 and **all fourteen phases have shipped** — from the JIT SSH proxy and RBAC, through
+0–14 and **all fifteen phases have shipped** — from the JIT SSH proxy and RBAC, through
 AD/Entra/OIDC login, Windows targets, break-glass quorum, OT/industrial adaptation, NIS2
 tooling, scale/HA and the full 5250 console, to a hot-swappable configuration subsystem with
-custom-profile RBAC and an **AI-agent access broker** (policy engine, JIT tool execution,
-verifiable audit, MCP transport and SPIFFE identity). It remains an **alpha, educational**
-codebase — read it, run it, learn from it, but don't trust it with real secrets.
+custom-profile RBAC, an **AI-agent access broker** (policy engine, JIT tool execution,
+verifiable audit, MCP transport and SPIFFE identity), and **SOPS-encrypted Kubernetes
+secrets**. It remains an **alpha, educational** codebase — read it, run it, learn from it, but
+don't trust it with real secrets.
 
 🔎 **Live overview:** [interactive project page](https://claude.ai/code/artifact/a1b34e5b-cd84-4fc7-8389-ebb1897495f7) — what works, architecture and roadmap at a glance &nbsp;·&nbsp; 📖 **[Léelo en español →](README.es.md)**
 
@@ -170,6 +171,7 @@ PAM for AI agents — the same chokepoint, extended to autonomous tools. Opt-in 
 - **PostgreSQL storage** via [pgx](https://github.com/jackc/pgx) with embedded, versioned migrations; an in-memory store for tests and demos; optional **[CloudNativePG](https://cloudnative-pg.io/) HA**.
 - **Observability** — a dependency-free [Prometheus](https://prometheus.io/) `/metrics` endpoint (request counts by status, audit volume, break-glass use, rotations, active-sessions gauge), plus a health/readiness split (`/healthz` liveness, `/readyz` checks the database).
 - **IaC deployment** — [Docker](https://docs.docker.com/) (distroless, non-root), [docker-compose](https://docs.docker.com/compose/) with hardened Postgres, [Kubernetes](https://kubernetes.io/) manifests under the restricted Pod Security Standard, a **[Helm chart](deploy/helm/pamv1)**, and a [Terraform](https://developer.hashicorp.com/terraform) module. Releases are built by digest with an **[SBOM](https://www.cisa.gov/sbom), [cosign](https://docs.sigstore.dev/) keyless signature and SLSA provenance**.
+- **Encrypted secrets in git** — the Kubernetes secret manifest can be sealed with **[SOPS](https://github.com/getsops/sops) + [age](https://age-encryption.org/)**: values are encrypted while `kind`/`metadata` stay reviewable, decrypted at deploy time (`sops -d \| kubectl apply -f -`, plaintext never on disk) or natively by Flux / Argo / helm-secrets — so secrets live in the **same IaC repo** without leaking. See **[deploy/k8s/sops/](deploy/k8s/sops/)**.
 
 ## Roles, users & profiles
 
@@ -234,6 +236,7 @@ All fourteen phases have shipped — full per-phase detail in **[ROADMAP.md](ROA
 | 11 | Full 5250 management console | ✅ shipped |
 | 12 | Configuration subsystem + custom-profile RBAC + hot-swap | ✅ shipped |
 | 13 | AI-agent access broker (policy, JIT tools, verifiable audit, MCP, SPIFFE) | ✅ shipped |
+| 14 | SOPS-encrypted Kubernetes secrets (age; Flux/Argo/helm-secrets) | ✅ shipped |
 
 ## Quickstart
 
