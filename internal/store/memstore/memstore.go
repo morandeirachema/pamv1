@@ -27,6 +27,7 @@ type Memstore struct {
 	audit      []store.AuditEvent
 	agentKeys  map[int64]store.AgentKey
 	brokerLog  []store.BrokerAuditEvent
+	brokerTok  map[string]store.BrokerToken
 	settings   map[string]store.Setting
 	profiles   map[int64]store.Profile
 }
@@ -44,6 +45,7 @@ func New() *Memstore {
 		accessReq: make(map[int64]store.AccessRequest),
 		checkouts: make(map[int64]store.Checkout),
 		agentKeys: make(map[int64]store.AgentKey),
+		brokerTok: make(map[string]store.BrokerToken),
 		settings:  make(map[string]store.Setting),
 		profiles:  make(map[int64]store.Profile),
 	}
@@ -577,6 +579,29 @@ func (m *Memstore) DeleteAgentKey(_ context.Context, id int64) error {
 	}
 	delete(m.agentKeys, id)
 	return nil
+}
+
+// CreateBrokerToken stores a single-use resume token for a parked tool call.
+func (m *Memstore) CreateBrokerToken(_ context.Context, t *store.BrokerToken) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.brokerTok[t.JTI] = *t
+	return nil
+}
+
+// ConsumeBrokerToken spends a token under the lock, so only the first caller
+// wins; a used, expired, or unknown jti returns ErrNotFound.
+func (m *Memstore) ConsumeBrokerToken(_ context.Context, jti string) (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	t, ok := m.brokerTok[jti]
+	if !ok || t.UsedAt != nil || time.Now().After(t.ExpiresAt) {
+		return "", store.ErrNotFound
+	}
+	now := time.Now().UTC()
+	t.UsedAt = &now
+	m.brokerTok[jti] = t
+	return t.CallID, nil
 }
 
 // PutSetting upserts a configuration override, stamping UpdatedAt.

@@ -95,9 +95,12 @@ type Config struct {
 
 	// Broker (Phase 13, AI-agent access broker). Setting BrokerPolicyFile enables
 	// the broker; the audit key + seed are then required (fail-loud).
-	BrokerPolicyFile    string // PAM_BROKER_POLICY_FILE — YAML policy rules; enables the broker
-	BrokerAuditKey      string // PAM_BROKER_AUDIT_KEY — base64 32-byte HMAC chain key
-	BrokerAuditSignSeed string // PAM_BROKER_AUDIT_SIGN_SEED — base64 32-byte ed25519 seed
+	BrokerPolicyFile    string        // PAM_BROKER_POLICY_FILE — YAML policy rules; enables the broker
+	BrokerAuditKey      string        // PAM_BROKER_AUDIT_KEY — base64 32-byte HMAC chain key
+	BrokerAuditSignSeed string        // PAM_BROKER_AUDIT_SIGN_SEED — base64 32-byte ed25519 seed
+	BrokerTokenTTL      time.Duration // PAM_BROKER_TOKEN_TTL_MIN — approval resume-token lifetime (default 15m)
+	BrokerMaxArgBytes   int           // PAM_BROKER_MAX_ARG_BYTES — cap on a tool call's serialized args (0 = off)
+	BrokerRatePerMin    int           // PAM_BROKER_RATE_PER_MIN — per-agent tool-call rate limit (0 = off)
 
 	// WinRMHTTPS uses HTTPS (5986) for WinRM; WinRMInsecure skips TLS verify (dev).
 	WinRMHTTPS    bool
@@ -248,6 +251,9 @@ func Load() (*Config, error) {
 		BrokerPolicyFile:    os.Getenv("PAM_BROKER_POLICY_FILE"),
 		BrokerAuditKey:      os.Getenv("PAM_BROKER_AUDIT_KEY"),
 		BrokerAuditSignSeed: os.Getenv("PAM_BROKER_AUDIT_SIGN_SEED"),
+		BrokerTokenTTL:      time.Duration(integer("PAM_BROKER_TOKEN_TTL_MIN", 15)) * time.Minute,
+		BrokerMaxArgBytes:   integer("PAM_BROKER_MAX_ARG_BYTES", 16384),
+		BrokerRatePerMin:    integer("PAM_BROKER_RATE_PER_MIN", 0),
 		WinRMHTTPS:          boolean("PAM_WINRM_HTTPS", true), // default HTTPS
 		WinRMInsecure:       boolean("PAM_WINRM_INSECURE_SKIP_VERIFY", false),
 		WinRMNTLM:           os.Getenv("PAM_WINRM_AUTH") == "ntlm",

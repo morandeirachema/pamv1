@@ -435,4 +435,28 @@ func RunStoreContract(t *testing.T, st store.Store) {
 	if len(all[0].HMAC) != 1 || all[0].HMAC[0] != 0x01 {
 		t.Fatalf("broker audit HMAC not round-tripped: %v", all[0].HMAC)
 	}
+
+	// --- broker single-use resume tokens (Phase 13) ---
+	if err := st.CreateBrokerToken(ctx, &store.BrokerToken{JTI: "jti-1", CallID: "call_abc", ExpiresAt: time.Now().Add(time.Hour).UTC()}); err != nil {
+		t.Fatalf("CreateBrokerToken: %v", err)
+	}
+	// First consume wins and returns the bound call id.
+	if cid, err := st.ConsumeBrokerToken(ctx, "jti-1"); err != nil || cid != "call_abc" {
+		t.Fatalf("ConsumeBrokerToken: cid=%q err=%v", cid, err)
+	}
+	// A second consume of the same token fails — single-use.
+	if _, err := st.ConsumeBrokerToken(ctx, "jti-1"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("ConsumeBrokerToken(reuse): want ErrNotFound, got %v", err)
+	}
+	// An unknown token fails.
+	if _, err := st.ConsumeBrokerToken(ctx, "jti-nope"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("ConsumeBrokerToken(unknown): want ErrNotFound, got %v", err)
+	}
+	// An expired token cannot be consumed.
+	if err := st.CreateBrokerToken(ctx, &store.BrokerToken{JTI: "jti-exp", CallID: "call_x", ExpiresAt: time.Now().Add(-time.Minute).UTC()}); err != nil {
+		t.Fatalf("CreateBrokerToken(expired): %v", err)
+	}
+	if _, err := st.ConsumeBrokerToken(ctx, "jti-exp"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("ConsumeBrokerToken(expired): want ErrNotFound, got %v", err)
+	}
 }

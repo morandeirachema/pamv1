@@ -507,6 +507,9 @@ func run() error {
 		BrokerPolicy:        brokerPolicy,
 		BrokerAuditKey:      brokerAuditKey,
 		BrokerAuditSignKey:  brokerSignKey,
+		BrokerTokenTTL:      cfg.BrokerTokenTTL,
+		BrokerMaxArgBytes:   cfg.BrokerMaxArgBytes,
+		BrokerRatePerMin:    cfg.BrokerRatePerMin,
 	})
 	if err != nil {
 		return err

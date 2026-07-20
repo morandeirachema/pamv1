@@ -8,14 +8,17 @@ package broker
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log/slog"
 	"sort"
 	"sync"
+	"time"
 
 	"github.com/morandeirachema/pamv1/internal/agentid"
+	"github.com/morandeirachema/pamv1/internal/alert"
 	"github.com/morandeirachema/pamv1/internal/auditchain"
 	"github.com/morandeirachema/pamv1/internal/auth"
 	"github.com/morandeirachema/pamv1/internal/logging"
@@ -94,16 +97,50 @@ type Call struct {
 
 // Outcome is the terminal (or pending) result of a tool call.
 type Outcome struct {
-	CallID     string         `json:"call_id"`
-	Status     Status         `json:"status"`
-	Result     map[string]any `json:"result,omitempty"`
-	Reason     string         `json:"reason,omitempty"`
-	RuleID     string         `json:"rule_id,omitempty"`
-	Scope      string         `json:"scope,omitempty"`
-	ApprovalID string         `json:"approval_id,omitempty"`
+	CallID      string         `json:"call_id"`
+	Status      Status         `json:"status"`
+	Result      map[string]any `json:"result,omitempty"`
+	Reason      string         `json:"reason,omitempty"`
+	RuleID      string         `json:"rule_id,omitempty"`
+	Scope       string         `json:"scope,omitempty"`
+	ApprovalID  string         `json:"approval_id,omitempty"`
+	ResumeToken string         `json:"resume_token,omitempty"` // single-use ticket to collect a post-approval result
 }
 
 const maxRemembered = 4096
+
+// TokenStore mints and spends the single-use resume tokens for parked calls.
+// The store implements it; it is an interface so the broker stays transport- and
+// storage-agnostic.
+type TokenStore interface {
+	CreateBrokerToken(ctx context.Context, t *store.BrokerToken) error
+	ConsumeBrokerToken(ctx context.Context, jti string) (callID string, err error)
+}
+
+// parkedCall is a require_approval tool call awaiting a human decision. It holds
+// the requesting agent identity and arguments so the broker can execute it
+// server-side (JIT) once approved.
+type parkedCall struct {
+	id        *agentid.Identity
+	call      Call
+	scope     string
+	ruleID    string
+	reason    string
+	requested time.Time
+}
+
+// PendingApproval is an approver-facing view of a parked call (no credential).
+type PendingApproval struct {
+	CallID     string    `json:"call_id"`
+	Tool       string    `json:"tool"`
+	Args       Args      `json:"args"`
+	Agent      string    `json:"agent"`
+	OnBehalfOf string    `json:"on_behalf_of,omitempty"`
+	Scope      string    `json:"scope,omitempty"`
+	RuleID     string    `json:"rule_id,omitempty"`
+	Reason     string    `json:"reason,omitempty"`
+	Requested  time.Time `json:"requested_at"`
+}
 
 // Broker runs the shared policy loop.
 type Broker struct {
@@ -112,14 +149,62 @@ type Broker struct {
 	chain    *auditchain.Chain
 	log      *slog.Logger
 
-	mu    sync.Mutex
-	calls map[string]Outcome // call_id -> latest outcome (in-memory; persisted in a later increment)
-	order []string           // insertion order, for bounded eviction
+	tokens      TokenStore
+	notifier    alert.Notifier
+	tokenTTL    time.Duration
+	maxArgBytes int
+
+	mu     sync.Mutex
+	calls  map[string]Outcome     // call_id -> latest outcome (in-memory)
+	order  []string               // insertion order, for bounded eviction
+	parked map[string]*parkedCall // call_id -> parked approval-pending call
 }
 
 // New builds a Broker over a policy engine, tool registry, and audit chain.
 func New(engine *policy.Engine, reg *Registry, chain *auditchain.Chain) *Broker {
-	return &Broker{engine: engine, registry: reg, chain: chain, log: logging.Component("broker"), calls: map[string]Outcome{}}
+	return &Broker{
+		engine: engine, registry: reg, chain: chain,
+		log: logging.Component("broker"), notifier: alert.Noop{}, tokenTTL: 15 * time.Minute,
+		calls: map[string]Outcome{}, parked: map[string]*parkedCall{},
+	}
+}
+
+// WithApproval wires the approval flow: single-use resume tokens (tokenTTL
+// lifetime) and an alerter notified when a call is parked. Called by main when
+// the broker is enabled; without it, require_approval calls still park and can be
+// decided, but no resume token is minted.
+func (b *Broker) WithApproval(tokens TokenStore, notifier alert.Notifier, tokenTTL time.Duration) *Broker {
+	b.tokens = tokens
+	if notifier != nil {
+		b.notifier = notifier
+	}
+	if tokenTTL > 0 {
+		b.tokenTTL = tokenTTL
+	}
+	return b
+}
+
+// WithArgCap sets the maximum serialized size (bytes) of a tool call's arguments;
+// 0 disables the cap. A hostile or accidental oversized argument is rejected
+// before policy evaluation.
+func (b *Broker) WithArgCap(n int) *Broker {
+	b.maxArgBytes = n
+	return b
+}
+
+type approvedKey struct{}
+
+// WithApproved marks a context as carrying a human approval for the current tool
+// call, so a tool's target-level approval gate treats it as satisfied (the
+// approver just provided four-eyes for this exact call).
+func WithApproved(ctx context.Context) context.Context {
+	return context.WithValue(ctx, approvedKey{}, true)
+}
+
+// Approved reports whether the context carries a human approval (see WithApproved).
+func Approved(ctx context.Context) bool {
+	v, _ := ctx.Value(approvedKey{}).(bool)
+	return v
 }
 
 // Tools returns the registered tools (for MCP tools/list).
@@ -131,6 +216,19 @@ func (b *Broker) Tools() []Tool { return b.registry.List() }
 func (b *Broker) ProcessCall(ctx context.Context, id *agentid.Identity, c Call) Outcome {
 	out := Outcome{CallID: newCallID()}
 
+	// Reject an oversized argument set before doing any work — the cap bounds both
+	// audit-row bloat and a hostile payload. Recorded as a failure, still audited.
+	if b.maxArgBytes > 0 {
+		if raw, _ := json.Marshal(c.Args); len(raw) > b.maxArgBytes {
+			out.Status, out.Reason = StatusFailed, fmt.Sprintf("arguments exceed %d-byte limit", b.maxArgBytes)
+			b.remember(out)
+			if err := b.chainEvent(ctx, id, c, "broker.tool_call.failed", out, out.Reason); err != nil {
+				b.log.Error("broker audit chain append failed", "call", out.CallID, "err", err)
+			}
+			return out
+		}
+	}
+
 	// Policy decides first: deny and require_approval need no tool, and an unknown
 	// tool with no matching rule is denied by default (fail-closed), never run.
 	d := b.engine.Evaluate(c.Tool, c.Args)
@@ -141,6 +239,7 @@ func (b *Broker) ProcessCall(ctx context.Context, id *agentid.Identity, c Call) 
 	case policy.EffectRequireApproval:
 		out.Status = StatusPendingApproval
 		out.ApprovalID = out.CallID
+		b.park(ctx, id, c, &out)
 	case policy.EffectAllow:
 		tool, ok := b.registry.Get(c.Tool)
 		if !ok {
@@ -173,6 +272,112 @@ func (b *Broker) ProcessCall(ctx context.Context, id *agentid.Identity, c Call) 
 		b.log.Error("broker audit chain append failed", "call", out.CallID, "err", err)
 	}
 	return out
+}
+
+// park stores an approval-pending call, notifies an approver, and (when a token
+// store is wired) mints a single-use resume token returned in out.ResumeToken.
+func (b *Broker) park(ctx context.Context, id *agentid.Identity, c Call, out *Outcome) {
+	b.mu.Lock()
+	b.parked[out.CallID] = &parkedCall{id: id, call: c, scope: out.Scope, ruleID: out.RuleID, reason: out.Reason, requested: time.Now().UTC()}
+	b.mu.Unlock()
+
+	if b.tokens != nil {
+		token := newOpaqueToken()
+		bt := store.BrokerToken{JTI: hashToken(token), CallID: out.CallID, ExpiresAt: time.Now().Add(b.tokenTTL).UTC()}
+		if err := b.tokens.CreateBrokerToken(ctx, &bt); err != nil {
+			b.log.Error("broker resume token mint failed", "call", out.CallID, "err", err)
+		} else {
+			out.ResumeToken = token
+		}
+	}
+	b.notifier.Notify(ctx, alert.Event{
+		Type:   "broker.approval.pending",
+		Actor:  id.AgentName,
+		Detail: fmt.Sprintf("agent %q requests %s (call %s, rule %s)", id.AgentName, c.Tool, out.CallID, out.RuleID),
+		Time:   time.Now().UTC(),
+	})
+}
+
+// PendingApprovals lists the parked calls awaiting a human decision.
+func (b *Broker) PendingApprovals() []PendingApproval {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	out := make([]PendingApproval, 0, len(b.parked))
+	for callID, p := range b.parked {
+		out = append(out, PendingApproval{
+			CallID: callID, Tool: p.call.Tool, Args: p.call.Args,
+			Agent: p.id.AgentName, OnBehalfOf: p.id.OnBehalfOf, Scope: p.scope,
+			RuleID: p.ruleID, Reason: p.reason, Requested: p.requested,
+		})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Requested.Before(out[j].Requested) })
+	return out
+}
+
+// Decide resolves a parked approval: on approve the broker executes the tool
+// server-side (JIT credential injection) and stores the terminal result; on
+// reject the call becomes denied. Either way the decision is recorded in the
+// tamper-evident chain attributed to the human approver. Unknown/expired call ->
+// ok=false.
+func (b *Broker) Decide(ctx context.Context, callID, approver string, approve bool) (Outcome, bool) {
+	b.mu.Lock()
+	p, ok := b.parked[callID]
+	if ok {
+		delete(b.parked, callID)
+	}
+	b.mu.Unlock()
+	if !ok {
+		return Outcome{}, false
+	}
+
+	out := Outcome{CallID: callID, RuleID: p.ruleID, Scope: p.scope}
+	if !approve {
+		out.Status, out.Reason = StatusDenied, "rejected by "+approver
+		b.chainApproval(ctx, p, approver, "broker.approval.denied", out)
+		b.remember(out)
+		return out, true
+	}
+
+	b.chainApproval(ctx, p, approver, "broker.approval.granted", out)
+	tool, exists := b.registry.Get(p.call.Tool)
+	if !exists {
+		out.Status, out.Reason = StatusFailed, "unknown tool: "+p.call.Tool
+		b.remember(out)
+		_ = b.chainEvent(ctx, p.id, p.call, "broker.tool_call.failed", out, out.Reason)
+		return out, true
+	}
+	// Record intent before the side effect, fail closed if the chain is down.
+	if err := b.chainEvent(ctx, p.id, p.call, "broker.tool_call.requested", out, ""); err != nil {
+		out.Status, out.Reason = StatusFailed, "audit log unavailable; call refused"
+		b.remember(out)
+		return out, true
+	}
+	// The human approval satisfies any target-level four-eyes gate for this call.
+	res, err := tool.Execute(WithApproved(ctx), p.id.Principal(), p.call.Args)
+	if err != nil {
+		out.Status, out.Reason = StatusFailed, err.Error()
+	} else {
+		out.Status, out.Result = StatusExecuted, res.Data
+	}
+	b.remember(out)
+	if err := b.chainEvent(ctx, p.id, p.call, "broker.tool_call."+string(out.Status), out, out.Reason); err != nil {
+		b.log.Error("broker audit chain append failed", "call", out.CallID, "err", err)
+	}
+	return out, true
+}
+
+// Resume spends a single-use token and returns the stored outcome for its bound
+// call, so an agent collects a post-approval result exactly once. A used,
+// expired, or unknown token yields ok=false.
+func (b *Broker) Resume(ctx context.Context, token string) (Outcome, bool) {
+	if b.tokens == nil {
+		return Outcome{}, false
+	}
+	callID, err := b.tokens.ConsumeBrokerToken(ctx, hashToken(token))
+	if err != nil {
+		return Outcome{}, false
+	}
+	return b.Lookup(callID)
 }
 
 // Lookup returns the latest known outcome for a call id.
@@ -245,4 +450,34 @@ func newCallID() string {
 	var b [12]byte
 	_, _ = rand.Read(b[:])
 	return "call_" + hex.EncodeToString(b[:])
+}
+
+// newOpaqueToken returns a high-entropy resume token (the secret handed to the
+// agent); only its hash is stored.
+func newOpaqueToken() string {
+	var b [32]byte
+	_, _ = rand.Read(b[:])
+	return "brt_" + hex.EncodeToString(b[:])
+}
+
+// hashToken returns the hex SHA-256 of a resume token, used as its stored JTI so
+// the plaintext token is never persisted.
+func hashToken(token string) string {
+	sum := sha256.Sum256([]byte(token))
+	return hex.EncodeToString(sum[:])
+}
+
+// chainApproval records a human approval decision in the tamper-evident chain,
+// attributed to the approver, over the agent's parked call.
+func (b *Broker) chainApproval(ctx context.Context, p *parkedCall, approver, action string, out Outcome) {
+	if _, err := b.chain.Append(ctx, store.BrokerAuditEvent{
+		Actor:      approver,
+		OnBehalfOf: p.id.AgentName,
+		ActorChain: chainJSON(p.id.ActorChain),
+		Action:     action,
+		Detail:     fmt.Sprintf("tool:%s call:%s rule:%s args:%s", p.call.Tool, out.CallID, out.RuleID, argsSummary(p.call.Args)),
+		Scope:      out.Scope,
+	}); err != nil {
+		b.log.Error("broker approval audit append failed", "call", out.CallID, "err", err)
+	}
 }

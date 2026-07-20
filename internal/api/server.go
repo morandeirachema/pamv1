@@ -151,6 +151,12 @@ type Options struct {
 	BrokerPolicy       *policy.Engine
 	BrokerAuditKey     []byte
 	BrokerAuditSignKey ed25519.PrivateKey
+	// BrokerTokenTTL is how long a single-use approval resume token stays valid
+	// (default 15m). BrokerMaxArgBytes caps a tool call's serialized arguments (0
+	// = uncapped). BrokerRatePerMin rate-limits tool calls per agent (0 = off).
+	BrokerTokenTTL    time.Duration
+	BrokerMaxArgBytes int
+	BrokerRatePerMin  int
 }
 
 type Server struct {
@@ -190,6 +196,7 @@ type Server struct {
 	broker        *broker.Broker
 	agentVerifier agentid.Verifier
 	auditChain    *auditchain.Chain
+	brokerLimiter *rateLimiter // per-agent tool-call rate limit (Phase 13)
 }
 
 // RuntimeConfig is the set of settings PUT /api/config can change without a
@@ -513,6 +520,9 @@ func (s *Server) routes() {
 	if s.broker != nil {
 		s.mux.HandleFunc("POST /v1/tool-calls", s.agentAuth(s.processToolCall))
 		s.mux.HandleFunc("GET /v1/tool-calls/{id}", s.agentAuth(s.getToolCall))
+		s.mux.HandleFunc("POST /v1/tool-calls/{id}/resume", s.agentAuth(s.resumeToolCall))
+		s.mux.Handle("GET /v1/approvals", s.authz(auth.CapApprove, s.listBrokerApprovals))
+		s.mux.Handle("POST /v1/approvals/{id}/decision", s.authz(auth.CapApprove, s.decideBrokerApproval))
 		s.mux.Handle("POST /v1/agents", s.authz(auth.CapManageUsers, s.createAgentKey))
 		s.mux.Handle("GET /v1/agents", s.authz(auth.CapManageUsers, s.listAgentKeys))
 		s.mux.Handle("DELETE /v1/agents/{id}", s.authz(auth.CapManageUsers, s.deleteAgentKey))

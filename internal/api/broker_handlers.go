@@ -27,6 +27,12 @@ func (s *Server) agentAuth(next agentHandler) http.HandlerFunc {
 			writeError(w, http.StatusUnauthorized, "invalid or missing agent credential")
 			return
 		}
+		// Per-agent rate limit (keyed by agent name) bounds tool-call volume.
+		if s.brokerLimiter != nil && !s.brokerLimiter.allow(id.AgentName) {
+			w.Header().Set("Retry-After", "60")
+			writeError(w, http.StatusTooManyRequests, "agent rate limit exceeded; try again shortly")
+			return
+		}
 		// Put the agent principal in the request context so reused helpers (e.g.
 		// execWinRM's s.audit) attribute the sensitive action to the agent, not the
 		// "unknown" fallback, and the access log records the agent.
@@ -72,13 +78,63 @@ func (s *Server) processToolCall(w http.ResponseWriter, r *http.Request, id *age
 	writeJSON(w, http.StatusOK, out)
 }
 
-// getToolCall returns the latest known outcome for a call id.
+// getToolCall returns the latest known outcome for a call id (status poll).
 func (s *Server) getToolCall(w http.ResponseWriter, r *http.Request, _ *agentid.Identity) {
 	out, ok := s.broker.Lookup(r.PathValue("id"))
 	if !ok {
 		writeError(w, http.StatusNotFound, "unknown call id")
 		return
 	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+type resumeIn struct {
+	Token string `json:"token"`
+}
+
+// resumeToolCall spends the single-use resume token and returns the parked call's
+// post-approval outcome exactly once. The token is the ticket; the path id must
+// match the call it unlocks.
+func (s *Server) resumeToolCall(w http.ResponseWriter, r *http.Request, id *agentid.Identity) {
+	var in resumeIn
+	if !readJSON(w, r, &in) {
+		return
+	}
+	out, ok := s.broker.Resume(r.Context(), in.Token)
+	if !ok || out.CallID != r.PathValue("id") {
+		writeError(w, http.StatusNotFound, "invalid, expired, or already-used resume token")
+		return
+	}
+	s.auditAs(r.Context(), id.AgentName, "broker.tool_call.resumed",
+		fmt.Sprintf("call:%s status:%s", out.CallID, out.Status))
+	writeJSON(w, http.StatusOK, out)
+}
+
+// listBrokerApprovals returns the tool calls parked awaiting a human decision.
+func (s *Server) listBrokerApprovals(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, s.broker.PendingApprovals())
+}
+
+type decisionIn struct {
+	Approve bool `json:"approve"`
+}
+
+// decideBrokerApproval records an approver's decision on a parked tool call. On
+// approve the broker executes the call server-side (JIT) and returns the result;
+// on reject it becomes denied.
+func (s *Server) decideBrokerApproval(w http.ResponseWriter, r *http.Request) {
+	var in decisionIn
+	if !readJSON(w, r, &in) {
+		return
+	}
+	approver := actorFrom(r.Context())
+	out, ok := s.broker.Decide(r.Context(), r.PathValue("id"), approver, in.Approve)
+	if !ok {
+		writeError(w, http.StatusNotFound, "unknown or already-decided approval")
+		return
+	}
+	s.audit(r.Context(), "broker.approval."+map[bool]string{true: "granted", false: "denied"}[in.Approve],
+		fmt.Sprintf("call:%s status:%s", out.CallID, out.Status))
 	writeJSON(w, http.StatusOK, out)
 }
 

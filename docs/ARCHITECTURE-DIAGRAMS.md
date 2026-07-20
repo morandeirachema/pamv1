@@ -88,6 +88,7 @@ flowchart LR
   n_auth --> n_oidc
   n_auth --> n_store
   n_broker --> n_agentid
+  n_broker --> n_alert
   n_broker --> n_auditchain
   n_broker --> n_auth
   n_broker --> n_logging
@@ -168,6 +169,11 @@ erDiagram
     string Scope
     arr_byte HMAC
   }
+  BrokerToken {
+    string CallID
+    time_Time ExpiresAt
+    ptr_time_Time UsedAt
+  }
   Checkout {
     int64 ID
     int64 CredentialID
@@ -242,7 +248,7 @@ erDiagram
 
 ## 3. REST API surface
 
-The 63 routes registered on the API mux, with the capability or guard each enforces (see `internal/auth` for the role → capability matrix).
+The 66 routes registered on the API mux, with the capability or guard each enforces (see `internal/auth` for the role → capability matrix).
 
 | Method | Path | Guard |
 |---|---|---|
@@ -303,10 +309,13 @@ The 63 routes registered on the API mux, with the capability or guard each enfor
 | GET | `/v1/agents` | CapManageUsers |
 | POST | `/v1/agents` | CapManageUsers |
 | DELETE | `/v1/agents/{id}` | CapManageUsers |
+| GET | `/v1/approvals` | CapApprove |
+| POST | `/v1/approvals/{id}/decision` | CapApprove |
 | GET | `/v1/audit` | CapReadAudit |
 | GET | `/v1/audit/head` | CapReadAudit |
 | GET | `/v1/audit/verify` | CapReadAudit |
 | POST | `/v1/tool-calls` | public |
 | GET | `/v1/tool-calls/{id}` | public |
+| POST | `/v1/tool-calls/{id}/resume` | public |
 | GET | `/{$}` | public |
 

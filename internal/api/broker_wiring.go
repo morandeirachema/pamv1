@@ -23,7 +23,10 @@ func (s *Server) setupBroker(opts Options) error {
 	reg := broker.NewRegistry()
 	s.registerBrokerTools(reg)
 	s.auditChain = chain
-	s.broker = broker.New(opts.BrokerPolicy, reg, chain)
+	s.broker = broker.New(opts.BrokerPolicy, reg, chain).
+		WithApproval(s.store, s.alerter, opts.BrokerTokenTTL).
+		WithArgCap(opts.BrokerMaxArgBytes)
+	s.brokerLimiter = newRateLimiter(opts.BrokerRatePerMin)
 	s.agentVerifier = agentid.NewStaticVerifier(s.store)
 	s.log.Info("agent access broker enabled", "tools", len(reg.List()), "policy_rules", opts.BrokerPolicy.Rules())
 	return nil

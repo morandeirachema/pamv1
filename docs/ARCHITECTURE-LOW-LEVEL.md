@@ -81,7 +81,7 @@ Schema is applied by an embedded **migration runner** (`pgstore/migrate.go`):
 ordered `migrations/*.sql` files run once each in a transaction, tracked in a
 `schema_migrations` table. `0001_init.sql` is the idempotent baseline (safe on a
 pre-migrations database); later changes are new numbered files (through
-`0009_profiles.sql`), applied under a `pg_advisory_lock` so concurrent replicas
+`0010_broker_tokens.sql`), applied under a `pg_advisory_lock` so concurrent replicas
 don't race. Tables: `targets`, `credentials` (FK `ON DELETE CASCADE`),
 `target_grants`, `audit_events`, `users`, `sessions`, `mfa_enrollments`,
 `mfa_recovery_codes`, `access_requests`, `checkouts` (partial UNIQUE index — one
@@ -409,6 +409,9 @@ cancelled shutdown context so they are not dropped mid-drain.
 | `PAM_BROKER_POLICY_FILE` | — (broker off) | AI-agent broker: YAML policy rules; set to enable the broker |
 | `PAM_BROKER_AUDIT_KEY` | — | base64 32-byte HMAC key for the broker audit chain (required when the broker is on) |
 | `PAM_BROKER_AUDIT_SIGN_SEED` | — | base64 32-byte ed25519 seed for signed head checkpoints (required when the broker is on) |
+| `PAM_BROKER_TOKEN_TTL_MIN` | `15` | Lifetime (minutes) of a single-use approval resume token |
+| `PAM_BROKER_MAX_ARG_BYTES` | `16384` | Cap on a tool call's serialized arguments; `0` disables |
+| `PAM_BROKER_RATE_PER_MIN` | `0` (off) | Per-agent tool-call rate limit (calls per minute) |
 
 ## 4a. Logging (operational, to stdout)
 
@@ -434,7 +437,7 @@ secrets. Format `json` (SIEM) or `text` (humans); collect from stdout.
 `mfa.recovery_used` · `winrm.run` · `winrm.error` · `rdp.connect` · `rdp.end` ·
 `rdp.error` · `authz.denied` · `login.failed` · `breakglass.access` · `session.start` ·
 `session.record` · `session.record_failed` · `session.end` · `session.denied` · `session.error` ·
-`agent.create` · `agent.revoke` · `broker.tool_call.requested` · `broker.tool_call.executed` · `broker.tool_call.denied` · `broker.tool_call.pending_approval` · `broker.tool_call.failed` ·
+`agent.create` · `agent.revoke` · `broker.tool_call.requested` · `broker.tool_call.executed` · `broker.tool_call.denied` · `broker.tool_call.pending_approval` · `broker.tool_call.failed` · `broker.tool_call.resumed` · `broker.approval.granted` · `broker.approval.denied` ·
 `config.update` · `config.revert` · `profile.create` · `profile.delete`. The actor is the Principal name
 (`bootstrap-admin`, `break-glass`, a username, or an agent name). Agent-broker
 events are also written to the separate tamper-evident `broker_audit_events` chain.
@@ -488,6 +491,7 @@ events are also written to the separate tamper-evident `broker_audit_events` cha
 
 | Date | Change |
 |---|---|
+| 2026-07-20 | Phase 13 (broker approval + resume + tokens, increment B): the `require_approval` policy effect now **parks** a tool call for a human decision instead of dead-ending. The broker mints a **single-use resume token** (`broker_tokens`, migration `0010`; only its SHA-256 JTI is stored, spent by an atomic `UPDATE … RETURNING`) and alerts an approver. Operator routes `GET /v1/approvals` + `POST /v1/approvals/{id}/decision` (`CapApprove`) — on approve the broker **executes the parked call server-side** (JIT injection; the human approval satisfies the target four-eyes gate via `broker.WithApproved`), on reject it denies. The agent collects the result once via `POST /v1/tool-calls/{id}/resume` (spends the token). Per-agent **rate limit** (`PAM_BROKER_RATE_PER_MIN`) in `agentAuth` and an **argument-size cap** (`PAM_BROKER_MAX_ARG_BYTES`) in `ProcessCall`. New env `PAM_BROKER_TOKEN_TTL_MIN`; audit vocab `broker.approval.granted`/`broker.approval.denied`/`broker.tool_call.resumed` |
 | 2026-07-20 | Phase 12 (console + IaC export, increment D): 5250 console screens for the CyberArk/Wallix admin surface — *Work with permission profiles* (menu 12), *System configuration* (menu 13, set/clear identity/SSO/policy overrides), and *Effective config & backend health* (menu 14) with a one-key export of the console-set overrides back to IaC. New read-only routes `GET /api/config/effective` (backend status from the live runtime snapshot) and `GET /api/config/iac?format=env\|helm\|terraform` (secrets rendered as secret-store placeholders, never plaintext). The user add-screen role picker now loads custom profiles live. No new audit vocab (both new routes are read-only) |
 | 2026-07-20 | Phase 12 (configuration hot-swap): `PUT`/`DELETE /api/config` now take effect **without a restart**. The server holds the runtime-overridable settings (identity backends, SSO, operational policy) in one immutable `runtimeConf` snapshot behind an `atomic.Pointer`, read through `s.rt()`; a `Reconfigure` closure (wired by `main` from the pristine env baseline + current DB overrides) rebuilds it and `applyReconfigure` swaps it atomically. A rejected reconfigure (e.g. an unreachable directory) rolls the offending override back so it can't also break the next restart. Networking/TLS listeners stay restart-bound (env-only) |
 | 2026-07-20 | Phase 12 (custom-profile RBAC): named capability sets (`profiles` table, migration `0009`) assignable to users as an alternative to the four built-in roles. `auth.Principal` gains a resolved `Caps` set + `Can`/`CapabilityNames` — built-in roles fall through the `roleCaps` matrix unchanged; the resolver resolves a non-built-in user/session role as a custom profile (`Resolver.WithProfiles`, `ParseCapabilities`). Authorization now checks `principal.Can(cap)` everywhere (api `authz`, RDP, and the SSH proxy via a `can_connect` handshake flag). Admin API `POST/GET /api/profiles` + `DELETE /api/profiles/{id}` (`CapManageUsers`); `createUser` accepts a profile name; audit `profile.create`/`profile.delete` |

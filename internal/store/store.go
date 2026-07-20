@@ -137,6 +137,17 @@ type AgentKey struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
+// BrokerToken is a short-lived, single-use ticket the broker mints when a tool
+// call is parked for approval (Phase 13). The agent presents its opaque token to
+// resume and collect the post-approval result exactly once; the stored JTI is the
+// token's SHA-256 hash, bound to the parked call and an expiry.
+type BrokerToken struct {
+	JTI       string     `json:"-"` // SHA-256 hex of the opaque token
+	CallID    string     `json:"call_id"`
+	ExpiresAt time.Time  `json:"expires_at"`
+	UsedAt    *time.Time `json:"used_at,omitempty"`
+}
+
 // Profile is a named, custom capability set (Phase 12) assignable to users as an
 // alternative to the four built-in roles. Capabilities holds the stable
 // capability names defined in internal/auth.
@@ -285,6 +296,14 @@ type Store interface {
 	ListAgentKeys(ctx context.Context) ([]AgentKey, error)
 	// DeleteAgentKey removes an agent key by ID, or ErrNotFound.
 	DeleteAgentKey(ctx context.Context, id int64) error
+
+	// CreateBrokerToken stores a single-use resume token (its JTI is the token's
+	// SHA-256 hash) for a parked, approval-pending tool call.
+	CreateBrokerToken(ctx context.Context, t *BrokerToken) error
+	// ConsumeBrokerToken atomically spends the token identified by jti, returning
+	// the bound call id. It succeeds at most once: a used, expired, or unknown jti
+	// yields ErrNotFound, so a replayed token can never collect a result twice.
+	ConsumeBrokerToken(ctx context.Context, jti string) (callID string, err error)
 
 	// PutSetting upserts a configuration override, stamping UpdatedAt.
 	PutSetting(ctx context.Context, s *Setting) error

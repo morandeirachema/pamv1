@@ -525,6 +525,29 @@ func (s *PGStore) DeleteAgentKey(ctx context.Context, id int64) error {
 	return execExpectingRow(ctx, s.pool, `DELETE FROM agent_keys WHERE id = $1`, id)
 }
 
+// CreateBrokerToken stores a single-use resume token for a parked tool call.
+func (s *PGStore) CreateBrokerToken(ctx context.Context, t *store.BrokerToken) error {
+	_, err := s.pool.Exec(ctx,
+		`INSERT INTO broker_tokens (jti, call_id, expires_at) VALUES ($1, $2, $3)`,
+		t.JTI, t.CallID, t.ExpiresAt)
+	return err
+}
+
+// ConsumeBrokerToken atomically spends a token, returning its bound call id. The
+// UPDATE ... WHERE used_at IS NULL AND expires_at > now() RETURNING makes the
+// spend a single winner; a used, expired, or unknown jti returns ErrNotFound.
+func (s *PGStore) ConsumeBrokerToken(ctx context.Context, jti string) (string, error) {
+	var callID string
+	err := s.pool.QueryRow(ctx,
+		`UPDATE broker_tokens SET used_at = now()
+		 WHERE jti = $1 AND used_at IS NULL AND expires_at > now()
+		 RETURNING call_id`, jti).Scan(&callID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", store.ErrNotFound
+	}
+	return callID, err
+}
+
 // PutSetting upserts a configuration override, stamping UpdatedAt.
 func (s *PGStore) PutSetting(ctx context.Context, st *store.Setting) error {
 	return s.pool.QueryRow(ctx,
