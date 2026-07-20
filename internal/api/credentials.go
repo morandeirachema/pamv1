@@ -108,9 +108,14 @@ func (s *Server) revealCredential(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	c, err := s.store.GetCredential(r.Context(), id)
-	if err != nil {
-		storeError(w, err)
+	c, target, ok := s.loadCredentialTarget(w, r, id)
+	if !ok {
+		return
+	}
+	// Reveal is a credential-access path: it obeys the same per-target grants and
+	// four-eyes approval gate as connecting, so a reveal_secret holder can't read
+	// a credential for a target it wasn't granted or bypass an approval window.
+	if !s.gateCredentialAccess(w, r, target, "credential.reveal") {
 		return
 	}
 	secret, err := s.vault.Decrypt(r.Context(), c.SecretEnc, store.CredentialAAD(c.TargetID, c.ID))

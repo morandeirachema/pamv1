@@ -224,11 +224,23 @@ func (p *Principal) Can(c Capability) bool {
 	return p.Role.Can(c)
 }
 
+// IsAdmin reports whether the principal is a built-in administrator — the
+// bootstrap key, a break-glass session, or a user with the admin role — as
+// opposed to a custom profile (which always carries a non-nil Caps set). A
+// built-in admin holds every capability and is unconstrained by Covers.
+func (p *Principal) IsAdmin() bool {
+	return p.Caps == nil && p.Role == RoleAdmin
+}
+
 // Covers reports whether the principal holds every capability in want. It backs
 // the "you cannot grant more than you have" rule when minting users or profiles,
-// so a delegated user-admin can never escalate past its own capabilities. The
-// bootstrap/break-glass admin holds every capability, so it is unconstrained.
+// so a delegated user-admin can never escalate past its own capabilities. A
+// built-in admin is unconstrained (it holds every capability, including ones like
+// call_tool that the roleCaps matrix doesn't list for humans).
 func (p *Principal) Covers(want CapSet) bool {
+	if p.IsAdmin() {
+		return true
+	}
 	for c, needed := range want {
 		if needed && !p.Can(c) {
 			return false

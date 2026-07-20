@@ -62,6 +62,15 @@ type configIn struct {
 
 // putConfig stores a configuration override; secret values are vault-encrypted.
 func (s *Server) putConfig(w http.ResponseWriter, r *http.Request) {
+	// Configuration changes can remap the admin role, disable MFA/4-eyes/reveal,
+	// and rebind identity backends — powers a delegated `manage_users` profile
+	// must NOT wield. Restrict writes to a built-in admin (bootstrap/break-glass or
+	// the admin role), closing the escalation the createUser/createProfile guards
+	// otherwise leave open on this surface.
+	if !principalFrom(r.Context()).IsAdmin() {
+		writeError(w, http.StatusForbidden, "configuration changes require a built-in administrator")
+		return
+	}
 	var in configIn
 	if !readJSON(w, r, &in) {
 		return
@@ -105,6 +114,10 @@ func (s *Server) putConfig(w http.ResponseWriter, r *http.Request) {
 
 // deleteConfig clears a configuration override, reverting to the environment.
 func (s *Server) deleteConfig(w http.ResponseWriter, r *http.Request) {
+	if !principalFrom(r.Context()).IsAdmin() {
+		writeError(w, http.StatusForbidden, "configuration changes require a built-in administrator")
+		return
+	}
 	key := r.PathValue("key")
 	if err := s.store.DeleteSetting(r.Context(), key); err != nil {
 		storeError(w, err)

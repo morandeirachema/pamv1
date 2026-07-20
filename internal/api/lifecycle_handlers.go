@@ -135,6 +135,11 @@ func (s *Server) checkoutCredential(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	// Checkout is a credential-access path: enforce the same per-target grants and
+	// approval gate as connecting/reveal.
+	if !s.gateCredentialAccess(w, r, target, "credential.checkout") {
+		return
+	}
 	var in checkoutIn
 	if r.ContentLength != 0 {
 		if !readJSON(w, r, &in) {
@@ -211,6 +216,15 @@ func (s *Server) checkinCredential(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		storeError(w, err)
+		return
+	}
+	// Only the lease holder (or an admin / break-glass) may check a credential back
+	// in — otherwise another reveal-capable user could force-close and rotate an
+	// active lease out from under its holder.
+	p := principalFrom(r.Context())
+	if co.Holder != actorFrom(r.Context()) && !p.IsAdmin() {
+		s.audit(r.Context(), "credential.checkin_denied", fmt.Sprintf("checkout:%d holder:%s reason:not-holder", co.ID, co.Holder))
+		writeError(w, http.StatusForbidden, "only the checkout holder may check this credential in")
 		return
 	}
 	if err := s.store.CheckinCheckout(r.Context(), co.ID, time.Now()); err != nil {

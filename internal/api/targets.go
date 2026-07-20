@@ -205,4 +205,28 @@ func (s *Server) authorizedForTarget(ctx context.Context, targetID int64) (bool,
 	return auth.CanConnectTarget(principalFrom(ctx), grants), nil
 }
 
+// gateCredentialAccess enforces the per-target grant and four-eyes approval gates
+// that guard EVERY credential-access path — the SSH/WinRM/RDP connect paths and,
+// equally, reveal and checkout. It writes a 403 and returns false when the caller
+// may not reach the target. action names the audited denial (e.g. "credential.reveal").
+func (s *Server) gateCredentialAccess(w http.ResponseWriter, r *http.Request, target *store.Target, action string) bool {
+	if ok, err := s.authorizedForTarget(r.Context(), target.ID); err != nil {
+		storeError(w, err)
+		return false
+	} else if !ok {
+		s.audit(r.Context(), action+"_denied", "target:"+target.Name+" reason:target-policy")
+		writeError(w, http.StatusForbidden, "not authorized for this target")
+		return false
+	}
+	if ok, err := s.enforceApproval(r.Context(), target); err != nil {
+		storeError(w, err)
+		return false
+	} else if !ok {
+		s.audit(r.Context(), "access.denied", "target:"+target.Name+" reason:approval-required")
+		writeError(w, http.StatusForbidden, "access requires an approved access request")
+		return false
+	}
+	return true
+}
+
 // --- credentials ---
