@@ -72,6 +72,7 @@
   // Per-screen data.
   let targets = [], creds = [], audit = [], sessions = [], requests = [], checkouts = [], users = [], grants = [];
   let viewCred = null, grantsTarget = 0, newUser = null, mfaInfo = null, mfaEnroll = null, recoveryCodes = [], discovered = null, reconcileReport = null;
+  let profiles = [], configItems = [], configNote = "", effCfg = null, iacText = "", iacFormat = "";
   let liveTimer = null;
 
   const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -120,7 +121,10 @@
   async function openCreds() { try { [targets, creds] = await Promise.all([api("GET", "/api/targets").catch(() => []), api("GET", "/api/credentials")]); } catch (e) { creds = []; } go("creds"); }
   async function openSessions() { try { sessions = await api("GET", "/api/sessions"); } catch (e) { sessions = []; } go("sessions"); }
   async function openCheckouts() { try { [targets, checkouts] = await Promise.all([api("GET", "/api/targets").catch(() => []), api("GET", "/api/checkouts?active=true")]); } catch (e) { checkouts = []; } go("checkouts"); }
-  async function openUsers() { try { users = await api("GET", "/api/users"); } catch (e) { users = []; } go("users"); }
+  async function openUsers() { try { [users, profiles] = await Promise.all([api("GET", "/api/users"), api("GET", "/api/profiles").catch(() => [])]); } catch (e) { users = []; } go("users"); }
+  async function openProfiles() { try { profiles = await api("GET", "/api/profiles"); } catch (e) { profiles = []; } go("profiles"); }
+  async function openConfig() { try { const r = await api("GET", "/api/config"); configItems = r.settings || []; configNote = r.note || ""; } catch (e) { configItems = []; } go("config"); }
+  async function openEffective() { try { effCfg = await api("GET", "/api/config/effective"); } catch (e) { effCfg = null; } go("effective"); }
   async function openMfa() { try { mfaInfo = await api("GET", "/api/mfa"); } catch (e) { mfaInfo = { enrolled: false, confirmed: false }; } go("mfa"); }
   async function openAudit() { try { audit = await api("GET", "/api/audit?limit=100"); } catch (e) { audit = []; } go("audit"); }
   async function openReconcile() { reconcileReport = null; try { reconcileReport = await api("GET", "/api/reconcile"); } catch (e) {} go("reconcile"); }
@@ -152,6 +156,16 @@
     URL.revokeObjectURL(url);
     say("AUDIT EXPORTED — SHA256 " + digest.slice(0, 16) + "…");
     render();
+  }
+
+  // exportIaC fetches the console-set overrides rendered as env/Helm/Terraform
+  // and shows them on the iacview screen to copy into the deployment's IaC.
+  async function exportIaC(format) {
+    try {
+      const r = await api("GET", "/api/config/iac?format=" + format);
+      iacText = r.content || ""; iacFormat = r.format || format;
+      go("iacview");
+    } catch (e) { say("CPF9999: " + e.message, true); render(); }
   }
 
   function render() {
@@ -219,6 +233,9 @@ ${fkeys("")}
           line(9, true, "Multi-factor authentication (yourself)") +
           line(10, can("read_audit"), "Display audit trail") +
           line(11, true, "Break-glass unseal") +
+          line(12, can("manage_users"), "Work with permission profiles") +
+          line(13, can("manage_users"), "System configuration") +
+          line(14, can("manage_users"), "Effective config & IaC export") +
           "90. Sign off\n";
         term.innerHTML = `${head("PAMMAIN", "PAMV1 Main Menu")}
 Select one of the following:
@@ -234,6 +251,7 @@ ${fkeys("F3=Sign off   F5=Refresh")}`;
             "1": openTargets, "2": openCreds, "3": openCheckouts, "4": openSessions,
             "5": openRequests, "6": openReconcile, "7": () => go("discovery"),
             "8": openUsers, "9": openMfa, "10": openAudit, "11": () => go("breakglass"),
+            "12": openProfiles, "13": openConfig, "14": openEffective,
             "90": signoff,
           };
           if (routes[c]) { try { await routes[c](); } catch (e) { say("CPF9999: " + e.message, true); render(); } }
@@ -529,7 +547,7 @@ Type options, press Enter.
 ${users.map((u) => `<tr><td>${opt(u.id)}</td><td>${esc(u.id)}</td><td>${pad(u.username, 18)}</td><td>${pad(u.role, 10)}</td><td class="cyan">${fmtTime(u.created_at)}</td></tr>`).join("")}
 </table>${users.length ? "" : `<div class="cyan indent">(No users. Press F6 to mint a token.)</div>`}
 <input type="submit" hidden></form>
-<div class="cyan">Roles: admin, user, auditor, approver. (Custom profiles arrive in the next phase.)</div>
+<div class="cyan">Built-in roles: admin, user, auditor, approver. Custom profiles: menu 12.</div>
 ${fkeys("F3=Exit   F5=Refresh   F6=Add user   F9=Reconcile directory   F12=Cancel")}`;
         document.getElementById("f-list").onsubmit = async (ev) => {
           ev.preventDefault();
@@ -551,7 +569,7 @@ A one-time access token is generated and shown once. Only its hash is stored.
 
 <form id="f-add" class="indent">
 <label>Username  . . . . . :  <input name="username" size="20" required autofocus></label>
-<label>Role / profile  . . :  <select name="role"><option>user</option><option>auditor</option><option>approver</option><option>admin</option></select></label>
+<label>Role / profile  . . :  <select name="role">${["user", "auditor", "approver", "admin"].map((r) => `<option>${r}</option>`).join("")}${profiles.map((p) => `<option value="${esc(p.name)}">${esc(p.name)} (profile)</option>`).join("")}</select></label>
 <input type="submit" hidden>
 </form>
 ${fkeys("F3=Exit   F12=Cancel")}`;
@@ -576,6 +594,130 @@ Role  . . . . . . . :  <span class="white">${esc(u.role)}</span>
 Access token  . . . :  <span class="white">${esc(u.token)}</span>
 </div>
 <div class="cyan indent">Give it to the user; they sign on with it in the "access token" field.</div>
+${fkeys("F3=Exit   F12=Cancel")}`;
+      },
+
+      profiles() {
+        back = "main";
+        term.innerHTML = `${head("PAMWRKPRF", "Work with Permission Profiles")}
+Custom capability sets assignable to users, alongside the four built-in roles.
+Type options, press Enter.  <span class="cyan">4=Delete</span>
+
+<form id="f-list"><table>
+<tr><th>Opt</th><th>ID</th><th>Name</th><th>Capabilities</th><th>Created</th></tr>
+${profiles.map((p) => `<tr><td>${opt(p.id)}</td><td>${esc(p.id)}</td><td>${pad(p.name, 16)}</td><td class="cyan">${esc((p.capabilities || []).join(", "))}</td><td class="cyan">${fmtTime(p.created_at)}</td></tr>`).join("")}
+</table>${profiles.length ? "" : `<div class="cyan indent">(No custom profiles. Built-in roles cover admin/user/auditor/approver. Press F6 to add.)</div>`}
+<input type="submit" hidden></form>
+${fkeys("F3=Exit   F5=Refresh   F6=Add profile   F12=Cancel")}`;
+        document.getElementById("f-list").onsubmit = async (ev) => {
+          ev.preventDefault();
+          try {
+            for (const p of profiles) {
+              const o = optVal(ev.target, p.id);
+              if (o === "4") { await api("DELETE", `/api/profiles/${p.id}`); say(`PROFILE ${String(p.name).toUpperCase()} DELETED.`); }
+              else if (o) { say("CPF0002: OPTION " + o.toUpperCase() + " NOT VALID.", true); }
+            }
+            await openProfiles();
+          } catch (e) { say("CPF9999: " + e.message, true); render(); }
+        };
+      },
+
+      profileadd() {
+        back = "profiles";
+        const caps = ["read_inventory", "manage_targets", "manage_credentials", "reveal_secret", "connect", "read_audit", "manage_users", "approve", "call_tool"];
+        term.innerHTML = `${head("PAMADDPRF", "Add Permission Profile")}
+Name the profile and check the capabilities it grants.
+
+<form id="f-add" class="indent">
+<label>Name  . . . . . . . :  <input name="name" size="20" required autofocus></label>
+<div class="cyan" style="margin-top:.5em">Capabilities:</div>
+${caps.map((c) => `<label style="display:block">  <input type="checkbox" name="cap" value="${c}"> ${c}</label>`).join("")}
+<input type="submit" hidden>
+</form>
+${fkeys("F3=Exit   F12=Cancel")}`;
+        document.getElementById("f-add").onsubmit = async (ev) => {
+          ev.preventDefault();
+          const fd = new FormData(ev.target);
+          const name = String(fd.get("name") || "").trim();
+          const capabilities = fd.getAll("cap");
+          try { await api("POST", "/api/profiles", { name, capabilities }); say(`PROFILE ${name.toUpperCase()} CREATED.`); await openProfiles(); }
+          catch (e) { say("CPF9898: " + e.message, true); render(); }
+        };
+      },
+
+      config() {
+        back = "main";
+        term.innerHTML = `${head("PAMWRKCFG", "System Configuration")}
+Editable identity / SSO / policy settings. Bootstrap & networking stay in IaC.
+Type options, press Enter.  <span class="cyan">4=Clear override</span>
+
+<form id="f-list"><table>
+<tr><th>Opt</th><th>Key</th><th>Sec</th><th>Override</th></tr>
+${configItems.map((c, i) => `<tr><td>${opt(i)}</td><td>${pad(c.key, 28)}</td><td>${c.secret ? '<span class="amber">yes</span>' : "-"}</td><td>${c.overridden ? `<span class="white">${esc(c.value)}</span>` : '<span class="cyan">(env default)</span>'}</td></tr>`).join("")}
+</table><input type="submit" hidden></form>
+<div class="cyan">Overrides ${esc(configNote) || "take effect per deployment"}</div>
+${fkeys("F3=Exit   F5=Refresh   F6=Set override   F12=Cancel")}`;
+        document.getElementById("f-list").onsubmit = async (ev) => {
+          ev.preventDefault();
+          try {
+            for (let i = 0; i < configItems.length; i++) {
+              const o = optVal(ev.target, i);
+              if (o === "4") { await api("DELETE", `/api/config/${configItems[i].key}`); say(`${configItems[i].key} REVERTED TO ENV DEFAULT.`); }
+              else if (o) { say("CPF0002: OPTION " + o.toUpperCase() + " NOT VALID.", true); }
+            }
+            await openConfig();
+          } catch (e) { say("CPF9999: " + e.message, true); render(); }
+        };
+      },
+
+      configset() {
+        back = "config";
+        term.innerHTML = `${head("PAMSETCFG", "Set Configuration Override")}
+Identity/SSO/policy overrides apply immediately. Secret values are vault-encrypted.
+
+<form id="f-add" class="indent">
+<label>Key . . . . . . . . :  <select name="key">${configItems.map((c) => `<option value="${esc(c.key)}">${esc(c.key)}${c.secret ? " (secret)" : ""}</option>`).join("")}</select></label>
+<label>Value . . . . . . . :  <input name="value" size="40" required autofocus></label>
+<input type="submit" hidden>
+</form>
+${fkeys("F3=Exit   F12=Cancel")}`;
+        document.getElementById("f-add").onsubmit = async (ev) => {
+          ev.preventDefault();
+          const fd = new FormData(ev.target);
+          try { await api("PUT", "/api/config", { key: fd.get("key"), value: fd.get("value") }); say(`${fd.get("key")} SET.`); await openConfig(); }
+          catch (e) { say("CPF9898: " + e.message, true); render(); }
+        };
+      },
+
+      effective() {
+        back = "main";
+        const e = effCfg || { backends: {}, hot_swap: false, note: "" };
+        const b = e.backends || {};
+        const flag = (v) => v ? '<span class="green">ON</span>' : '<span class="cyan">off</span>';
+        term.innerHTML = `${head("PAMEFFCFG", "Effective Config & Backend Health")}
+Live status of the identity / SSO / policy backends (read-only).
+
+<div class="indent">
+Password login (AD) . . :  ${flag(b.password_login)}
+OIDC single sign-on . . :  ${flag(b.oidc_login)}
+Directory reconcile . . :  ${flag(b.directory_reconcile)}
+MFA required  . . . . . :  ${flag(b.mfa_required)}
+Reveal disabled . . . . :  ${flag(b.reveal_disabled)}
+Approval required . . . :  ${flag(b.approval_required)}
+Agent broker  . . . . . :  ${flag(b.broker_enabled)}
+Config hot-swap . . . . :  ${flag(e.hot_swap)}
+</div>
+<div class="cyan indent">${esc(e.note)}</div>
+${fkeys("F3=Exit   F5=Refresh   F6=Export .env   F7=Export Helm   F8=Export Terraform   F12=Cancel")}`;
+      },
+
+      iacview() {
+        back = "effective";
+        term.innerHTML = `${head("PAMIACGEN", "IaC Export — " + esc(iacFormat))}
+Copy this into the infrastructure-as-code that owns the deployment. Secrets are
+placeholders — wire them to your secret store, never commit plaintext.
+
+<pre class="white" style="white-space:pre-wrap">${esc(iacText)}</pre>
 ${fkeys("F3=Exit   F12=Cancel")}`;
       },
 
@@ -727,18 +869,20 @@ ${fkeys("F3=Exit   F12=Cancel")}`;
   }
   function signoff() { stopLive(); apiKey = ""; me = null; sessionStorage.removeItem("pam_api_key"); say("SIGN OFF COMPLETE."); go("signon"); }
 
-  const refreshers = { targets: openTargets, creds: openCreds, sessions: openSessions, checkouts: openCheckouts, users: openUsers, mfa: openMfa, audit: openAudit, reconcile: openReconcile, requests: openRequests, grants: () => openGrants(grantsTarget) };
-  const adders = { targets: () => go("targetadd"), creds: () => go("credadd"), grants: () => go("grantadd"), users: () => go("useradd"), requests: () => go("requestadd") };
+  const refreshers = { targets: openTargets, creds: openCreds, sessions: openSessions, checkouts: openCheckouts, users: openUsers, mfa: openMfa, audit: openAudit, reconcile: openReconcile, requests: openRequests, grants: () => openGrants(grantsTarget), profiles: openProfiles, config: openConfig, effective: openEffective };
+  const adders = { targets: () => go("targetadd"), creds: () => go("credadd"), grants: () => go("grantadd"), users: () => go("useradd"), requests: () => go("requestadd"), profiles: () => go("profileadd"), config: () => go("configset") };
 
   window.addEventListener("keydown", async (ev) => {
     const k = ev.key;
-    if (!["F3", "F5", "F6", "F9", "F12"].includes(k)) return;
+    if (!["F3", "F5", "F6", "F7", "F8", "F9", "F12"].includes(k)) return;
     ev.preventDefault();
     if (screen === "signon") return;
     try {
       if (k === "F3") { screen === "main" ? signoff() : go("main"); }
       else if (k === "F5") { const r = refreshers[screen]; if (r) await r(); else render(); }
-      else if (k === "F6") { const a = adders[screen]; if (a) a(); }
+      else if (k === "F6") { if (screen === "effective") await exportIaC("env"); else { const a = adders[screen]; if (a) a(); } }
+      else if (k === "F7") { if (screen === "effective") await exportIaC("helm"); }
+      else if (k === "F8") { if (screen === "effective") await exportIaC("terraform"); }
       else if (k === "F9") { if (screen === "audit") await exportAudit(); else if (screen === "users") await reconcileIdentities(); }
       else if (k === "F12") { go(back); }
     } catch (e) { say("CPF9999: " + e.message, true); render(); }

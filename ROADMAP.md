@@ -4,8 +4,8 @@ Guiding principle: **fully functional at every step**. Each phase ships somethin
 
 Status: ✅ done · 🚧 in progress · ⬜ planned
 
-**Phases 0–11 are shipped** (through the 5250 management console). **Phase 12**
-(configuration subsystem + custom-profile RBAC) is planned and **Phase 13** (the
+**Phases 0–12 are shipped** (through the configuration subsystem, custom-profile
+RBAC, hot-swap, and the CyberArk/Wallix-style console). **Phase 13** (the
 AI-agent access broker) is in progress — see their sections below. Beyond those,
 a few items genuinely require external infrastructure to build and verify
 honestly, so they are left as documented follow-ons rather than faked:
@@ -167,16 +167,16 @@ limitation.
 - [x] **Audit trail** — client-side filter + tamper-evident CSV export (SHA-256)
 - [x] **Break-glass unseal** — submit an M-of-N quorum share; on quorum an audited, auto-expiring admin session is issued
 
-## Phase 12 — Configuration subsystem & custom profiles 🚧
+## Phase 12 — Configuration subsystem & custom profiles ✅
 
 Make identity backends, policies, and permission profiles configurable from the
 console — the CyberArk/Wallix administration surface — using a **hybrid** model
 that respects the project's IaC-first roots.
 
 - [x] **Hybrid config model**: directory bindings (LDAP/AD, **Kerberos**), SSO (Entra/OIDC), and policies become editable settings **persisted in the DB** and applied on save; the authenticator chain is rebuilt from stored config — *shipped*: the DB-persisted, vault-encrypted settings store + `GET/PUT/DELETE /api/config` overlaid onto the env config, **plus hot-swap without a restart** (an atomic `runtimeConf` snapshot rebuilt by a `Reconfigure` closure, with rollback on a rejected change; bootstrap/transport/listeners stay env-only and restart-bound)
-- [ ] **Networking/TLS stays IaC**: a read-only effective-config + backend-health screen plus a generator that emits the env/Helm/Terraform to apply (listeners/ports/TLS cannot be safely rebound at runtime)
-- [~] **Custom permission profiles**: named capability sets assignable to users and directory groups (a configurable RBAC engine), with the current 4 roles as built-in defaults; assignment surfaced in *Work with users & profiles* — *shipped*: `profiles` table (migration `0009`), `POST/GET /api/profiles` + `DELETE /api/profiles/{id}`, `auth.Principal.Can` resolving a resolved capability set (built-in roles unchanged), `createUser` accepting a profile name; console assignment screen lands in the console increment
-- [ ] Console screens to manage directory bindings, SSO, profiles, and network status (Kerberos *config* is buildable here even though live Kerberos auth needs a KDC to exercise — see the infra-bound list above)
+- [x] **Networking/TLS stays IaC**: a read-only effective-config + backend-health screen (`GET /api/config/effective`) plus a generator (`GET /api/config/iac?format=env|helm|terraform`) that exports the console-set overrides back to IaC, secrets rendered as secret-store placeholders (never plaintext); listeners/ports/TLS stay env-only
+- [x] **Custom permission profiles**: named capability sets assignable to users (a configurable RBAC engine), with the current 4 roles as built-in defaults; assignment surfaced in *Work with users & profiles* — *shipped*: `profiles` table (migration `0009`), `POST/GET /api/profiles` + `DELETE /api/profiles/{id}`, `auth.Principal.Can` resolving a capability set (built-in roles unchanged), `createUser` accepting a profile name, and the console role/profile picker now loading custom profiles live
+- [x] Console screens (5250 style) to manage profiles (menu 12), identity/SSO/policy configuration (menu 13), and effective config + backend health with IaC export (menu 14); Kerberos *config* is expressible via the generic `PAM_*` override editor even though live Kerberos auth needs a KDC to exercise (see the infra-bound list above)
 
 ## Phase 13 — AI-agent access broker 🚧
 

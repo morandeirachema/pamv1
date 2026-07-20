@@ -502,6 +502,8 @@ func (s *Server) routes() {
 
 	// System configuration overrides (Phase 12): DB-persisted PAM_* settings.
 	s.mux.Handle("GET /api/config", s.authz(auth.CapManageUsers, s.listConfig))
+	s.mux.Handle("GET /api/config/effective", s.authz(auth.CapManageUsers, s.effectiveConfig))
+	s.mux.Handle("GET /api/config/iac", s.authz(auth.CapManageUsers, s.iacConfig))
 	s.mux.Handle("PUT /api/config", s.authz(auth.CapManageUsers, s.putConfig))
 	s.mux.Handle("DELETE /api/config/{key}", s.authz(auth.CapManageUsers, s.deleteConfig))
 

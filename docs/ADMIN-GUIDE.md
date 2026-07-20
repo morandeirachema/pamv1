@@ -186,6 +186,32 @@ All configuration is environment variables (12-factor). Full descriptions in
 The examples below use `-H "X-API-Key: $PAM_API_KEY"`; in production call the
 HTTPS endpoint of your ingress instead of `http://localhost:8080`.
 
+### 4.1 Runtime configuration console (Phase 12)
+
+The **identity, SSO, and operational-policy** settings (the `PAM_LDAP_*`,
+`PAM_ENTRA_*`, `PAM_OIDC_*`, `PAM_MFA_REQUIRED`, `PAM_REQUIRE_APPROVAL`,
+`PAM_REVEAL_DISABLED`, `PAM_ALLOWED_PROTOCOLS`, … keys) can also be set from the
+console at runtime and are persisted in the database, overriding the environment.
+Secret values (bind password, client secrets) are **vault-encrypted at rest** and
+never returned in plaintext. **Bootstrap and transport settings** — database URL,
+master key/KEK, listen addresses, TLS, the SSH proxy — stay environment-only and
+require a restart; they are deliberately *not* overridable.
+
+- **Menu 13 — System configuration**: list every overridable key, set an override
+  (`PUT /api/config`), or clear one back to the env default (`DELETE /api/config/{key}`).
+  Changes **hot-swap without a restart**: the identity backends and policy are
+  rebuilt atomically on save. A rejected change (e.g. an unreachable directory) is
+  rolled back so it can't also break the next restart.
+- **Menu 14 — Effective config & backend health**: a read-only view of which
+  backends are wired (`GET /api/config/effective`), plus a one-key **IaC export**
+  (`GET /api/config/iac?format=env|helm|terraform`, function keys F6/F7/F8) that
+  renders your console-set overrides back into env / Helm values / Terraform locals
+  so they can be committed to the IaC that owns the deployment. Secrets export as
+  secret-store placeholders, never plaintext.
+
+These endpoints require the `manage_users` capability (admin, or a custom profile
+that includes it).
+
 ---
 
 ## 5. Managing targets
@@ -373,6 +399,26 @@ curl -H "X-API-Key: $PAM_API_KEY" -X DELETE http://localhost:8080/api/users/1
 
 Give the user their token; they use it in the portal Sign On or as the SSH proxy
 password (see the [User Guide](USER-GUIDE.md)).
+
+### Custom permission profiles (Phase 12)
+
+Beyond the four built-in roles you can define **named capability sets** and assign
+them to users exactly like a role. Manage them under **menu 12 — Work with
+permission profiles** (or `POST/GET /api/profiles`, `DELETE /api/profiles/{id}`;
+`manage_users`). A profile is a name plus any subset of the capability vocabulary
+— `read_inventory`, `manage_targets`, `manage_credentials`, `reveal_secret`,
+`connect`, `read_audit`, `manage_users`, `approve`, `call_tool`. A profile name may
+not collide with a built-in role. When adding a user, the role/profile picker lists
+the built-in roles followed by your custom profiles; the built-in roles are
+unchanged, so existing users are unaffected.
+
+```bash
+curl -H "X-API-Key: $PAM_API_KEY" -X POST http://localhost:8080/api/profiles \
+  -d '{"name":"ops-readonly","capabilities":["read_inventory","read_audit"]}'
+# then assign it:
+curl -H "X-API-Key: $PAM_API_KEY" -X POST http://localhost:8080/api/users \
+  -d '{"username":"dana","role":"ops-readonly"}'
+```
 
 ### Active Directory login (optional)
 
