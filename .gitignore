@@ -7,3 +7,11 @@ dist/
 *.tfstate
 *.tfstate.backup
 *.tfvars
+
+# SOPS / age private keys — never commit a real one (the demo example is kept).
+*.agekey
+age.key
+keys.txt
+!deploy/k8s/sops/age-example.key
+# real (non-example) sealed secrets stay local unless you intend to commit them
+deploy/k8s/sops/secrets.sops.yaml

@@ -1,0 +1,23 @@
+# SOPS (https://github.com/getsops/sops) creation rules for pamv1 (Phase 14).
+#
+# Any file matching a rule below is encrypted with the listed recipients when you
+# run `sops -e -i <file>`, and only the `data` / `stringData` *values* of a
+# Kubernetes Secret are sealed — `kind`, `metadata`, keys, etc. stay in cleartext
+# so the manifest is still reviewable and diff-able in git.
+#
+# >>> REPLACE the example age recipient below with YOUR OWN public key <<<
+#     age-keygen -o age.key            # keep age.key OUT of git (it is .gitignore'd)
+#     grep 'public key' age.key        # copy the age1... recipient here
+#
+# The committed example (deploy/k8s/sops/secrets.sops.example.yaml) is encrypted to
+# the throwaway key deploy/k8s/sops/age-example.key — for learning only; never
+# deploy real secrets sealed to that key (its private half is public in this repo).
+creation_rules:
+  - path_regex: deploy/k8s/sops/secrets.*\.ya?ml$
+    encrypted_regex: ^(data|stringData)$
+    # age recipients (comma-separated for multiple custodians / KMS fallback).
+    age: age1pfn57mnl9gg6c5tu05tgaym2jk8kzgxnwf20hd008lzghsp6vyrqetlmny
+
+  - path_regex: deploy/helm/.*secrets.*\.ya?ml$
+    encrypted_regex: ^(PAM_.*|.*[Pp]assword)$
+    age: age1pfn57mnl9gg6c5tu05tgaym2jk8kzgxnwf20hd008lzghsp6vyrqetlmny

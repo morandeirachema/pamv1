@@ -4,9 +4,10 @@ Guiding principle: **fully functional at every step**. Each phase ships somethin
 
 Status: ✅ done · 🚧 in progress · ⬜ planned
 
-**Phases 0–13 are shipped** (through the configuration subsystem, custom-profile
-RBAC, hot-swap, the CyberArk/Wallix-style console, and the AI-agent access
-broker with MCP + SPIFFE identity) — see their sections below. Beyond those,
+**Phases 0–14 are shipped** (through the configuration subsystem, custom-profile
+RBAC, hot-swap, the CyberArk/Wallix-style console, the AI-agent access broker with
+MCP + SPIFFE identity, and SOPS-encrypted Kubernetes secrets) — see their sections
+below. Beyond those,
 a few items genuinely require external infrastructure to build and verify
 honestly, so they are left as documented follow-ons rather than faked:
 
@@ -191,3 +192,16 @@ PAM for AI agents (ports [`morandeirachema/pam-research`](https://github.com/mor
 - [x] **MCP server** (`internal/mcp`): hand-rolled JSON-RPC 2.0 at `POST /mcp` (`initialize`, `tools/list`, `tools/call`, `ping`, `broker/resume`) behind the same agent auth and sharing the one `broker.ProcessCall`/`Resume` loop — proven at parity with REST (same policy, JIT injection, single-use resume, audit)
 - [x] **SPIFFE JWT-SVID + RFC 8693 delegation**: `agentid.SVIDVerifier` validates JWT-SVIDs against a file trust-domain JWKS (RS256/ES256/EdDSA), enforcing SPIFFE subject + audience + expiry (fail-closed), with nested `act` claims capped by `PAM_BROKER_MAX_DELEGATION_DEPTH`; a `MultiVerifier` accepts SVIDs alongside static keys (reuses the `internal/oidc` JWT/JWKS approach, no new dependency)
 - Deferred (documented): SPIRE workload attestation, RFC 8693 token-**exchange** minting, MCP SSE/elicitation, KEK-wrapping the audit keys, multi-replica chain writer
+
+## Phase 14 — SOPS-encrypted secrets ✅
+
+Keep the Kubernetes secret manifest **in the IaC repo** without leaking it: encrypt the
+values with [SOPS](https://github.com/getsops/sops) + [age](https://age-encryption.org/) so
+`kind`/`metadata`/keys stay reviewable while `PAM_MASTER_KEY`, `PAM_API_KEY` and the database
+URL are sealed to a key only operators (or a KMS/HSM) hold.
+
+- [x] **SOPS creation rules** (`.sops.yaml`): `encrypted_regex` seals only `data`/`stringData` values of any `deploy/k8s/sops/secrets*.yaml`; age recipient (KMS/PGP recipients documented for cloud/multi-custodian setups)
+- [x] **Reproducible encrypted example**: `deploy/k8s/sops/secrets.sops.example.yaml` is a real SOPS-sealed Secret decryptable with a committed **throwaway demo key** (`age-example.key`, loudly marked demo-only) so the whole flow can be run and studied
+- [x] **Deploy flow**: `apply.sh` streams `sops --decrypt | kubectl apply -f -` (plaintext never touches disk); `.gitignore` blocks real keys and non-example sealed files; docs cover Flux / Argo / helm-secrets GitOps
+- [x] **CI gate**: a `sops` job installs sops+age and runs `verify.sh` — proving the example is encrypted (no accidental plaintext commit) and round-trips
+- Deferred (documented): cloud-KMS recipients wired into the Helm chart, a Flux `Kustomization` example, and sealing the CloudNativePG app-secret
