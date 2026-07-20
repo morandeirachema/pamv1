@@ -468,6 +468,21 @@ events are also written to the separate tamper-evident `broker_audit_events` cha
 8. Every protected route/connection declares a capability; the role→capability
    matrix in `auth` is the single source of truth (don't inline role checks).
 
+**Known, accepted limitations (documented, not defects):**
+
+- **Session-recording UTF-8 fidelity.** `proxy.Recording.Write` records each read
+  as an asciicast v2 `"o"` frame (`string(p)`), so a multi-byte rune split across
+  two reads lands on a frame boundary; Go's JSON encoder emits U+FFFD for the
+  partial bytes. The recording stays valid JSON and the SHA-256 still covers what
+  was written — only the split rune is cosmetically off in playback. Byte-exact
+  capture of arbitrary binary is out of scope for the text-oriented asciicast
+  format by design.
+- **Local-KEK nonce ceiling.** `LocalKEK.Wrap` uses a random 96-bit AES-GCM nonce
+  per DEK wrap. [NIST SP 800-38D §8.3](https://csrc.nist.gov/pubs/sp/800/38/d/final)
+  bounds a single key to ~2³² random-nonce invocations; one wrap per secret (plus
+  rotations) stays far below that here, and production uses an external KEK
+  (Vault-Transit / KMS / PKCS#11) as invariant 3a already requires.
+
 ## 7. Testing
 
 - `vault`: envelope roundtrip, AAD binding, tamper detection, version rejection, distinct tokens; local KEK wrap/unwrap + tamper; KEK factory; **Transit KMS** wrap/unwrap and full envelope over a mock Vault Transit server; **PKCS#11 HSM** wrap/unwrap + full envelope against SoftHSM2 (tag `pkcs11`, CI).
