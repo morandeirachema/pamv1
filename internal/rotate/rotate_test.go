@@ -91,6 +91,27 @@ func TestSSHConnectorVerifyAndRotate(t *testing.T) {
 	}
 }
 
+// TestSSHConnectorExec proves the one-shot ssh_exec primitive: it authenticates
+// and runs a command (exit 0) with the valid secret, and fails auth on a wrong
+// one.
+func TestSSHConnectorExec(t *testing.T) {
+	const user, pass = "svc-pam", "old-Secret.1"
+	srv := startSSHServer(t, user, pass)
+	target := store.Target{Host: srv.host, Port: srv.port, Protocol: "ssh"}
+	conn := SSHConnector{}
+
+	res, err := conn.Exec(context.Background(), target, user, pass, "whoami")
+	if err != nil {
+		t.Fatalf("exec with valid secret: %v", err)
+	}
+	if res.ExitCode != 0 {
+		t.Fatalf("exit code = %d, want 0", res.ExitCode)
+	}
+	if _, err := conn.Exec(context.Background(), target, user, "wrong", "whoami"); err == nil {
+		t.Fatal("exec with wrong secret should fail auth")
+	}
+}
+
 // TestSSHConnectorRejectsUnsafeUsername checks Rotate refuses a username
 // containing ':' (or newlines) that could corrupt the chpasswd payload.
 // TestSSHConnectorRotateKey proves ssh_key rotation: authenticate with the old

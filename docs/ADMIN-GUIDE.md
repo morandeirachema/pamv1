@@ -8,7 +8,7 @@ procedure, and read the logs and audit trail.
 > admin-facing behavior changes (config, deployment, management, logging). Add a
 > row to the [change log](#12-change-log) with each update.
 >
-> Last updated: 2026-07-20 · Reflects: **Phases 0–11** (through the 5250 management console); Phase 13 (AI-agent access broker) in progress. See the [ROADMAP](../ROADMAP.md).
+> Last updated: 2026-07-20 · Reflects: **Phases 0–12** (through the configuration console + custom-profile RBAC + hot-swap); Phase 13 (AI-agent access broker) in progress. See the [ROADMAP](../ROADMAP.md).
 
 > ⚠️ **Educational / pre-production.** pamv1 is a learning project and is
 > currently intended for **pre-production** use. It has not been security-audited.

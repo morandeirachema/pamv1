@@ -15,6 +15,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"io"
 	"math/big"
@@ -244,6 +245,48 @@ func (c SSHConnector) Rotate(ctx context.Context, target store.Target, username,
 		return fmt.Errorf("rotate command failed: %w: %s", err, strings.TrimSpace(string(out)))
 	}
 	return nil
+}
+
+// ExecResult is the outcome of a one-shot remote command.
+type ExecResult struct {
+	ExitCode int
+	Output   string
+}
+
+// Exec dials the target as username with secret (an ssh_key PEM or a password),
+// runs a single non-interactive command, and returns its combined output and
+// exit code. It is the broker's ssh_exec primitive: one-shot, no PTY/shell,
+// bounded by the connector timeout. A non-zero remote exit is a result, not a
+// transport error; only dial/session failures return err.
+func (c SSHConnector) Exec(ctx context.Context, target store.Target, username, secret, command string) (ExecResult, error) {
+	auth, err := authMethod(secret)
+	if err != nil {
+		return ExecResult{}, err
+	}
+	client, err := c.dialAuth(target, username, auth)
+	if err != nil {
+		return ExecResult{}, fmt.Errorf("ssh auth failed: %w", err)
+	}
+	defer client.Close()
+
+	sess, err := client.NewSession()
+	if err != nil {
+		return ExecResult{}, fmt.Errorf("ssh session: %w", err)
+	}
+	defer sess.Close()
+	defer c.execGuard(ctx, sess)()
+
+	out, err := sess.CombinedOutput(command)
+	res := ExecResult{Output: string(out)}
+	if err != nil {
+		var ee *ssh.ExitError
+		if errors.As(err, &ee) {
+			res.ExitCode = ee.ExitStatus()
+			return res, nil
+		}
+		return res, fmt.Errorf("ssh exec failed: %w", err)
+	}
+	return res, nil
 }
 
 // KeyRotator rotates an SSH **key** credential: it authenticates with the old

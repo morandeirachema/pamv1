@@ -179,6 +179,7 @@ type Server struct {
 	alerter            alert.Notifier
 	rotators           map[string]rotate.Rotator
 	verifiers          map[string]rotate.Verifier
+	sshConnector       rotate.SSHConnector // one-shot SSH exec for the broker's ssh_exec tool
 	airGap             bool
 	discoveryDial      func(ctx context.Context, network, addr string) (net.Conn, error)
 	metrics            *metrics.Metrics
@@ -347,6 +348,7 @@ func New(st store.Store, v *vault.Vault, resolver *auth.Resolver, authn auth.Aut
 		alerter:            alerter,
 		rotators:           rotators,
 		verifiers:          verifiers,
+		sshConnector:       sshConn,
 		airGap:             opts.AirGap,
 		discoveryDial:      opts.DiscoveryDial,
 		reconfigure:        opts.Reconfigure,

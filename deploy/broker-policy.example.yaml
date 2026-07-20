@@ -9,6 +9,12 @@
 #   { not_in: [X] }  absent or not in the block-list
 # There is deliberately no regex, numeric comparison, OR, or nesting. Keep this
 # file in version control; policy changes take effect on restart.
+#
+# Tools available to agents: winrm_exec, ssh_exec (one-shot command; JIT
+# credential, only the output returns), list_targets, list_credentials (metadata
+# only), rotate_credential (new secret stays vaulted), and reveal_credential (the
+# deliberate secret-returning tool — leave it with NO allow rule to keep it
+# default-denied, which is the recommended posture).
 rules:
   # Run a command on an allow-listed lab host, with a scoped, short-lived grant.
   - id: exec-on-lab
@@ -19,12 +25,25 @@ rules:
     scope: "target:{target}:exec"
     ttl_seconds: 60
 
-  # Everything else is denied by default (no matching rule). To require a human
-  # instead of denying, add a require_approval rule with approvers — the approval
-  # and resume flow lands in the next broker increment:
-  #
-  #   - id: exec-elsewhere-needs-approval
-  #     tool: winrm_exec
-  #     effect: require_approval
-  #     approvers: [platform-team]
-  #     scope: "target:{target}:exec"
+  # Read-only inventory is always safe to allow (no secrets are ever returned).
+  - id: read-inventory
+    tool: list_targets
+    effect: allow
+  - id: read-credentials-metadata
+    tool: list_credentials
+    effect: allow
+
+  # Anything on production requires a human: the call parks, an approver decides
+  # via /v1/approvals, and on approval the broker executes it server-side (JIT).
+  - id: exec-on-prod-needs-approval
+    tool: winrm_exec
+    when:
+      args.target: { in: [prod-win-01, prod-win-02] }
+    effect: require_approval
+    approvers: [platform-team]
+    scope: "target:{target}:exec"
+
+  # Everything else is denied by default (no matching rule). reveal_credential is
+  # intentionally absent here, so it stays default-denied; add an allow rule only
+  # if an agent genuinely must hold a secret, and prefer ssh_exec/winrm_exec so
+  # the credential never leaves the broker.
