@@ -49,6 +49,11 @@ func (s *Server) discoveryScan(w http.ResponseWriter, r *http.Request) {
 			if have[c.Host+"/"+c.Protocol] {
 				continue
 			}
+			// Honor the protocol allowlist, exactly like createTarget — discovery
+			// must not onboard a target the policy forbids connecting to.
+			if !s.protocolAllowed(c.Protocol) {
+				continue
+			}
 			t := store.Target{
 				Name: fmt.Sprintf("%s-%s", c.Host, c.Protocol),
 				Host: c.Host, Port: c.Port, OSType: c.OSType, Protocol: c.Protocol,

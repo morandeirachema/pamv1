@@ -115,7 +115,7 @@ func (c *Chain) Head(ctx context.Context, now time.Time) (Checkpoint, error) {
 	cp := Checkpoint{TS: now.UTC(), PublicKey: c.signKey.Public().(ed25519.PublicKey)}
 	if head != nil {
 		cp.LastID = head.ID
-		cp.Count = head.ID // ids are a dense BIGSERIAL, so the max id is the count
+		cp.Count = head.ID // highest row id (a BIGSERIAL upper bound; rolled-back inserts can leave gaps, so this is not an exact row count — truncation detection relies on the signed LastID/Head, not Count)
 		cp.Head = head.HMAC
 	}
 	cp.Signature = ed25519.Sign(c.signKey, checkpointMsg(cp.LastID, cp.Head))

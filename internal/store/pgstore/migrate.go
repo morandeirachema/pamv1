@@ -65,7 +65,7 @@ func migrate(ctx context.Context, pool *pgxpool.Pool) error {
 	}
 	defer conn.Exec(context.Background(), `SELECT pg_advisory_unlock($1)`, migrationLockKey)
 
-	if _, err := pool.Exec(ctx,
+	if _, err := conn.Exec(ctx,
 		`CREATE TABLE IF NOT EXISTS schema_migrations (
 			version    TEXT PRIMARY KEY,
 			applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -78,14 +78,14 @@ func migrate(ctx context.Context, pool *pgxpool.Pool) error {
 	}
 	for _, m := range migrations {
 		var applied bool
-		if err := pool.QueryRow(ctx,
+		if err := conn.QueryRow(ctx,
 			`SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version = $1)`, m.version).Scan(&applied); err != nil {
 			return err
 		}
 		if applied {
 			continue
 		}
-		tx, err := pool.Begin(ctx)
+		tx, err := conn.Begin(ctx)
 		if err != nil {
 			return err
 		}

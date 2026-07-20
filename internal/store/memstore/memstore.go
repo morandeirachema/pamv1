@@ -585,6 +585,9 @@ func (m *Memstore) DeleteAgentKey(_ context.Context, id int64) error {
 func (m *Memstore) CreateBrokerToken(_ context.Context, t *store.BrokerToken) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if _, exists := m.brokerTok[t.JTI]; exists {
+		return store.ErrConflict // match pgstore's PK-violation semantics
+	}
 	m.brokerTok[t.JTI] = *t
 	return nil
 }
@@ -730,8 +733,18 @@ func (m *Memstore) AppendBrokerAudit(_ context.Context, e *store.BrokerAuditEven
 	defer m.mu.Unlock()
 	e.ID = m.id()
 	e.TS = time.Now().UTC()
-	m.brokerLog = append(m.brokerLog, *e)
+	// Deep-copy the hash-chain byte slices so the stored row can't alias (and be
+	// mutated through) the caller's event — parity with pgstore's fresh scans.
+	m.brokerLog = append(m.brokerLog, cloneBrokerEvent(*e))
 	return nil
+}
+
+// cloneBrokerEvent returns a copy whose PrevHash/HMAC byte slices are independent
+// of the argument, so stored and returned rows never alias.
+func cloneBrokerEvent(e store.BrokerAuditEvent) store.BrokerAuditEvent {
+	e.PrevHash = append([]byte(nil), e.PrevHash...)
+	e.HMAC = append([]byte(nil), e.HMAC...)
+	return e
 }
 
 // ListBrokerAudit returns broker audit events oldest-first; limit <= 0 returns
@@ -745,7 +758,9 @@ func (m *Memstore) ListBrokerAudit(_ context.Context, limit int) ([]store.Broker
 		start = n - limit
 	}
 	out := make([]store.BrokerAuditEvent, 0, n-start)
-	out = append(out, m.brokerLog[start:]...)
+	for _, e := range m.brokerLog[start:] {
+		out = append(out, cloneBrokerEvent(e))
+	}
 	return out, nil
 }
 
@@ -757,7 +772,7 @@ func (m *Memstore) GetBrokerAuditHead(_ context.Context) (*store.BrokerAuditEven
 	if len(m.brokerLog) == 0 {
 		return nil, nil
 	}
-	out := m.brokerLog[len(m.brokerLog)-1]
+	out := cloneBrokerEvent(m.brokerLog[len(m.brokerLog)-1])
 	return &out, nil
 }
 

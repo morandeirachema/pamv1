@@ -23,9 +23,10 @@ func (s *Server) withSecurityHeaders(next http.Handler) http.Handler {
 // rateLimiter is a per-key fixed-window limiter (keyed by client IP). It guards
 // authentication endpoints against brute force.
 type rateLimiter struct {
-	perMin int
-	mu     sync.Mutex
-	hits   map[string]*window
+	perMin    int
+	mu        sync.Mutex
+	hits      map[string]*window
+	nextSweep time.Time
 }
 
 type window struct {
@@ -48,6 +49,17 @@ func (rl *rateLimiter) allow(key string) bool {
 	rl.mu.Lock()
 	defer rl.mu.Unlock()
 	now := time.Now()
+	// Periodically evict expired windows so the map can't grow unbounded — an
+	// attacker cycling source IPs (e.g. an IPv6 /64) against the public auth
+	// endpoints would otherwise mint one permanent entry per address.
+	if now.After(rl.nextSweep) {
+		for k, wv := range rl.hits {
+			if now.After(wv.reset) {
+				delete(rl.hits, k)
+			}
+		}
+		rl.nextSweep = now.Add(time.Minute)
+	}
 	w := rl.hits[key]
 	if w == nil || now.After(w.reset) {
 		rl.hits[key] = &window{count: 1, reset: now.Add(time.Minute)}

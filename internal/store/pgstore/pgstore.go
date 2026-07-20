@@ -530,6 +530,9 @@ func (s *PGStore) CreateBrokerToken(ctx context.Context, t *store.BrokerToken) e
 	_, err := s.pool.Exec(ctx,
 		`INSERT INTO broker_tokens (jti, call_id, expires_at) VALUES ($1, $2, $3)`,
 		t.JTI, t.CallID, t.ExpiresAt)
+	if pgCode(err) == pgUniqueViolation {
+		return store.ErrConflict // a duplicate jti maps to the sentinel, like sibling Create*
+	}
 	return err
 }
 

@@ -19,7 +19,7 @@ func (s *Server) mfaEnroll(w http.ResponseWriter, r *http.Request) {
 		OTP string `json:"otp"`
 	}
 	if r.Body != nil {
-		_ = json.NewDecoder(r.Body).Decode(&body)
+		_ = json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&body)
 	}
 	if existing, gerr := s.store.GetMFAEnrollment(r.Context(), p.Name); gerr == nil && existing.Confirmed {
 		if body.OTP == "" || !s.checkSecondFactor(r.Context(), p.Name, existing, body.OTP) {
@@ -122,7 +122,7 @@ func (s *Server) mfaDisable(w http.ResponseWriter, r *http.Request) {
 			OTP string `json:"otp"`
 		}
 		if r.Body != nil {
-			_ = json.NewDecoder(r.Body).Decode(&body)
+			_ = json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&body)
 		}
 		if body.OTP == "" || !s.checkSecondFactor(r.Context(), p.Name, existing, body.OTP) {
 			writeError(w, http.StatusUnauthorized, "current multi-factor code required to disable MFA")

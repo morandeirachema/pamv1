@@ -130,6 +130,7 @@ func TestLoadErrors(t *testing.T) {
 	bad := map[string]string{
 		"unknown key":           "rules:\n  - id: x\n    tool: t\n    effect: allow\n    bogus: 1\n",
 		"unknown operator":      "rules:\n  - id: x\n    tool: t\n    when: { args.b: { regex: '.*' } }\n    effect: allow\n",
+		"typo beside valid op":  "rules:\n  - id: x\n    tool: t\n    when: { args.b: { not: y, reggex: '.*' } }\n    effect: allow\n",
 		"no id":                 "rules:\n  - tool: t\n    effect: allow\n",
 		"invalid effect":        "rules:\n  - id: x\n    tool: t\n    effect: maybe\n",
 		"approval no approvers": "rules:\n  - id: x\n    tool: t\n    effect: require_approval\n",

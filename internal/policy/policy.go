@@ -44,6 +44,16 @@ func (c *Condition) UnmarshalYAML(value *yaml.Node) error {
 		c.Eq = &s
 		return nil
 	case yaml.MappingNode:
+		// Reject unknown operator keys fail-loud: a typo (e.g. "reggex") paired with
+		// a valid operator would otherwise load silently and enforce only the
+		// accidental clause. value.Decode ignores unknown keys, so check them here.
+		for i := 0; i+1 < len(value.Content); i += 2 {
+			switch value.Content[i].Value {
+			case "not", "in", "not_in":
+			default:
+				return fmt.Errorf("policy: unknown condition operator %q (want not|in|not_in)", value.Content[i].Value)
+			}
+		}
 		var m struct {
 			Not   *string  `yaml:"not"`
 			In    []string `yaml:"in"`

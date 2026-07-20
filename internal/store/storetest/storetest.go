@@ -445,6 +445,10 @@ func RunStoreContract(t *testing.T, st store.Store) {
 	if err := st.CreateBrokerToken(ctx, &store.BrokerToken{JTI: "jti-1", CallID: "call_abc", ExpiresAt: time.Now().Add(time.Hour).UTC()}); err != nil {
 		t.Fatalf("CreateBrokerToken: %v", err)
 	}
+	// A duplicate JTI is a conflict in both stores (not a silent overwrite).
+	if err := st.CreateBrokerToken(ctx, &store.BrokerToken{JTI: "jti-1", CallID: "call_other", ExpiresAt: time.Now().Add(time.Hour).UTC()}); !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("CreateBrokerToken(dup): want ErrConflict, got %v", err)
+	}
 	// First consume wins and returns the bound call id.
 	if cid, err := st.ConsumeBrokerToken(ctx, "jti-1"); err != nil || cid != "call_abc" {
 		t.Fatalf("ConsumeBrokerToken: cid=%q err=%v", cid, err)

@@ -29,7 +29,14 @@ func newUnsealState() *unsealState { return &unsealState{} }
 
 // add records a distinct share and returns the current collected set (a copy),
 // resetting first if the collection has expired.
-func (u *unsealState) add(share []byte, now time.Time) [][]byte {
+// maxUnsealShares bounds the pool so a flood of shares can't exhaust memory.
+const maxUnsealShares = 64
+
+// add pools a share and returns the collected set and whether it was accepted. A
+// malformed / poisoning share (duplicate x-coordinate, inconsistent length, or a
+// pool overflow) is refused WITHOUT discarding the shares operators have already
+// contributed — so a single bad submission can't reset a legitimate quorum.
+func (u *unsealState) add(share []byte, now time.Time) ([][]byte, bool) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	if now.After(u.expires) {
@@ -37,12 +44,20 @@ func (u *unsealState) add(share []byte, now time.Time) [][]byte {
 	}
 	for _, s := range u.shares {
 		if bytes.Equal(s, share) {
-			return copyShares(u.shares) // already submitted
+			return copyShares(u.shares), true // idempotent re-submit
 		}
+		// Shamir shares carry a distinct x-coordinate (first byte) and share one
+		// length; a collision or mismatch marks a garbage/poison share.
+		if s[0] == share[0] || len(s) != len(share) {
+			return copyShares(u.shares), false
+		}
+	}
+	if len(u.shares) >= maxUnsealShares {
+		return copyShares(u.shares), false
 	}
 	u.shares = append(u.shares, append([]byte{}, share...))
 	u.expires = now.Add(unsealTTL)
-	return copyShares(u.shares)
+	return copyShares(u.shares), true
 }
 
 // reset discards any collected shares.
@@ -82,7 +97,11 @@ func (s *Server) breakGlassUnseal(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	collected := s.unseal.add(share, time.Now())
+	collected, ok := s.unseal.add(share, time.Now())
+	if !ok {
+		writeError(w, http.StatusUnprocessableEntity, "invalid, duplicate, or inconsistent share")
+		return
+	}
 	if len(collected) < s.bgThreshold {
 		writeJSON(w, http.StatusOK, map[string]any{
 			"collected": len(collected), "needed": s.bgThreshold,

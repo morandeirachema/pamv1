@@ -21,6 +21,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"sync"
@@ -279,6 +280,7 @@ func (p *Proxy) Serve(ctx context.Context, ln net.Listener) error {
 		go func(c net.Conn) {
 			defer wg.Done()
 			defer p.untrackConn(c)
+			defer p.recoverPanic("connection")
 			p.handleConn(ctx, c)
 		}(conn)
 	}
@@ -318,6 +320,15 @@ func (p *Proxy) fireSessionEnd(credID int64) {
 		defer p.bg.Done()
 		p.onSessionEnd(credID)
 	}()
+}
+
+// recoverPanic logs and swallows a panic in a per-connection or per-session
+// goroutine, so one malformed session can't crash the whole proxy — and every
+// other operator's live session (and their unflushed recording) with it.
+func (p *Proxy) recoverPanic(where string) {
+	if r := recover(); r != nil {
+		p.log.Error("ssh proxy: recovered from panic", "where", where, "panic", r, "stack", string(debug.Stack()))
+	}
 }
 
 // closeActiveConns force-closes every tracked client connection. Closing the
@@ -501,6 +512,7 @@ func (p *Proxy) handleConn(ctx context.Context, nConn net.Conn) {
 		wg.Add(1)
 		go func(nc ssh.NewChannel) {
 			defer wg.Done()
+			defer p.recoverPanic("session")
 			p.handleSession(ctx, nc, upstream, target, cred, actor, observe)
 		}(nc)
 	}
