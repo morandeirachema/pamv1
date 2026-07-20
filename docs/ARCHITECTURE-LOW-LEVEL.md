@@ -107,8 +107,10 @@ Pluggable and composable via `NewChain` (try each, first success wins):
 
 - `LDAPAuthenticator` (`ldap.go`) — on-prem AD: binds a service account, searches
   the user under `BaseDN`, reads `memberOf`, re-binds as the user to verify the
-  password, maps groups → role (`roleForGroups`, highest privilege wins). The LDAP
-  connection is behind an `ldapConn` interface so tests inject a fake; real dial uses LDAPS.
+  password, maps groups → roles (`MatchedRoles` — a user in several mapped groups
+  keeps **all** of them, carried on `Principal.Roles`, and `Can` evaluates the
+  **union** of their capabilities). The LDAP connection is behind an `ldapConn`
+  interface so tests inject a fake; real dial uses LDAPS.
 - `EntraAuthenticator` (`entra.go`) — Microsoft Entra ID (Azure AD): OAuth2 ROPC
   grant to the tenant token endpoint (over TLS, back-channel), requesting `openid`
   so Entra returns an **id_token**. It **validates the id_token's RS256 signature
@@ -495,7 +497,7 @@ events are also written to the separate tamper-evident `broker_audit_events` cha
 - `api` (RDP): tunnel disabled without guacd (404), no/invalid token 401, non-connect role 403, non-rdp target 422 (pre-WebSocket checks).
 - `oidc`: Exchange with a real RSA-signed token (valid), and rejects bad signature / wrong issuer / wrong audience / nonce mismatch / expired; PKCE + auth URL.
 - `api` (OIDC): full flow (start redirect → callback with a signed token → session → admin role enforced), bad-state error redirect, not-configured 404.
-- `auth` (Entra/chain): Entra app-role & group login, highest-privilege-wins, bad password, no mapped role (mock token endpoint); chain resolves via a later source and rejects when none match.
+- `auth` (Entra/chain): Entra app-role & group login, multi-group role **union** (`TestMatchedRoles`/`TestMultiGroupUnion`), bad password, no mapped role (mock token endpoint); chain resolves via a later source and rejects when none match.
 - `shamir`: split/combine roundtrip (any M reconstruct), below-threshold and corrupted shares don't, validation.
 - `alert`: webhook receives the event; no-op is safe.
 - `api` (break-glass): quorum unseal issues a break-glass session that reads audit + fires unseal & access alerts; wrong shares 401; not-configured 404.

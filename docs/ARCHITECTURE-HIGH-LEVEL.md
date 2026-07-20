@@ -9,7 +9,7 @@
 > [ARCHITECTURE-DIAGRAMS.md](ARCHITECTURE-DIAGRAMS.md). This file holds the
 > hand-authored conceptual diagrams below.
 >
-> Last updated: 2026-07-20 · Reflects: **Phases 0–11 shipped** (through the 5250 management console) and **Phase 13** (AI-agent access broker) in progress; **Phase 12** (configuration subsystem + custom-profile RBAC) planned. See the [ROADMAP](../ROADMAP.md) for the authoritative per-phase status.
+> Last updated: 2026-07-20 · Reflects: **Phases 0–14 shipped** — through the 5250 management console (11), the configuration subsystem + custom-profile RBAC (12), the AI-agent access broker (13), and SOPS-encrypted Kubernetes secrets (14). See the [ROADMAP](../ROADMAP.md) for the authoritative per-phase status.
 
 ## 1. Purpose
 
@@ -91,9 +91,16 @@ capability matrix:
 | **admin** | everything: manage targets/credentials/users, reveal secrets, connect, read audit | — |
 | **user** | connect to targets through the proxy, read the inventory | manage, reveal, read audit |
 | **auditor** | read the inventory and the audit trail | manage, reveal, connect |
-| **approver** | read inventory + audit, approve/deny access requests (endpoints: later phase) | manage, reveal, connect |
+| **approver** | read inventory + audit, approve/deny access requests (`/api/access-requests`, 4-eyes) | manage, reveal, connect |
 
-Identity today is a per-user access token (or the bootstrap admin key / break-glass key); AD-backed login with group→role mapping arrives in Phase 3b.
+Beyond the four built-in roles, admins define **custom permission profiles** — named
+capability sets assignable to users (Phase 12) — and AI agents authenticate as a
+non-human `agent` role that can only call broker tools (Phase 13).
+
+Identity is a per-user access token, the bootstrap admin key, the break-glass key,
+or a directory login (AD/LDAP, Entra ID, OIDC — Phase 3b). A directory user in
+several mapped groups carries **all** the roles they map to and is granted the
+**union** of those capabilities (not just the single highest role).
 
 ## 4. Key flows
 
@@ -160,8 +167,10 @@ flowchart LR
 
 | Date | Change |
 |---|---|
-| 2026-07-20 | Phase 13 (in progress): **AI-agent access broker** — a policy engine decides allow/deny/require-approval on a tool call **and its arguments**; approved calls execute server-side with a just-in-time credential (the agent never holds one); keyed-HMAC **verifiable audit chain** + signed head. Opt-in via `PAM_BROKER_POLICY_FILE`. MCP transport + SPIFFE identity land in later increments |
-| 2026-07-20 | Phase 12 (planned): **configuration subsystem + custom-profile RBAC** — directory/SSO/policy bindings become editable (hybrid: DB-persisted vs IaC), named permission profiles assignable to users/groups |
+| 2026-07-20 | Post-review hardening: a directory user now gets the **union** of every mapped group's role (not the single highest); a parked agent approval is **re-validated at decision time** (revoked key / expired SVID refused); broker-audit append serializes across processes under a **Postgres advisory lock** so a rolling-deploy/HA overlap can't fork the hash chain; numeric policy args match in plain decimal |
+| 2026-07-20 | Phase 14: **SOPS-encrypted secrets** — the Kubernetes Secret manifest is sealed with [SOPS](https://github.com/getsops/sops)+[age](https://age-encryption.org/) (`encrypted_regex` over `data`/`stringData`) so it lives in the IaC repo without leaking; `apply.sh` streams decrypt→`kubectl apply` (plaintext never on disk); a CI `sops` job proves the committed example is encrypted and round-trips |
+| 2026-07-20 | Phase 13: **AI-agent access broker** — a policy engine decides allow/deny/require-approval on a tool call **and its arguments**; approved calls execute server-side with a just-in-time credential (the agent never holds one); keyed-HMAC **verifiable audit chain** + signed head. Opt-in via `PAM_BROKER_POLICY_FILE`. Ships with approval/resume + single-use tokens, an **MCP** JSON-RPC transport (`POST /mcp`), and **SPIFFE JWT-SVID + RFC 8693 delegation** identity |
+| 2026-07-20 | Phase 12: **configuration subsystem + custom-profile RBAC** — directory/SSO/policy bindings become editable (hybrid: DB-persisted overrides vs IaC-only transport/TLS), hot-swapped without a restart; named permission profiles assignable to users; 5250 console screens for profiles, config, and effective-config/IaC export |
 | 2026-07-20 | Phase 11: **full 5250 management console** — role-aware menu (`GET /api/me`) surfacing every operation (targets+grants, credentials, active sessions + kill, 4-eyes approvals, check-out, users, MFA, discovery, reconcile, audit export, break-glass) |
 | 2026-07-19 | Phase 10: scale & operations — Prometheus `/metrics`, health/readiness split (`/readyz`), Helm chart, SBOM + cosign-signed release pipeline |
 | 2026-07-19 | Phase 9: NIS2 compliance pack — tamper-evident audit export for Art. 23 incident reporting, Art. 21 control matrix, retention/SIEM guidance |

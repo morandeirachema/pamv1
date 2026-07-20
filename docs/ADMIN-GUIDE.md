@@ -8,7 +8,7 @@ procedure, and read the logs and audit trail.
 > admin-facing behavior changes (config, deployment, management, logging). Add a
 > row to the [change log](#12-change-log) with each update.
 >
-> Last updated: 2026-07-20 · Reflects: **Phases 0–12** (through the configuration console + custom-profile RBAC + hot-swap); Phase 13 (AI-agent access broker) in progress. See the [ROADMAP](../ROADMAP.md).
+> Last updated: 2026-07-20 · Reflects: **Phases 0–14** — configuration console + custom-profile RBAC + hot-swap (12), the AI-agent access broker (13), and SOPS-encrypted Kubernetes secrets (14). See the [ROADMAP](../ROADMAP.md).
 
 > ⚠️ **Educational / pre-production.** pamv1 is a learning project and is
 > currently intended for **pre-production** use. It has not been security-audited.
@@ -114,6 +114,14 @@ kubectl apply -f deploy/k8s/
 kubectl -n pamv1 logs deploy/pam-server -f
 ```
 
+The `create secret` above keeps the plaintext out of Git but only lives in the
+cluster. For **GitOps**, seal the Secret manifest instead: Phase 14 ships a
+[SOPS](https://github.com/getsops/sops)+[age](https://age-encryption.org/) flow
+under [`deploy/k8s/sops/`](../deploy/k8s/sops/) — `apply.sh` streams
+`sops --decrypt | kubectl apply -f -` (plaintext never touches disk) and only the
+encrypted manifest is committed. See its [README](../deploy/k8s/sops/README.md)
+for Flux/Argo/helm-secrets wiring.
+
 The deployment runs non-root, read-only root filesystem, all capabilities
 dropped, under the restricted [Pod Security Standard](https://kubernetes.io/docs/concepts/security/pod-security-standards/). Recordings and the host key live on a writable `/data` volume. Readiness is gated on `/readyz` (DB reachable), liveness on `/healthz`.
 
@@ -182,6 +190,15 @@ All configuration is environment variables (12-factor). Full descriptions in
 | `PAM_APPROVAL_WINDOW_MIN` | | `60` | How long an approved access request stays valid. |
 | `PAM_CHECKOUT_TTL_MIN` | | `30` | Credential checkout lease lifetime (minutes). |
 | `PAM_OT_AIRGAP` | | `false` | Disable all outbound calls (alert webhooks) for air-gapped sites. |
+| `PAM_REVEAL_DISABLED` | | `false` | Make `reveal` break-glass-only (also forces the broker's `reveal_credential` closed). |
+| `PAM_BROKER_POLICY_FILE` | | (off) | YAML policy file — **its presence enables the AI-agent access broker** (Phase 13). |
+| `PAM_BROKER_AUDIT_KEY` | broker only | — | base64 32-byte HMAC key for the verifiable audit chain (required once the broker is on). |
+| `PAM_BROKER_AUDIT_SIGN_SEED` | broker only | — | base64 32-byte ed25519 seed signing the audit-chain head (truncation detection). |
+| `PAM_BROKER_TOKEN_TTL_MIN` | | `15` | Lifetime of the single-use approval resume token (minutes). |
+| `PAM_BROKER_RATE_PER_MIN` | | `0` (off) | Per-agent tool-call rate limit. |
+| `PAM_BROKER_MAX_ARG_BYTES` | | `16384` | Cap on a tool call's serialized arguments (0 = off). |
+| `PAM_BROKER_TRUST_DOMAIN` / `_TRUST_DOMAIN_JWKS` / `_AUDIENCE` | SVID only | — | SPIFFE JWT-SVID verification: trust-domain host, file JWKS, and required audience. |
+| `PAM_BROKER_MAX_DELEGATION_DEPTH` | | `1` | RFC 8693 `act`-chain delegation depth cap. |
 
 The examples below use `-H "X-API-Key: $PAM_API_KEY"`; in production call the
 HTTPS endpoint of your ingress instead of `http://localhost:8080`.
@@ -439,10 +456,12 @@ PAM_LDAP_GROUP_APPROVER=CN=PAM-Approvers,OU=Groups,DC=example,DC=com
 ```
 
 How it works: pam-server binds the service account, finds the user, verifies the
-password by binding as them, and derives the role from group membership (highest
-privilege wins). `POST /api/login` then returns a **session token** (12h) that
-works in the portal and the SSH proxy exactly like a per-user token. A user in no
-mapped group is rejected. Keep the bootstrap `PAM_API_KEY` and break-glass key as
+password by binding as them, and derives roles from group membership. A user in
+several mapped groups keeps **all** of them and is granted the **union** of their
+capabilities (not just the single highest role) — e.g. someone in both PAM-Users
+and PAM-Auditors can connect *and* read the audit trail. `POST /api/login` then
+returns a **session token** (12h) that works in the portal and the SSH proxy
+exactly like a per-user token. A user in no mapped group is rejected. Keep the bootstrap `PAM_API_KEY` and break-glass key as
 the local emergency path if AD is unreachable.
 
 **Identity reconciliation.** With LDAP configured, revoke pamv1 access for users
@@ -463,7 +482,9 @@ local service accounts). A directory error never revokes.
 
 For cloud identities, enable Entra ID login alongside or instead of on-prem AD.
 pamv1 uses the OAuth2 **resource-owner-password** grant against your tenant and
-reads the user's **app roles** (or group ids) from the token to derive the role.
+reads the user's **app roles** (or group ids) from the token to derive roles —
+several matched app-roles/groups grant the **union** of their capabilities, the
+same as on-prem AD.
 
 ```bash
 PAM_ENTRA_TENANT_ID=<tenant-guid>
@@ -540,6 +561,72 @@ login if you lose your authenticator; each works exactly once.
 a user without confirmed MFA returns an **enrollment-only** session — it can *only*
 call the `/api/mfa/*` endpoints (everything else, including the SSH proxy, is
 refused) until the user enrolls and confirms, then logs in again with a code.
+
+### AI-agent access broker (Phase 13)
+
+The broker extends the "trust the chokepoint, not the agent" model to AI agents:
+an agent holds only an identity key, a **policy** decides `allow` / `require_approval`
+/ `deny` on each tool call **and its arguments**, approved actions run **server-side
+with a just-in-time credential**, and the agent gets back only the result — never
+a secret. It is **off** until you point `PAM_BROKER_POLICY_FILE` at a policy file;
+the audit key + sign seed are then required (fail-loud). See the [config
+reference](#4-configuration-reference) for the full `PAM_BROKER_*` set.
+
+**Enable it:**
+
+```bash
+export PAM_BROKER_POLICY_FILE=/etc/pam/broker-policy.yaml
+export PAM_BROKER_AUDIT_KEY=$(openssl rand -base64 32)        # HMAC chain key
+export PAM_BROKER_AUDIT_SIGN_SEED=$(openssl rand -base64 32)  # ed25519 head signer
+# optional: PAM_BROKER_RATE_PER_MIN=60  PAM_BROKER_TOKEN_TTL_MIN=15
+```
+
+**Policy** is ordered, **first-match-wins**, and **implicit-deny** (no match =
+denied). Conditions match an argument's value exactly (no regex/numeric/OR):
+
+```yaml
+rules:
+  - id: allow-read-inventory
+    tool: list_targets
+    effect: allow
+  - id: prod-needs-human
+    tool: winrm_exec
+    when: { args.target: prod-dc-01 }
+    effect: require_approval
+    approvers: [platform-team]
+  - id: never-reveal
+    tool: reveal_credential
+    effect: deny            # reveal_credential ships default-deny anyway
+```
+
+**Mint an agent identity** (admin, `CapManageUsers`); the token is shown once:
+
+```bash
+curl -sX POST https://pam.example/v1/agents -H "X-API-Key: $PAM_API_KEY" \
+  -d '{"name":"ci-bot","owner":"alice"}'      # → {"id":1,"token":"agt_…"}
+```
+
+The agent then calls tools with `Authorization: Bearer agt_…` at `POST /v1/tool-calls`
+(or over MCP JSON-RPC at `POST /mcp`). An `allow` executes and returns the result;
+a `require_approval` **parks** the call and returns a `call_id` + single-use resume
+token. Revoke/list agents with `DELETE /v1/agents/{id}` / `GET /v1/agents`.
+
+**Approve parked calls** (an `approver`, four-eyes — you can't approve your own
+agent's call): `GET /v1/approvals`, then `POST /v1/approvals/{call_id}/decision`
+with `{"approve":true}`. On approve the broker executes server-side and the agent
+collects the result once via its resume token. A call whose agent key was revoked —
+or whose SVID expired — since parking is **refused at approval time**, not run.
+
+**Verify the tamper-evident trail:** every tool call is written to a keyed-HMAC
+hash chain. `GET /v1/audit/verify` walks it and reports the first broken id (an
+edit or mid-history deletion); `GET /v1/audit/head` returns an ed25519-signed
+anchor so an auditor can later detect tail truncation. Appends are serialized
+across processes by a Postgres advisory lock, so a rolling deploy or HA replica
+can't fork the chain.
+
+For SPIFFE JWT-SVID agents and RFC 8693 delegation, set `PAM_BROKER_TRUST_DOMAIN`,
+`PAM_BROKER_TRUST_DOMAIN_JWKS`, and `PAM_BROKER_AUDIENCE`; delegation depth is
+capped by `PAM_BROKER_MAX_DELEGATION_DEPTH`.
 
 ---
 
@@ -747,6 +834,11 @@ evidence). Replay with [asciinema](https://asciinema.org/): `asciinema play <fil
 
 | Date | Change |
 |---|---|
+| 2026-07-20 | Post-review hardening: directory logins grant the **union** of every mapped group's role (not the single highest); a parked agent approval is **re-validated at decision time** (revoked key / expired SVID refused); broker-audit append serializes under a Postgres advisory lock so a rolling-deploy/HA overlap can't fork the hash chain; numeric policy arguments match in plain decimal |
+| 2026-07-20 | Phase 14: **SOPS-encrypted Kubernetes secrets** — seal the Secret manifest with [SOPS](https://github.com/getsops/sops)+[age](https://age-encryption.org/) and keep it in Git; `deploy/k8s/sops/apply.sh` streams decrypt→`kubectl apply` (plaintext never on disk). See [deploy/k8s/sops/README.md](../deploy/k8s/sops/README.md) |
+| 2026-07-20 | Phase 13: **AI-agent access broker** — opt-in via `PAM_BROKER_POLICY_FILE`; policy-gated tool calls with JIT server-side execution, approval/resume + single-use tokens, an MCP transport (`POST /mcp`), SPIFFE JWT-SVID identity, and a keyed-HMAC verifiable audit chain (`GET /v1/audit/verify`/`/head`). See §7 → *AI-agent access broker* |
+| 2026-07-20 | Phase 12: **configuration subsystem + custom-profile RBAC** — DB-persisted `PAM_*` overrides editable from the 5250 console and **hot-swapped without a restart** (`GET/PUT /api/config`, §4.1), named permission profiles (`/api/profiles`, §7), and effective-config/IaC export (`GET /api/config/iac`) |
+| 2026-07-20 | Phase 11: **management console** — the 5250 portal becomes a role-aware console over every API (`GET /api/me`-driven menu) |
 | 2026-07-19 | PKCS#11 HSM KEK provider (`pkcs11` build tag, `Dockerfile.pkcs11`, `PAM_KEK_PKCS11_*`); verified against SoftHSM2 |
 | 2026-07-19 | Phase 7 follow-ons: credential checkout/check-in leases (auto-rotate on return), discovery scan; system requirements ([REQUIREMENTS.md](REQUIREMENTS.md)) |
 | 2026-07-19 | Phase 10: scale & ops — Prometheus `/metrics`, `/readyz` readiness, Helm chart (`deploy/helm/pamv1`), SBOM + cosign-signed release workflow |

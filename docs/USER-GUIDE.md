@@ -32,7 +32,8 @@ You never see the target's password — and that's by design.
 
 ## 2. Your role decides what you can do
 
-An administrator assigns you one of four roles:
+An administrator assigns you one of four built-in roles (or a **custom permission
+profile** — a named set of the same capabilities, tailored by your admin):
 
 | Your role | You can | You cannot |
 |---|---|---|
