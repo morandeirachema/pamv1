@@ -21,6 +21,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -159,7 +160,11 @@ func New(st store.Store, v *vault.Vault, resolver *auth.Resolver, cfg Config) (*
 func (p *Proxy) authenticate(c ssh.ConnMetadata, password []byte) (*ssh.Permissions, error) {
 	principal, err := p.resolver.Resolve(context.Background(), string(password))
 	if err != nil {
-		p.log.Warn("authentication failed", "login", c.User(), "remote", c.RemoteAddr().String())
+		remote := c.RemoteAddr().String()
+		p.log.Warn("authentication failed", "login", c.User(), "remote", remote)
+		// Record failed proxy auth in the audit store (not just the log), so
+		// credential-stuffing against the proxy is visible in the system-of-record.
+		p.audit(context.Background(), c.User(), "proxy.auth_failed", "remote:"+remote)
 		return nil, fmt.Errorf("pamv1: authentication failed")
 	}
 	// A "+observe" suffix requests a read-only (view-only) session: the operator
@@ -682,6 +687,17 @@ func (p *Proxy) handleSession(ctx context.Context, nc ssh.NewChannel, upstream *
 	// The client→upstream request pump is joined so its in-flight reply (notably
 	// the exec/shell reply the client's Session.Start blocks on) is guaranteed to
 	// reach clientChan before the deferred clientChan.Close() below tears it down.
+	// Capture a non-interactive `ssh <target> "<cmd>"` into the recording + audit:
+	// the command rides the exec request payload, not the tee'd channel data, so
+	// without this it would appear in neither the .cast nor the audit trail.
+	onExec := func(payload []byte) {
+		var m struct{ Command string }
+		_ = ssh.Unmarshal(payload, &m)
+		if rec != nil {
+			_, _ = io.WriteString(rec, "$ "+m.Command+"\r\n")
+		}
+		p.audit(ctx, actor, "ssh.exec", fmt.Sprintf("target:%s cred_user:%s via:proxy cmd:%s", target.Name, cred.Username, auditCmd(m.Command)))
+	}
 	clientReqDone := make(chan struct{}) // stops the pump between requests
 	var clientReqPump sync.WaitGroup
 	clientReqPump.Add(1)
@@ -690,14 +706,14 @@ func (p *Proxy) handleSession(ctx context.Context, nc ssh.NewChannel, upstream *
 		if observe {
 			pumpRequestsObserver(clientReqs, upChan, clientReqDone)
 		} else {
-			pumpRequests(clientReqs, upChan, clientReqDone)
+			pumpRequests(clientReqs, upChan, clientReqDone, onExec)
 		}
 	}()
 	var upReqDone sync.WaitGroup
 	upReqDone.Add(1)
 	go func() {
 		defer upReqDone.Done()
-		pumpRequests(upReqs, clientChan, nil) // exits when the upstream channel closes
+		pumpRequests(upReqs, clientChan, nil, nil) // exits when the upstream channel closes
 	}()
 
 	// Target stderr -> operator, also tee'd into the recording so the audited
@@ -871,13 +887,15 @@ func (p *Proxy) winrmShellLoop(ctx context.Context, ch ssh.Channel, target *stor
 			return
 		}
 		line := strings.TrimRight(scanner.Text(), "\r\n")
-		fmt.Fprint(out, "\r\n") // echo the newline for the recording
 		switch strings.TrimSpace(line) {
 		case "":
+			fmt.Fprint(out, "\r\n")
 			continue
 		case "exit", "quit", "logout":
+			fmt.Fprint(out, "\r\n")
 			return
 		}
+		// winrmRun echoes the command into the recording itself.
 		p.winrmRun(ctx, ch, target, cred, secret, actor, observe, rec, line)
 	}
 }
@@ -886,9 +904,13 @@ func (p *Proxy) winrmShellLoop(ctx context.Context, ch ssh.Channel, target *stor
 // audits it, returning the remote exit code. In observer mode it refuses to run.
 func (p *Proxy) winrmRun(ctx context.Context, ch ssh.Channel, target *store.Target, cred *store.Credential, secret, actor string, observe bool, rec io.Writer, command string) int {
 	out := recWriter(ch, rec)
+	// Echo the command into the recording (WinRM output doesn't echo the input the
+	// way an interactive SSH shell does) so the .cast is a faithful record of what
+	// was run — the non-repudiation guarantee.
+	fmt.Fprintf(out, "%s\r\n", command)
 	if observe {
 		fmt.Fprint(out, "pamv1: read-only session, command ignored\r\n")
-		p.audit(ctx, actor, "access.denied", "target:"+target.Name+" reason:observer-winrm")
+		p.audit(ctx, actor, "access.denied", "target:"+target.Name+" reason:observer-winrm cmd:"+auditCmd(command))
 		return 1
 	}
 	res, err := p.winrm.Run(ctx, target.Host, target.Port, cred.Username, secret, command)
@@ -903,8 +925,18 @@ func (p *Proxy) winrmRun(ctx context.Context, ch ssh.Channel, target *store.Targ
 	if res.Stderr != "" {
 		io.WriteString(out, crlf(res.Stderr))
 	}
-	p.audit(ctx, actor, "winrm.run", fmt.Sprintf("target:%s cred_user:%s via:proxy exit:%d", target.Name, cred.Username, res.ExitCode))
+	p.audit(ctx, actor, "winrm.run", fmt.Sprintf("target:%s cred_user:%s via:proxy exit:%d cmd:%s", target.Name, cred.Username, res.ExitCode, auditCmd(command)))
 	return res.ExitCode
+}
+
+// auditCmd renders a command for an audit detail, quoted and length-capped so a
+// long or newline-bearing command can't bloat or break the audit row.
+func auditCmd(command string) string {
+	const cap = 400
+	if len(command) > cap {
+		command = command[:cap] + "…"
+	}
+	return strconv.Quote(command)
 }
 
 // recWriter returns a writer that sends to the client channel and, when set, tees
@@ -927,12 +959,18 @@ func crlf(s string) string {
 // before the pump returns, so a caller can join it to guarantee an in-flight
 // reply (e.g. the exec/shell reply) reaches its channel before that channel is
 // torn down. A nil done means "run until in closes".
-func pumpRequests(in <-chan *ssh.Request, dst ssh.Channel, done <-chan struct{}) {
+// onExec, when non-nil, is invoked with each "exec" request's payload before it
+// is forwarded, so the caller can capture the command into the recording + audit
+// (the request payload never appears in the tee'd channel data).
+func pumpRequests(in <-chan *ssh.Request, dst ssh.Channel, done <-chan struct{}, onExec func([]byte)) {
 	for {
 		select {
 		case req, ok := <-in:
 			if !ok {
 				return
+			}
+			if onExec != nil && req.Type == "exec" {
+				onExec(req.Payload)
 			}
 			okr, err := dst.SendRequest(req.Type, req.WantReply, req.Payload)
 			if req.WantReply {

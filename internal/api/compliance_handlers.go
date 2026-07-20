@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/csv"
 	"encoding/hex"
@@ -21,9 +22,9 @@ import (
 //	actor, action optional substring/exact filters to scope an incident
 //	format        json (default) | csv
 //
-// The response carries a SHA-256 over the canonical event list (JSON body field
-// "sha256" and the X-PAM-Export-SHA256 header) so a regulator can verify the
-// export was not altered after generation. The export itself is audited.
+// The X-PAM-Export-SHA256 header is a SHA-256 over the exact delivered bytes (the
+// JSON or CSV artifact), so a regulator can `sha256sum` the file and match the
+// header. The export — its scope and digest — is itself audited.
 func (s *Server) exportAudit(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	since, err := parseTimeParam(q.Get("since"))
@@ -43,19 +44,16 @@ func (s *Server) exportAudit(w http.ResponseWriter, r *http.Request) {
 	}
 	events = filterAudit(events, q.Get("actor"), q.Get("action"))
 
-	// Canonical digest over the filtered events (tamper evidence).
-	canonical, _ := json.Marshal(events)
-	sum := sha256.Sum256(canonical)
-	digest := hex.EncodeToString(sum[:])
-
-	s.audit(r.Context(), "audit.export",
-		fmt.Sprintf("events:%d since:%s until:%s sha256:%s", len(events), q.Get("since"), q.Get("until"), digest))
-	w.Header().Set("X-PAM-Export-SHA256", digest)
-
+	// Build the exact artifact bytes for the requested format, then hash THOSE — so
+	// `sha256sum <downloaded file>` matches the X-PAM-Export-SHA256 header for both
+	// json and csv (previously the digest was always over the JSON, so it never
+	// matched a delivered CSV). The sha256 moves to the header only (embedding it in
+	// the JSON body would make the body un-hashable against itself).
+	var body []byte
+	contentType, filename := "application/json", "pamv1-audit-export.json"
 	if q.Get("format") == "csv" {
-		w.Header().Set("Content-Type", "text/csv")
-		w.Header().Set("Content-Disposition", "attachment; filename=pamv1-audit-export.csv")
-		cw := csv.NewWriter(w)
+		var buf bytes.Buffer
+		cw := csv.NewWriter(&buf)
 		_ = cw.Write([]string{"id", "ts", "actor", "action", "detail"})
 		for _, e := range events {
 			_ = cw.Write([]string{
@@ -64,16 +62,30 @@ func (s *Server) exportAudit(w http.ResponseWriter, r *http.Request) {
 			})
 		}
 		cw.Flush()
-		return
+		body = buf.Bytes()
+		contentType, filename = "text/csv", "pamv1-audit-export.csv"
+	} else {
+		// No wall-clock field in the hashed body: it must stay deterministic over a
+		// fixed window so a regulator re-running the export gets the same digest (the
+		// export time is captured in the audit.export event instead).
+		body, _ = json.MarshalIndent(map[string]any{
+			"count":  len(events),
+			"events": events,
+		}, "", "  ")
 	}
+	sum := sha256.Sum256(body)
+	digest := hex.EncodeToString(sum[:])
 
-	w.Header().Set("Content-Disposition", "attachment; filename=pamv1-audit-export.json")
-	writeJSON(w, http.StatusOK, map[string]any{
-		"generated_at": time.Now().UTC(),
-		"count":        len(events),
-		"sha256":       digest,
-		"events":       events,
-	})
+	// Record the FULL query (filter included) with the digest, so the export is
+	// attributable to a known scope and the digest can be tied to what it covers.
+	s.audit(r.Context(), "audit.export", fmt.Sprintf(
+		"events:%d format:%s since:%s until:%s actor:%q action:%q sha256:%s",
+		len(events), contentType, q.Get("since"), q.Get("until"), q.Get("actor"), q.Get("action"), digest))
+
+	w.Header().Set("X-PAM-Export-SHA256", digest)
+	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("Content-Disposition", "attachment; filename="+filename)
+	_, _ = w.Write(body)
 }
 
 // csvSafe defuses spreadsheet formula injection: a cell that a spreadsheet would

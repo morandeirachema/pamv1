@@ -552,15 +552,7 @@ func (s *Server) authz(cap auth.Capability, next http.HandlerFunc) http.Handler 
 		}
 		setActor(r.Context(), p.Name)
 		ctx := withPrincipal(r.Context(), p)
-		if p.BreakGlass {
-			s.metrics.BreakGlass()
-			s.log.Warn("BREAK-GLASS access", "method", r.Method, "path", r.URL.Path, "remote", r.RemoteAddr)
-			s.audit(ctx, "breakglass.access", r.Method+" "+r.URL.Path)
-			s.alerter.Notify(ctx, alert.Event{
-				Type: "breakglass.access", Actor: p.Name,
-				Detail: r.Method + " " + r.URL.Path, Remote: r.RemoteAddr, Time: time.Now(),
-			})
-		}
+		s.noteBreakGlass(ctx, p, r)
 		if p.EnrollOnly {
 			s.audit(ctx, "authz.denied", r.Method+" "+r.URL.Path+" reason:mfa-enrollment-incomplete")
 			writeError(w, http.StatusForbidden, "complete MFA enrollment to continue")
@@ -574,6 +566,23 @@ func (s *Server) authz(cap auth.Capability, next http.HandlerFunc) http.Handler 
 			return
 		}
 		next(w, r.WithContext(ctx))
+	})
+}
+
+// noteBreakGlass loudly records and alerts a break-glass access (the security
+// invariant: break-glass use is always audited + alerted). Every entry point that
+// resolves its own principal outside the authz middleware — e.g. the RDP tunnel —
+// must call this, or an emergency-key privileged action would go unnoticed.
+func (s *Server) noteBreakGlass(ctx context.Context, p *auth.Principal, r *http.Request) {
+	if !p.BreakGlass {
+		return
+	}
+	s.metrics.BreakGlass()
+	s.log.Warn("BREAK-GLASS access", "method", r.Method, "path", r.URL.Path, "remote", r.RemoteAddr)
+	s.audit(ctx, "breakglass.access", r.Method+" "+r.URL.Path)
+	s.alerter.Notify(ctx, alert.Event{
+		Type: "breakglass.access", Actor: p.Name,
+		Detail: r.Method + " " + r.URL.Path, Remote: r.RemoteAddr, Time: time.Now(),
 	})
 }
 

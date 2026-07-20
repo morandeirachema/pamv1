@@ -32,6 +32,12 @@ func (s *Server) rdpTunnel(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, "invalid or missing token")
 		return
 	}
+	// This handler resolves its own principal (WebSocket token, not X-API-Key), so
+	// it bypasses the authz middleware and must reproduce the loud break-glass
+	// audit/alert itself.
+	setActor(r.Context(), principal.Name)
+	r = r.WithContext(withPrincipal(r.Context(), principal))
+	s.noteBreakGlass(r.Context(), principal, r)
 	if principal.EnrollOnly || !principal.Can(auth.CapConnect) {
 		writeError(w, http.StatusForbidden, "your role does not permit RDP access")
 		return

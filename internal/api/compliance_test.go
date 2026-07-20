@@ -1,6 +1,8 @@
 package api_test
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -48,8 +50,7 @@ func TestAuditExportJSON(t *testing.T) {
 		t.Fatal("missing X-PAM-Export-SHA256 header")
 	}
 	var out struct {
-		Count  int    `json:"count"`
-		SHA256 string `json:"sha256"`
+		Count  int `json:"count"`
 		Events []struct {
 			Action string `json:"action"`
 		} `json:"events"`
@@ -60,8 +61,11 @@ func TestAuditExportJSON(t *testing.T) {
 	if out.Count < 2 || len(out.Events) != out.Count {
 		t.Fatalf("count mismatch: count=%d events=%d", out.Count, len(out.Events))
 	}
-	if out.SHA256 != hdrDigest {
-		t.Fatalf("body sha256 %q != header %q", out.SHA256, hdrDigest)
+	// The header digest must be the SHA-256 of the exact delivered bytes, so a
+	// regulator can sha256sum the downloaded file and match it.
+	sum := sha256.Sum256(body)
+	if hex.EncodeToString(sum[:]) != hdrDigest {
+		t.Fatalf("header digest %q != sha256(body)", hdrDigest)
 	}
 
 	// Deterministic over a fixed range: two exports of the same closed window
