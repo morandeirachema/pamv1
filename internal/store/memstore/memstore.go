@@ -604,6 +604,32 @@ func (m *Memstore) ConsumeBrokerToken(_ context.Context, jti string) (string, er
 	return t.CallID, nil
 }
 
+// PeekBrokerToken returns a token's bound call id without spending it.
+func (m *Memstore) PeekBrokerToken(_ context.Context, jti string) (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	t, ok := m.brokerTok[jti]
+	if !ok || t.UsedAt != nil || time.Now().After(t.ExpiresAt) {
+		return "", store.ErrNotFound
+	}
+	return t.CallID, nil
+}
+
+// DeleteExpiredBrokerTokens removes spent or expired tokens (periodic GC).
+func (m *Memstore) DeleteExpiredBrokerTokens(_ context.Context) (int64, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var n int64
+	now := time.Now()
+	for jti, t := range m.brokerTok {
+		if t.UsedAt != nil || now.After(t.ExpiresAt) {
+			delete(m.brokerTok, jti)
+			n++
+		}
+	}
+	return n, nil
+}
+
 // PutSetting upserts a configuration override, stamping UpdatedAt.
 func (m *Memstore) PutSetting(_ context.Context, s *store.Setting) error {
 	m.mu.Lock()

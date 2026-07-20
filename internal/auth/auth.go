@@ -104,6 +104,17 @@ func (r Role) Can(c Capability) bool {
 	return roleCaps[r][c]
 }
 
+// CapabilitySet returns the concrete capability set a built-in role confers.
+func (r Role) CapabilitySet() CapSet {
+	out := make(CapSet)
+	for c := CapReadInventory; c <= CapCallTool; c++ {
+		if r.Can(c) {
+			out[c] = true
+		}
+	}
+	return out
+}
+
 // capNames maps each capability to a stable snake_case name. The portal keys its
 // role-aware menu off these, so they are part of the /api/me contract — do not
 // rename without updating the portal.
@@ -211,6 +222,19 @@ func (p *Principal) Can(c Capability) bool {
 		return p.Caps[c]
 	}
 	return p.Role.Can(c)
+}
+
+// Covers reports whether the principal holds every capability in want. It backs
+// the "you cannot grant more than you have" rule when minting users or profiles,
+// so a delegated user-admin can never escalate past its own capabilities. The
+// bootstrap/break-glass admin holds every capability, so it is unconstrained.
+func (p *Principal) Covers(want CapSet) bool {
+	for c, needed := range want {
+		if needed && !p.Can(c) {
+			return false
+		}
+	}
+	return true
 }
 
 // CapabilityNames returns the stable names of the principal's capabilities

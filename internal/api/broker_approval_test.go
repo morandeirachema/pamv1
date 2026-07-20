@@ -80,6 +80,33 @@ func TestBrokerApprovalResume(t *testing.T) {
 	}
 }
 
+// TestBrokerResumeNotBurnedBeforeApproval proves an early resume (before the
+// human decides) fails WITHOUT spending the single-use token, so the agent can
+// still collect the result once the call is approved.
+func TestBrokerResumeNotBurnedBeforeApproval(t *testing.T) {
+	fake := &fakeWinRM{result: winrm.Result{Stdout: "ok", ExitCode: 0}}
+	srv, _ := newTestServerOpts(t, nil, brokerOpts(t, fake, approvalRules))
+	seedWinRMTarget(t, srv, "win-early", "pw")
+	_, ad := do(t, srv, http.MethodPost, "/v1/agents", testAPIKey, map[string]any{"name": "bot-early"})
+	tok, _ := jsonMap(t, ad)["token"].(string)
+	_, data := doBearer(t, srv, http.MethodPost, "/v1/tool-calls", tok, map[string]any{"tool": "winrm_exec", "args": map[string]any{"target": "win-early", "command": "x"}})
+	m := jsonMap(t, data)
+	callID, _ := m["call_id"].(string)
+	resume, _ := m["resume_token"].(string)
+
+	// Resuming before the approver decides fails and must NOT spend the token.
+	if st, _ := doBearer(t, srv, http.MethodPost, "/v1/tool-calls/"+callID+"/resume", tok, map[string]any{"token": resume}); st != http.StatusNotFound {
+		t.Fatalf("early resume: want 404, got %d", st)
+	}
+	if st, dd := do(t, srv, http.MethodPost, "/v1/approvals/"+callID+"/decision", testAPIKey, map[string]any{"approve": true}); st != http.StatusOK || jsonMap(t, dd)["status"] != "executed" {
+		t.Fatalf("approve: %d %s", st, dd)
+	}
+	// The still-valid token now collects the result.
+	if st, rd := doBearer(t, srv, http.MethodPost, "/v1/tool-calls/"+callID+"/resume", tok, map[string]any{"token": resume}); st != http.StatusOK || jsonMap(t, rd)["status"] != "executed" {
+		t.Fatalf("resume after approval: %d %s (token wrongly burned by the early resume?)", st, rd)
+	}
+}
+
 // TestBrokerApprovalReject proves a rejected approval denies the call (no
 // injection) and that a parked call can be decided only once.
 func TestBrokerApprovalReject(t *testing.T) {

@@ -370,7 +370,7 @@ func (t *revealCredentialTool) Execute(ctx context.Context, p *auth.Principal, a
 		return broker.Result{}, fmt.Errorf("credential decrypt failed")
 	}
 	t.s.auditAs(ctx, p.Name, "credential.reveal", fmt.Sprintf("credential:%d target:%s user:%s via:agent-broker", cred.ID, target.Name, cred.Username))
-	return broker.Result{Data: map[string]any{
+	return broker.Result{Sensitive: true, Data: map[string]any{
 		"credential_id": cred.ID,
 		"target":        target.Name,
 		"username":      cred.Username,

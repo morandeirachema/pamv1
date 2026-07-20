@@ -49,7 +49,8 @@ func (s *Server) listConfig(w http.ResponseWriter, r *http.Request) {
 // on whether hot-swap (a wired reconfigure closure) is enabled.
 func (s *Server) reloadNote() string {
 	if s.hotSwap() {
-		return "take effect immediately (identity/policy), with networking/TLS still requiring a restart"
+		return "take effect immediately for identity, SSO and API-enforced policy; " +
+			"the SSH proxy's protocol/approval gates and networking/TLS apply on restart"
 	}
 	return "take effect on restart"
 }

@@ -36,12 +36,22 @@ const (
 	StatusFailed          Status = "failed"
 )
 
+// terminal reports whether the status is a final outcome (not awaiting a human).
+func (s Status) terminal() bool {
+	return s == StatusExecuted || s == StatusDenied || s == StatusFailed
+}
+
 // Args are a tool call's arguments (decoded from JSON).
 type Args = map[string]any
 
 // Result is a tool's output. For exec/rotate/list tools it never carries
-// credential material — the plaintext lives only inside Execute.
-type Result struct{ Data map[string]any }
+// credential material — the plaintext lives only inside Execute. Sensitive marks
+// a result that DOES carry a secret (only reveal_credential), so the broker
+// delivers it exactly once and never retains it in the in-memory poll cache.
+type Result struct {
+	Data      map[string]any
+	Sensitive bool
+}
 
 // Tool is one brokered operation wrapping a pamv1 action.
 type Tool interface {
@@ -107,7 +117,10 @@ type Outcome struct {
 	ResumeToken string         `json:"resume_token,omitempty"` // single-use ticket to collect a post-approval result
 }
 
-const maxRemembered = 4096
+const (
+	maxRemembered = 4096 // bound on the in-memory outcome/poll cache
+	maxParked     = 1024 // bound on simultaneously-pending approvals (DoS guard)
+)
 
 // TokenStore mints and spends the single-use resume tokens for parked calls.
 // The store implements it; it is an interface so the broker stays transport- and
@@ -115,6 +128,7 @@ const maxRemembered = 4096
 type TokenStore interface {
 	CreateBrokerToken(ctx context.Context, t *store.BrokerToken) error
 	ConsumeBrokerToken(ctx context.Context, jti string) (callID string, err error)
+	PeekBrokerToken(ctx context.Context, jti string) (callID string, err error)
 }
 
 // parkedCall is a require_approval tool call awaiting a human decision. It holds
@@ -233,6 +247,7 @@ func (b *Broker) ProcessCall(ctx context.Context, id *agentid.Identity, c Call) 
 	// tool with no matching rule is denied by default (fail-closed), never run.
 	d := b.engine.Evaluate(c.Tool, c.Args)
 	out.RuleID, out.Scope, out.Reason = d.RuleID, d.Scope, d.Reason
+	var sensitive bool // the executed result carries a secret (reveal_credential)
 	switch d.Effect {
 	case policy.EffectDeny:
 		out.Status = StatusDenied
@@ -259,13 +274,20 @@ func (b *Broker) ProcessCall(ctx context.Context, id *agentid.Identity, c Call) 
 		if err != nil {
 			out.Status, out.Reason = StatusFailed, err.Error()
 		} else {
-			out.Status, out.Result = StatusExecuted, res.Data
+			out.Status, out.Result, sensitive = StatusExecuted, res.Data, res.Sensitive
 		}
 	default:
 		out.Status, out.Reason = StatusFailed, "policy returned no effect"
 	}
 
-	b.remember(out)
+	// A secret-bearing immediate result is delivered once in the returned outcome
+	// but never retained in the poll cache — there is no resume token for an
+	// allow (non-parked) call, so it can never be collected again.
+	stored := out
+	if sensitive {
+		stored.Result = nil
+	}
+	b.remember(stored)
 	// Record the terminal outcome (best-effort: for a side-effecting call the
 	// "requested" event above already durably captured it in the chain).
 	if err := b.chainEvent(ctx, id, c, "broker.tool_call."+string(out.Status), out, out.Reason); err != nil {
@@ -278,8 +300,17 @@ func (b *Broker) ProcessCall(ctx context.Context, id *agentid.Identity, c Call) 
 // store is wired) mints a single-use resume token returned in out.ResumeToken.
 func (b *Broker) park(ctx context.Context, id *agentid.Identity, c Call, out *Outcome) {
 	b.mu.Lock()
-	b.parked[out.CallID] = &parkedCall{id: id, call: c, scope: out.Scope, ruleID: out.RuleID, reason: out.Reason, requested: time.Now().UTC()}
+	full := len(b.parked) >= maxParked
+	if !full {
+		b.parked[out.CallID] = &parkedCall{id: id, call: c, scope: out.Scope, ruleID: out.RuleID, reason: out.Reason, requested: time.Now().UTC()}
+	}
 	b.mu.Unlock()
+	// Fail closed rather than let unbounded pending approvals exhaust memory.
+	if full {
+		out.Status, out.Reason, out.ApprovalID = StatusFailed, "too many pending approvals; try again later", ""
+		b.log.Warn("broker parked-approval cap reached; refusing new require_approval call", "cap", maxParked)
+		return
+	}
 
 	if b.tokens != nil {
 		token := newOpaqueToken()
@@ -367,17 +398,28 @@ func (b *Broker) Decide(ctx context.Context, callID, approver string, approve bo
 }
 
 // Resume spends a single-use token and returns the stored outcome for its bound
-// call, so an agent collects a post-approval result exactly once. A used,
-// expired, or unknown token yields ok=false.
+// call, so an agent collects a post-approval result exactly once. It peeks the
+// token first and refuses to spend it while the call is still pending (so an
+// early resume can't burn the ticket before the result exists); the token is
+// consumed only once a terminal outcome is actually returned. A used, expired,
+// unknown token, or a still-pending call yields ok=false.
 func (b *Broker) Resume(ctx context.Context, token string) (Outcome, bool) {
 	if b.tokens == nil {
 		return Outcome{}, false
 	}
-	callID, err := b.tokens.ConsumeBrokerToken(ctx, hashToken(token))
+	jti := hashToken(token)
+	callID, err := b.tokens.PeekBrokerToken(ctx, jti)
 	if err != nil {
 		return Outcome{}, false
 	}
-	return b.Lookup(callID)
+	out, ok := b.Lookup(callID)
+	if !ok || !out.Status.terminal() {
+		return Outcome{}, false // don't spend the token before the call is collectable
+	}
+	if _, err := b.tokens.ConsumeBrokerToken(ctx, jti); err != nil {
+		return Outcome{}, false // lost the single-use race
+	}
+	return out, true
 }
 
 // Lookup returns the latest known outcome for a call id.

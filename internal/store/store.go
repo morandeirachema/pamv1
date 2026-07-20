@@ -304,6 +304,13 @@ type Store interface {
 	// the bound call id. It succeeds at most once: a used, expired, or unknown jti
 	// yields ErrNotFound, so a replayed token can never collect a result twice.
 	ConsumeBrokerToken(ctx context.Context, jti string) (callID string, err error)
+	// PeekBrokerToken returns the call id a token is bound to WITHOUT spending it
+	// (ErrNotFound if used/expired/unknown), so a resume can avoid burning the
+	// token before the parked call is ready to collect.
+	PeekBrokerToken(ctx context.Context, jti string) (callID string, err error)
+	// DeleteExpiredBrokerTokens removes spent or expired tokens, returning the
+	// count deleted; a periodic sweep keeps the table bounded.
+	DeleteExpiredBrokerTokens(ctx context.Context) (int64, error)
 
 	// PutSetting upserts a configuration override, stamping UpdatedAt.
 	PutSetting(ctx context.Context, s *Setting) error

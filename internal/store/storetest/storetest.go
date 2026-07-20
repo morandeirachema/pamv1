@@ -459,4 +459,32 @@ func RunStoreContract(t *testing.T, st store.Store) {
 	if _, err := st.ConsumeBrokerToken(ctx, "jti-exp"); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("ConsumeBrokerToken(expired): want ErrNotFound, got %v", err)
 	}
+
+	// Peek returns the bound call id WITHOUT spending the token (repeatable), then
+	// Consume spends it and Peek reports it gone.
+	if err := st.CreateBrokerToken(ctx, &store.BrokerToken{JTI: "jti-peek", CallID: "call_peek", ExpiresAt: time.Now().Add(time.Hour).UTC()}); err != nil {
+		t.Fatalf("CreateBrokerToken(peek): %v", err)
+	}
+	for i := 0; i < 2; i++ {
+		if cid, err := st.PeekBrokerToken(ctx, "jti-peek"); err != nil || cid != "call_peek" {
+			t.Fatalf("PeekBrokerToken (unspent): cid=%q err=%v", cid, err)
+		}
+	}
+	if _, err := st.ConsumeBrokerToken(ctx, "jti-peek"); err != nil {
+		t.Fatalf("ConsumeBrokerToken(peek): %v", err)
+	}
+	if _, err := st.PeekBrokerToken(ctx, "jti-peek"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("PeekBrokerToken(spent): want ErrNotFound, got %v", err)
+	}
+
+	// GC removes spent + expired tokens; an unexpired unused one survives.
+	if err := st.CreateBrokerToken(ctx, &store.BrokerToken{JTI: "jti-live", CallID: "call_live", ExpiresAt: time.Now().Add(time.Hour).UTC()}); err != nil {
+		t.Fatalf("CreateBrokerToken(live): %v", err)
+	}
+	if n, err := st.DeleteExpiredBrokerTokens(ctx); err != nil || n < 1 {
+		t.Fatalf("DeleteExpiredBrokerTokens: n=%d err=%v", n, err)
+	}
+	if cid, err := st.PeekBrokerToken(ctx, "jti-live"); err != nil || cid != "call_live" {
+		t.Fatalf("GC removed a live token: cid=%q err=%v", cid, err)
+	}
 }

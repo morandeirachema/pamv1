@@ -538,6 +538,9 @@ func run() error {
 			MaxAge:   cfg.RotateMaxAge,
 		})
 	}
+	if cfg.BrokerPolicyFile != "" {
+		go handler.RunBrokerTokenGC(ctx) // sweep spent/expired resume tokens
+	}
 
 	// errc receives the first fatal listener error (HTTP or SSH proxy); either
 	// aborts startup loudly instead of running half a control plane.

@@ -131,9 +131,9 @@ func (v *SVIDVerifier) Verify(_ context.Context, bearer string) (*Identity, erro
 	if !v.inTrustDomain(claims.Sub) {
 		return nil, ErrUnauthenticated
 	}
-	chain, ok := actorChain(claims.Sub, claims.Act, v.maxDepth)
+	chain, ok := v.actorChain(claims.Sub, claims.Act)
 	if !ok {
-		return nil, ErrUnauthenticated // delegation deeper than allowed
+		return nil, ErrUnauthenticated // delegation too deep, or a delegate outside the trust domain
 	}
 	id := &Identity{AgentName: claims.Sub, SPIFFEID: claims.Sub, ActorChain: chain}
 	// The accountable party is the outermost actor (the human/service the chain
@@ -149,17 +149,22 @@ func (v *SVIDVerifier) inTrustDomain(sub string) bool {
 }
 
 // actorChain builds the delegation chain from the subject plus any nested RFC
-// 8693 act claims: [subject, act.sub, act.act.sub, ...]. It returns ok=false when
-// the chain (counting the subject) exceeds maxDepth, so an over-long delegation
-// is fail-closed rather than truncated.
-func actorChain(subject string, act *actClaim, maxDepth int) ([]string, bool) {
+// 8693 act claims: [subject, act.sub, act.act.sub, ...]. Every delegate must be a
+// SPIFFE ID in this verifier's trust domain — an out-of-domain or malformed
+// act.sub is rejected (fail-closed), so a signed token can't inject a spoofed or
+// foreign "accountable party" into the audit chain or the approver UI. A chain
+// (counting the subject) beyond maxDepth is likewise rejected.
+func (v *SVIDVerifier) actorChain(subject string, act *actClaim) ([]string, bool) {
 	chain := []string{subject}
 	for a := act; a != nil; a = a.Act {
 		if a.Sub == "" {
 			break
 		}
+		if !v.inTrustDomain(a.Sub) {
+			return nil, false
+		}
 		chain = append(chain, a.Sub)
-		if len(chain) > maxDepth {
+		if len(chain) > v.maxDepth {
 			return nil, false
 		}
 	}

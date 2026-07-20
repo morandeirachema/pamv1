@@ -2,13 +2,17 @@ package agentid_test
 
 import (
 	"context"
+	"crypto"
 	"crypto/ecdsa"
 	"crypto/ed25519"
 	"crypto/elliptic"
+	"crypto/hmac"
 	"crypto/rand"
+	"crypto/rsa"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"math/big"
 	"os"
 	"path/filepath"
 	"testing"
@@ -136,5 +140,74 @@ func TestSVIDVerifyES256(t *testing.T) {
 	id, err := v.Verify(context.Background(), token)
 	if err != nil || id.SPIFFEID != sub {
 		t.Fatalf("ES256 svid: id=%+v err=%v", id, err)
+	}
+}
+
+// TestSVIDAlgConfusion proves the header alg cannot be abused: alg=none and
+// alg=HS256 (the public key as an HMAC secret) are both rejected.
+func TestSVIDAlgConfusion(t *testing.T) {
+	pub, _, _ := ed25519.GenerateKey(rand.Reader)
+	v, err := agentid.NewSVIDVerifier(edJWKS(t, pub, "k1"), "example.org", "pam-broker", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	claims, _ := json.Marshal(map[string]any{"sub": "spiffe://example.org/ns/x", "aud": "pam-broker", "exp": time.Now().Add(time.Hour).Unix()})
+	payload := b64url(claims)
+
+	// alg=none with an empty signature.
+	if _, err := v.Verify(ctx, b64url([]byte(`{"alg":"none","kid":"k1"}`))+"."+payload+"."); err == nil {
+		t.Fatal("alg=none must be rejected")
+	}
+	// alg=HS256 forging a MAC with the public key.
+	hsHdr := b64url([]byte(`{"alg":"HS256","kid":"k1"}`))
+	mac := hmac.New(sha256.New, pub)
+	mac.Write([]byte(hsHdr + "." + payload))
+	if _, err := v.Verify(ctx, hsHdr+"."+payload+"."+b64url(mac.Sum(nil))); err == nil {
+		t.Fatal("alg=HS256 must be rejected (no algorithm confusion)")
+	}
+}
+
+// TestSVIDForeignDelegation proves a delegation act.sub outside the trust domain
+// is rejected, so a signed token can't inject a spoofed accountable identity.
+func TestSVIDForeignDelegation(t *testing.T) {
+	pub, priv, _ := ed25519.GenerateKey(rand.Reader)
+	v, err := agentid.NewSVIDVerifier(edJWKS(t, pub, "k1"), "example.org", "pam-broker", 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tok := makeEdDSA(t, priv, "k1", map[string]any{
+		"sub": "spiffe://example.org/ns/x", "aud": "pam-broker", "exp": time.Now().Add(time.Hour).Unix(),
+		"act": map[string]any{"sub": "spiffe://foreign.org/admin"},
+	})
+	if _, err := v.Verify(context.Background(), tok); err == nil {
+		t.Fatal("a foreign-domain delegate (act.sub) must be rejected")
+	}
+}
+
+// TestSVIDVerifyRS256 covers the RSA/RS256 verification branch.
+func TestSVIDVerifyRS256(t *testing.T) {
+	key, _ := rsa.GenerateKey(rand.Reader, 2048)
+	jwks, _ := json.Marshal(map[string]any{"keys": []map[string]any{{
+		"kty": "RSA", "kid": "r1",
+		"n": b64url(key.N.Bytes()), "e": b64url(big.NewInt(int64(key.E)).Bytes()),
+	}}})
+	path := filepath.Join(t.TempDir(), "rsa.json")
+	if err := os.WriteFile(path, jwks, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	v, err := agentid.NewSVIDVerifier(path, "example.org", "pam-broker", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sub := "spiffe://example.org/ns/rsa-bot"
+	hdr := b64url([]byte(`{"alg":"RS256","kid":"r1"}`))
+	cb, _ := json.Marshal(map[string]any{"sub": sub, "aud": "pam-broker", "exp": time.Now().Add(time.Hour).Unix()})
+	signing := hdr + "." + b64url(cb)
+	digest := sha256.Sum256([]byte(signing))
+	sig, _ := rsa.SignPKCS1v15(rand.Reader, key, crypto.SHA256, digest[:])
+	id, err := v.Verify(context.Background(), signing+"."+b64url(sig))
+	if err != nil || id.SPIFFEID != sub {
+		t.Fatalf("RS256 svid: id=%+v err=%v", id, err)
 	}
 }

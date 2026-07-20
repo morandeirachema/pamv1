@@ -78,13 +78,18 @@ func (s *Server) processToolCall(w http.ResponseWriter, r *http.Request, id *age
 	writeJSON(w, http.StatusOK, out)
 }
 
-// getToolCall returns the latest known outcome for a call id (status poll).
+// getToolCall returns the status of a call id. It is a poll for the outcome's
+// state (pending → executed/denied/failed) and deliberately never returns the
+// result body: a result is delivered exactly once — in the original call
+// response, or via the single-use resume token — so a secret-bearing
+// reveal_credential result can't be re-read by polling this endpoint.
 func (s *Server) getToolCall(w http.ResponseWriter, r *http.Request, _ *agentid.Identity) {
 	out, ok := s.broker.Lookup(r.PathValue("id"))
 	if !ok {
 		writeError(w, http.StatusNotFound, "unknown call id")
 		return
 	}
+	out.Result = nil
 	writeJSON(w, http.StatusOK, out)
 }
 

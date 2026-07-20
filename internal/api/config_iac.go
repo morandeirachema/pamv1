@@ -27,7 +27,7 @@ func (s *Server) effectiveConfig(w http.ResponseWriter, r *http.Request) {
 			"broker_enabled":      s.broker != nil,
 		},
 		"hot_swap": s.hotSwap(),
-		"note":     "Networking/TLS listeners are bound at startup and stay in IaC; identity/SSO/policy hot-swap. Use the IaC export to codify console changes back into env/Helm/Terraform.",
+		"note":     "Identity, SSO and API-enforced policy hot-swap; the SSH proxy's protocol/approval gates and networking/TLS apply on restart. Use the IaC export to codify console changes back into env/Helm/Terraform.",
 	})
 }
 

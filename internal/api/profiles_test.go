@@ -52,3 +52,43 @@ func TestCustomProfileEndToEnd(t *testing.T) {
 		t.Fatalf("manage targets: want 403, got %d", code)
 	}
 }
+
+// TestProfileNoEscalation proves a delegated user-admin (a profile carrying only
+// manage_users) cannot escalate: it may manage users/profiles but cannot mint a
+// full admin or forge a profile with capabilities it does not itself hold.
+func TestProfileNoEscalation(t *testing.T) {
+	srv, _ := newTestServerOpts(t, nil, api.Options{})
+
+	// A delegated user-admin: can manage users + read inventory, nothing sensitive.
+	if code, d := do(t, srv, http.MethodPost, "/api/profiles", testAPIKey, map[string]any{
+		"name": "useradmin", "capabilities": []string{"manage_users", "read_inventory"},
+	}); code != http.StatusCreated {
+		t.Fatalf("create useradmin profile: %d %s", code, d)
+	}
+	_, ud := do(t, srv, http.MethodPost, "/api/users", testAPIKey, map[string]any{"username": "ua", "role": "useradmin"})
+	uaTok, _ := jsonMap(t, ud)["token"].(string)
+	if uaTok == "" {
+		t.Fatalf("no useradmin token: %s", ud)
+	}
+
+	// It reaches the admin surface (has manage_users) but cannot mint a full admin.
+	if code, _ := do(t, srv, http.MethodPost, "/api/users", uaTok, map[string]any{"username": "hax", "role": "admin"}); code != http.StatusForbidden {
+		t.Fatalf("delegated user-admin minting admin: want 403, got %d", code)
+	}
+	// Nor assign a built-in role carrying a capability it lacks (auditor→read_audit).
+	if code, _ := do(t, srv, http.MethodPost, "/api/users", uaTok, map[string]any{"username": "hax2", "role": "auditor"}); code != http.StatusForbidden {
+		t.Fatalf("delegated user-admin minting auditor: want 403, got %d", code)
+	}
+	// Nor forge a profile with a capability it lacks.
+	if code, _ := do(t, srv, http.MethodPost, "/api/profiles", uaTok, map[string]any{"name": "sneaky", "capabilities": []string{"reveal_secret"}}); code != http.StatusForbidden {
+		t.Fatalf("delegated user-admin forging reveal profile: want 403, got %d", code)
+	}
+	// It CAN act within its own capabilities.
+	if code, d := do(t, srv, http.MethodPost, "/api/profiles", uaTok, map[string]any{"name": "ro2", "capabilities": []string{"read_inventory"}}); code != http.StatusCreated {
+		t.Fatalf("delegated user-admin creating in-scope profile: %d %s", code, d)
+	}
+	// The bootstrap admin remains unconstrained.
+	if code, _ := do(t, srv, http.MethodPost, "/api/users", testAPIKey, map[string]any{"username": "realadmin", "role": "admin"}); code != http.StatusCreated {
+		t.Fatalf("bootstrap admin minting admin: want 201, got %d", code)
+	}
+}

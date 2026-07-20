@@ -548,6 +548,27 @@ func (s *PGStore) ConsumeBrokerToken(ctx context.Context, jti string) (string, e
 	return callID, err
 }
 
+// PeekBrokerToken returns a token's bound call id without spending it.
+func (s *PGStore) PeekBrokerToken(ctx context.Context, jti string) (string, error) {
+	var callID string
+	err := s.pool.QueryRow(ctx,
+		`SELECT call_id FROM broker_tokens WHERE jti = $1 AND used_at IS NULL AND expires_at > now()`,
+		jti).Scan(&callID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", store.ErrNotFound
+	}
+	return callID, err
+}
+
+// DeleteExpiredBrokerTokens removes spent or expired tokens (periodic GC).
+func (s *PGStore) DeleteExpiredBrokerTokens(ctx context.Context) (int64, error) {
+	tag, err := s.pool.Exec(ctx, `DELETE FROM broker_tokens WHERE used_at IS NOT NULL OR expires_at <= now()`)
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
+}
+
 // PutSetting upserts a configuration override, stamping UpdatedAt.
 func (s *PGStore) PutSetting(ctx context.Context, st *store.Setting) error {
 	return s.pool.QueryRow(ctx,

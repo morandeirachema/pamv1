@@ -156,6 +156,30 @@ func (s *Server) RunLifecycleWorker(ctx context.Context, pol RotationPolicy) {
 
 // runLifecycleOnce performs a single reconcile+age-rotation pass. now is passed
 // explicitly so the aging decision is testable.
+// RunBrokerTokenGC periodically deletes spent or expired agent-broker resume
+// tokens so the broker_tokens table stays bounded. It runs only when the broker
+// is enabled and stops when ctx is cancelled.
+func (s *Server) RunBrokerTokenGC(ctx context.Context) {
+	if s.broker == nil {
+		return
+	}
+	const interval = 10 * time.Minute
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if n, err := s.store.DeleteExpiredBrokerTokens(systemContext(ctx)); err != nil {
+				s.log.Warn("broker token GC failed", "err", err)
+			} else if n > 0 {
+				s.log.Debug("broker token GC swept expired/used tokens", "deleted", n)
+			}
+		}
+	}
+}
+
 func (s *Server) runLifecycleOnce(ctx context.Context, maxAge time.Duration, now time.Time) lifecycleReport {
 	var rep lifecycleReport
 	// Invalidate any secret still outstanding on an expired checkout that was

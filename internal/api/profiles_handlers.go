@@ -29,8 +29,15 @@ func (s *Server) createProfile(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnprocessableEntity, "name collides with a built-in role")
 		return
 	}
-	if _, err := auth.ParseCapabilities(in.Capabilities); err != nil {
+	caps, err := auth.ParseCapabilities(in.Capabilities)
+	if err != nil {
 		writeError(w, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
+	// You cannot define a profile more capable than yourself (privilege-escalation
+	// guard): a delegated user-admin can't forge an all-powerful profile.
+	if !principalFrom(r.Context()).Covers(caps) {
+		writeError(w, http.StatusForbidden, "cannot create a profile with capabilities you do not hold")
 		return
 	}
 	p := store.Profile{Name: in.Name, Capabilities: in.Capabilities}

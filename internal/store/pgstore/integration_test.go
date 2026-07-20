@@ -36,7 +36,8 @@ func TestPGStoreContract(t *testing.T) {
 	defer pool.Close()
 	if _, err := pool.Exec(ctx,
 		`TRUNCATE targets, credentials, target_grants, access_requests, checkouts,
-		 audit_events, users, sessions, mfa_enrollments, mfa_recovery_codes, oidc_states
+		 audit_events, users, sessions, mfa_enrollments, mfa_recovery_codes, oidc_states,
+		 settings, profiles, agent_keys, broker_audit_events, broker_tokens
 		 RESTART IDENTITY CASCADE`); err != nil {
 		t.Fatalf("truncate: %v", err)
 	}

@@ -32,7 +32,8 @@ const oidcStateCookie = "pam_oidc_state"
 
 // oidcStart begins the Authorization Code + PKCE flow and redirects to the IdP.
 func (s *Server) oidcStart(w http.ResponseWriter, r *http.Request) {
-	if s.rt().oidc == nil {
+	oidcp := s.rt().oidc // snapshot once (a concurrent hot-swap could null it)
+	if oidcp == nil {
 		writeError(w, http.StatusNotFound, "OIDC login is not configured")
 		return
 	}
@@ -52,14 +53,15 @@ func (s *Server) oidcStart(w http.ResponseWriter, r *http.Request) {
 		MaxAge: int(oidcStateTTL.Seconds()), HttpOnly: true,
 		Secure: requestIsHTTPS(r), SameSite: http.SameSiteLaxMode,
 	})
-	http.Redirect(w, r, s.rt().oidc.AuthCodeURL(state, nonce, challenge), http.StatusFound)
+	http.Redirect(w, r, oidcp.AuthCodeURL(state, nonce, challenge), http.StatusFound)
 }
 
 // oidcCallback completes the flow: validate the code+state, exchange for a
 // signature-verified ID token, map the role and issue a session, then redirect
 // back to the portal with the token in the URL fragment.
 func (s *Server) oidcCallback(w http.ResponseWriter, r *http.Request) {
-	if s.rt().oidc == nil {
+	rt := s.rt() // snapshot once (a concurrent hot-swap could null oidc)
+	if rt.oidc == nil {
 		writeError(w, http.StatusNotFound, "OIDC login is not configured")
 		return
 	}
@@ -90,13 +92,13 @@ func (s *Server) oidcCallback(w http.ResponseWriter, r *http.Request) {
 		s.redirectPortal(w, r, "pam_error=invalid_state")
 		return
 	}
-	claims, err := s.rt().oidc.Exchange(r.Context(), code, verifier, nonce)
+	claims, err := rt.oidc.Exchange(r.Context(), code, verifier, nonce)
 	if err != nil {
 		s.log.Warn("oidc exchange failed", "err", err, "remote", r.RemoteAddr)
 		s.redirectPortal(w, r, "pam_error=login_failed")
 		return
 	}
-	role, ok := auth.HighestRole(append(append([]string{}, claims.Roles...), claims.Groups...), s.rt().oidcRoleMap)
+	role, ok := auth.HighestRole(append(append([]string{}, claims.Roles...), claims.Groups...), rt.oidcRoleMap)
 	if !ok {
 		s.log.Warn("oidc login: no mapped role", "user", claims.PreferredUsername)
 		s.redirectPortal(w, r, "pam_error=no_role")

@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
@@ -24,11 +25,17 @@ func (s *Server) createUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// The role is a built-in role or an existing custom profile (Phase 12).
-	if _, err := auth.ParseRole(in.Role); err != nil {
-		if _, perr := s.store.GetProfile(r.Context(), in.Role); perr != nil {
-			writeError(w, http.StatusUnprocessableEntity, `role must be a built-in role (admin|user|auditor|approver) or an existing profile`)
-			return
-		}
+	grantCaps, err := s.capsForGrant(r.Context(), in.Role)
+	if err != nil {
+		writeError(w, http.StatusUnprocessableEntity, `role must be a built-in role (admin|user|auditor|approver) or an existing profile`)
+		return
+	}
+	// You cannot mint a user more capable than yourself (privilege-escalation
+	// guard for delegated user-admins). The bootstrap/break-glass admin holds
+	// every capability and so is unconstrained.
+	if !principalFrom(r.Context()).Covers(grantCaps) {
+		writeError(w, http.StatusForbidden, "cannot assign a role or profile with capabilities you do not hold")
+		return
 	}
 	if in.Username == "" {
 		writeError(w, http.StatusUnprocessableEntity, "username is required")
@@ -75,6 +82,20 @@ func (s *Server) deleteUser(w http.ResponseWriter, r *http.Request) {
 	}
 	s.audit(r.Context(), "user.delete", strconv.FormatInt(id, 10))
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// capsForGrant resolves a built-in role name or an existing custom profile name
+// to the capability set it would confer on a user, or an error if the name is
+// neither. Used to bound what a caller may grant.
+func (s *Server) capsForGrant(ctx context.Context, name string) (auth.CapSet, error) {
+	if role, err := auth.ParseRole(name); err == nil {
+		return role.CapabilitySet(), nil
+	}
+	prof, err := s.store.GetProfile(ctx, name)
+	if err != nil {
+		return nil, err
+	}
+	return auth.ParseCapabilities(prof.Capabilities)
 }
 
 // generateToken returns a new random access token with the "pamt_" prefix.

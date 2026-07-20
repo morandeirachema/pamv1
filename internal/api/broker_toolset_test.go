@@ -123,6 +123,14 @@ func TestBrokerRevealWhenAllowed(t *testing.T) {
 	if strings.Contains(string(aud), "reveal-me-pw") {
 		t.Fatal("reveal secret leaked into the broker audit chain")
 	}
+
+	// The secret is delivered once (above) and must NOT be re-readable by polling
+	// the call status — getToolCall returns status only, no result body.
+	callID, _ := m["call_id"].(string)
+	_, pd := doBearer(t, srv, http.MethodGet, "/v1/tool-calls/"+callID, tok, nil)
+	if strings.Contains(string(pd), "reveal-me-pw") || strings.Contains(string(pd), "\"result\"") {
+		t.Fatalf("status poll re-served the reveal secret/result: %s", pd)
+	}
 }
 
 // TestBrokerSSHExecGating proves ssh_exec refuses a non-SSH target (a full
