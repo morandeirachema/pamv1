@@ -11,6 +11,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"strings"
+	"time"
 
 	"github.com/morandeirachema/pamv1/internal/auth"
 	"github.com/morandeirachema/pamv1/internal/store"
@@ -23,9 +24,11 @@ var ErrUnauthenticated = errors.New("agentid: unrecognized agent credential")
 // in every audit entry so accountability survives delegation.
 type Identity struct {
 	AgentName  string
-	OnBehalfOf string   // accountable owner (static key) or SVID on_behalf_of
-	SPIFFEID   string   // "" for static keys
-	ActorChain []string // delegation chain, innermost..outermost
+	OnBehalfOf string    // accountable owner (static key) or SVID on_behalf_of
+	SPIFFEID   string    // "" for static keys
+	ActorChain []string  // delegation chain, innermost..outermost
+	KeyID      int64     // static agent-key row id (0 for an SVID); for revocation re-checks
+	ExpiresAt  time.Time // SVID expiry (zero for a static key); for post-park re-checks
 }
 
 // Principal is the auth.Principal the broker authorizes the call under.
@@ -62,5 +65,5 @@ func (v *StaticVerifier) Verify(ctx context.Context, bearer string) (*Identity, 
 	if err != nil {
 		return nil, ErrUnauthenticated
 	}
-	return &Identity{AgentName: k.Name, OnBehalfOf: k.Owner}, nil
+	return &Identity{AgentName: k.Name, OnBehalfOf: k.Owner, KeyID: k.ID}, nil
 }

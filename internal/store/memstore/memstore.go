@@ -581,6 +581,17 @@ func (m *Memstore) DeleteAgentKey(_ context.Context, id int64) error {
 	return nil
 }
 
+// GetAgentKey returns an agent key by ID (regardless of disabled), or ErrNotFound.
+func (m *Memstore) GetAgentKey(_ context.Context, id int64) (*store.AgentKey, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	k, ok := m.agentKeys[id]
+	if !ok {
+		return nil, store.ErrNotFound
+	}
+	return &k, nil
+}
+
 // CreateBrokerToken stores a single-use resume token for a parked tool call.
 func (m *Memstore) CreateBrokerToken(_ context.Context, t *store.BrokerToken) error {
 	m.mu.Lock()

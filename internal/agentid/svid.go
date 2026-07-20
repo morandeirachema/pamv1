@@ -135,7 +135,7 @@ func (v *SVIDVerifier) Verify(_ context.Context, bearer string) (*Identity, erro
 	if !ok {
 		return nil, ErrUnauthenticated // delegation too deep, or a delegate outside the trust domain
 	}
-	id := &Identity{AgentName: claims.Sub, SPIFFEID: claims.Sub, ActorChain: chain}
+	id := &Identity{AgentName: claims.Sub, SPIFFEID: claims.Sub, ActorChain: chain, ExpiresAt: time.Unix(claims.Exp, 0)}
 	// The accountable party is the outermost actor (the human/service the chain
 	// bottoms out at), else the subject itself.
 	id.OnBehalfOf = chain[len(chain)-1]

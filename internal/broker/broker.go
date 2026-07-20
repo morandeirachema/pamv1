@@ -167,6 +167,7 @@ type Broker struct {
 	notifier    alert.Notifier
 	tokenTTL    time.Duration
 	maxArgBytes int
+	revalidate  func(ctx context.Context, id *agentid.Identity) bool // agent still valid?
 
 	mu     sync.Mutex
 	calls  map[string]Outcome     // call_id -> latest outcome (in-memory)
@@ -195,6 +196,15 @@ func (b *Broker) WithApproval(tokens TokenStore, notifier alert.Notifier, tokenT
 	if tokenTTL > 0 {
 		b.tokenTTL = tokenTTL
 	}
+	return b
+}
+
+// WithRevalidator sets a hook the broker calls at approval time to confirm the
+// requesting agent identity is still valid (its static key not revoked/disabled,
+// its SVID not expired). A parked call whose agent was revoked while awaiting a
+// human decision is refused instead of executed.
+func (b *Broker) WithRevalidator(fn func(ctx context.Context, id *agentid.Identity) bool) *Broker {
+	b.revalidate = fn
 	return b
 }
 
@@ -387,6 +397,14 @@ func (b *Broker) Decide(ctx context.Context, callID, approver string, approve bo
 	// the single source of truth; policy is not the only gate).
 	if !p.id.Principal().Can(tool.Capability()) {
 		out.Status, out.Reason = StatusDenied, "principal lacks the capability for this tool"
+		b.remember(out)
+		_ = b.chainEvent(ctx, p.id, p.call, "broker.tool_call.denied", out, out.Reason)
+		return out, true
+	}
+	// Re-check the agent is still valid: a call parked before its key was revoked
+	// (or its SVID expired) must not execute just because a human approved it.
+	if b.revalidate != nil && !b.revalidate(ctx, p.id) {
+		out.Status, out.Reason = StatusDenied, "agent identity is no longer valid (revoked or expired)"
 		b.remember(out)
 		_ = b.chainEvent(ctx, p.id, p.call, "broker.tool_call.denied", out, out.Reason)
 		return out, true

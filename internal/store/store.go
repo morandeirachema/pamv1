@@ -292,6 +292,9 @@ type Store interface {
 
 	// CreateAgentKey inserts an AI-agent identity key, populating ID and CreatedAt.
 	CreateAgentKey(ctx context.Context, k *AgentKey) error
+	// GetAgentKey returns an agent key by ID, or ErrNotFound — used to re-check an
+	// agent is still enabled at approval time (post-park revocation).
+	GetAgentKey(ctx context.Context, id int64) (*AgentKey, error)
 	// GetAgentKeyByTokenHash returns the enabled agent key whose token hash
 	// matches, or ErrNotFound (a disabled key is treated as not found).
 	GetAgentKeyByTokenHash(ctx context.Context, tokenHashHex string) (*AgentKey, error)

@@ -402,6 +402,13 @@ func RunStoreContract(t *testing.T, st store.Store) {
 	if got, err := st.GetAgentKeyByTokenHash(ctx, "agenthash1"); err != nil || got.Name != "bot" || got.Owner != "alice" {
 		t.Fatalf("GetAgentKeyByTokenHash: %+v err %v", got, err)
 	}
+	// GetAgentKey by id (used for approval-time revocation checks).
+	if got, err := st.GetAgentKey(ctx, ak.ID); err != nil || got.Name != "bot" {
+		t.Fatalf("GetAgentKey(%d): %+v err %v", ak.ID, got, err)
+	}
+	if _, err := st.GetAgentKey(ctx, 999999); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("GetAgentKey(missing): want ErrNotFound, got %v", err)
+	}
 	if _, err := st.GetAgentKeyByTokenHash(ctx, "nope"); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("GetAgentKeyByTokenHash(missing): want ErrNotFound, got %v", err)
 	}

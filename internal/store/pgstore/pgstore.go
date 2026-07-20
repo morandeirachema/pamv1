@@ -510,6 +510,12 @@ func (s *PGStore) GetAgentKeyByTokenHash(ctx context.Context, tokenHashHex strin
 		 FROM agent_keys WHERE token_hash = $1 AND disabled = FALSE`, tokenHashHex)
 }
 
+// GetAgentKey returns an agent key by ID (regardless of disabled), or ErrNotFound.
+func (s *PGStore) GetAgentKey(ctx context.Context, id int64) (*store.AgentKey, error) {
+	return getOne(ctx, s.pool, scanAgentKey,
+		`SELECT id, name, owner, token_hash, disabled, created_at FROM agent_keys WHERE id = $1`, id)
+}
+
 // ListAgentKeys returns all agent keys ordered by ID.
 func (s *PGStore) ListAgentKeys(ctx context.Context) ([]store.AgentKey, error) {
 	rows, err := s.pool.Query(ctx,

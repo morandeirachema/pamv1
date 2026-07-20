@@ -2,12 +2,40 @@ package api_test
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
 
 	"github.com/morandeirachema/pamv1/internal/winrm"
 )
+
+// TestBrokerApprovalRevokedAgentRefused proves a call parked before its agent key
+// was revoked is NOT executed just because a human later approves it.
+func TestBrokerApprovalRevokedAgentRefused(t *testing.T) {
+	fake := &fakeWinRM{result: winrm.Result{Stdout: "ok"}}
+	srv, _ := newTestServerOpts(t, nil, brokerOpts(t, fake, approvalRules))
+	seedWinRMTarget(t, srv, "win-rev", "pw")
+	_, ad := do(t, srv, http.MethodPost, "/v1/agents", testAPIKey, map[string]any{"name": "bot-rev"})
+	m := jsonMap(t, ad)
+	tok, _ := m["token"].(string)
+	keyID := int64(m["id"].(float64))
+	_, pd := doBearer(t, srv, http.MethodPost, "/v1/tool-calls", tok, map[string]any{"tool": "winrm_exec", "args": map[string]any{"target": "win-rev", "command": "x"}})
+	callID, _ := jsonMap(t, pd)["call_id"].(string)
+
+	// Revoke the agent key while its call is parked.
+	if code, _ := do(t, srv, http.MethodDelete, fmt.Sprintf("/v1/agents/%d", keyID), testAPIKey, nil); code != http.StatusNoContent {
+		t.Fatalf("revoke agent: %d", code)
+	}
+	// Approving the parked call must refuse (identity no longer valid).
+	_, dd := do(t, srv, http.MethodPost, "/v1/approvals/"+callID+"/decision", testAPIKey, map[string]any{"approve": true})
+	if jsonMap(t, dd)["status"] == "executed" {
+		t.Fatalf("revoked agent's call was executed: %s", dd)
+	}
+	if fake.gotPass != "" {
+		t.Fatal("credential injected for a revoked agent")
+	}
+}
 
 // TestBrokerApprovalRevealNotLeakedToApprover proves an approved, approval-gated
 // reveal_credential does NOT hand the secret to the approver (only the decision
