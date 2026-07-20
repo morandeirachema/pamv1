@@ -411,6 +411,7 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	resolver.WithProfiles(st) // Phase 12: resolve custom permission profiles
 
 	authn, directory, err := buildAuthenticator(cfg, log)
 	if err != nil {

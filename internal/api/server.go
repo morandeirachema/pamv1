@@ -412,6 +412,11 @@ func (s *Server) routes() {
 	s.mux.Handle("DELETE /api/users/{id}", s.authz(auth.CapManageUsers, s.deleteUser))
 	s.mux.Handle("POST /api/identity/reconcile", s.authz(auth.CapManageUsers, s.reconcileIdentities))
 
+	// Custom permission profiles (Phase 12): named capability sets for users.
+	s.mux.Handle("POST /api/profiles", s.authz(auth.CapManageUsers, s.createProfile))
+	s.mux.Handle("GET /api/profiles", s.authz(auth.CapManageUsers, s.listProfiles))
+	s.mux.Handle("DELETE /api/profiles/{id}", s.authz(auth.CapManageUsers, s.deleteProfile))
+
 	// System configuration overrides (Phase 12): DB-persisted PAM_* settings.
 	s.mux.Handle("GET /api/config", s.authz(auth.CapManageUsers, s.listConfig))
 	s.mux.Handle("PUT /api/config", s.authz(auth.CapManageUsers, s.putConfig))
@@ -460,7 +465,7 @@ func (s *Server) authz(cap auth.Capability, next http.HandlerFunc) http.Handler 
 			writeError(w, http.StatusForbidden, "complete MFA enrollment to continue")
 			return
 		}
-		if !p.Role.Can(cap) {
+		if !p.Can(cap) {
 			s.log.Warn("authorization denied", "actor", p.Name, "role", string(p.Role),
 				"method", r.Method, "path", r.URL.Path)
 			s.audit(ctx, "authz.denied", r.Method+" "+r.URL.Path+" role:"+string(p.Role))

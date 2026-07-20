@@ -190,13 +190,60 @@ const SessionScopeEnroll = "enroll"
 // successful M-of-N quorum unseal; it grants admin and is audited loudly.
 const SessionScopeBreakGlass = "breakglass"
 
+// CapSet is a resolved set of capabilities (used for custom profiles).
+type CapSet map[Capability]bool
+
 // Principal is an authenticated identity for the duration of a request or
 // session.
 type Principal struct {
 	Name       string
 	Role       Role
-	BreakGlass bool // authenticated via the emergency key; use is audited loudly
-	EnrollOnly bool // session may only complete MFA enrollment, nothing else
+	Caps       CapSet // resolved custom-profile capabilities; nil for a built-in role
+	BreakGlass bool   // authenticated via the emergency key; use is audited loudly
+	EnrollOnly bool   // session may only complete MFA enrollment, nothing else
+}
+
+// Can reports whether the principal holds capability c. A custom profile carries
+// its own Caps; a built-in role falls back to the role→capability matrix, so
+// existing role behavior is unchanged.
+func (p *Principal) Can(c Capability) bool {
+	if p.Caps != nil {
+		return p.Caps[c]
+	}
+	return p.Role.Can(c)
+}
+
+// CapabilityNames returns the stable names of the principal's capabilities
+// (from its custom profile, or its built-in role).
+func (p *Principal) CapabilityNames() []string {
+	if p.Caps == nil {
+		return p.Role.Capabilities()
+	}
+	out := make([]string, 0, len(p.Caps))
+	for c := CapReadInventory; c <= CapCallTool; c++ {
+		if p.Caps[c] {
+			out = append(out, c.String())
+		}
+	}
+	return out
+}
+
+// ParseCapabilities resolves stable capability names into a CapSet, erroring on
+// any unknown name. An empty list yields an empty (no-capability) set.
+func ParseCapabilities(names []string) (CapSet, error) {
+	byName := make(map[string]Capability, len(capNames))
+	for c, n := range capNames {
+		byName[n] = c
+	}
+	caps := make(CapSet, len(names))
+	for _, n := range names {
+		c, ok := byName[n]
+		if !ok {
+			return nil, fmt.Errorf("auth: unknown capability %q", n)
+		}
+		caps[c] = true
+	}
+	return caps, nil
 }
 
 // Directory is the slice of the store the resolver needs: per-user tokens and
@@ -206,11 +253,25 @@ type Directory interface {
 	GetSessionByTokenHash(ctx context.Context, tokenHashHex string) (*store.Session, error)
 }
 
+// ProfileSource looks up a custom permission profile by name. Optional: nil
+// means only the four built-in roles are recognized.
+type ProfileSource interface {
+	GetProfile(ctx context.Context, name string) (*store.Profile, error)
+}
+
 // Resolver authenticates a presented key into a Principal.
 type Resolver struct {
 	dir            Directory
+	profiles       ProfileSource
 	apiKey         []byte
 	breakGlassHash []byte
+}
+
+// WithProfiles enables custom-profile resolution for identities whose stored role
+// is not one of the four built-in roles. It returns the resolver for chaining.
+func (r *Resolver) WithProfiles(ps ProfileSource) *Resolver {
+	r.profiles = ps
+	return r
 }
 
 // NewResolver builds a Resolver. breakGlassHashHex may be empty to disable the
@@ -244,20 +305,34 @@ func (r *Resolver) Resolve(ctx context.Context, key string) (*Principal, error) 
 	if r.dir != nil {
 		// Per-user access token (local identity).
 		if u, err := r.dir.GetUserByTokenHash(ctx, hash); err == nil {
-			if role, perr := ParseRole(u.Role); perr == nil {
-				return &Principal{Name: u.Username, Role: role}, nil
-			}
-			return nil, ErrUnauthorized
+			return r.principalFor(ctx, u.Username, u.Role, false)
 		}
 		// Login session token (e.g. Active Directory / Entra ID / break-glass).
 		if s, err := r.dir.GetSessionByTokenHash(ctx, hash); err == nil {
 			if s.Scope == SessionScopeBreakGlass {
 				return &Principal{Name: s.Username, Role: RoleAdmin, BreakGlass: true}, nil
 			}
-			if role, perr := ParseRole(s.Role); perr == nil {
-				return &Principal{Name: s.Username, Role: role, EnrollOnly: s.Scope == SessionScopeEnroll}, nil
+			return r.principalFor(ctx, s.Username, s.Role, s.Scope == SessionScopeEnroll)
+		}
+	}
+	return nil, ErrUnauthorized
+}
+
+// principalFor builds a Principal from a stored role string: a built-in role uses
+// the role→capability matrix, otherwise the string is resolved as a custom
+// profile (its capabilities become the principal's CapSet). An unresolvable role
+// is unauthorized (fail-closed).
+func (r *Resolver) principalFor(ctx context.Context, name, roleOrProfile string, enrollOnly bool) (*Principal, error) {
+	if role, err := ParseRole(roleOrProfile); err == nil {
+		return &Principal{Name: name, Role: role, EnrollOnly: enrollOnly}, nil
+	}
+	if r.profiles != nil {
+		if p, err := r.profiles.GetProfile(ctx, roleOrProfile); err == nil {
+			caps, cerr := ParseCapabilities(p.Capabilities)
+			if cerr != nil {
+				return nil, ErrUnauthorized
 			}
-			return nil, ErrUnauthorized
+			return &Principal{Name: name, Role: Role(p.Name), Caps: caps, EnrollOnly: enrollOnly}, nil
 		}
 	}
 	return nil, ErrUnauthorized

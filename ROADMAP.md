@@ -175,7 +175,7 @@ that respects the project's IaC-first roots.
 
 - [~] **Hybrid config model**: directory bindings (LDAP/AD, **Kerberos**), SSO (Entra/OIDC), and policies become editable settings **persisted in the DB** and applied on save (with restart-on-change where a listener must rebind); the authenticator chain is rebuilt from stored config — *increment A shipped*: the DB-persisted, vault-encrypted settings store + `GET/PUT/DELETE /api/config`, overlaid onto the env config at startup (bootstrap/transport stay env-only); hot-swap-without-restart lands in a later increment
 - [ ] **Networking/TLS stays IaC**: a read-only effective-config + backend-health screen plus a generator that emits the env/Helm/Terraform to apply (listeners/ports/TLS cannot be safely rebound at runtime)
-- [ ] **Custom permission profiles**: named capability sets assignable to users and directory groups (a configurable RBAC engine), with the current 4 roles as built-in defaults; assignment surfaced in *Work with users & profiles*
+- [~] **Custom permission profiles**: named capability sets assignable to users and directory groups (a configurable RBAC engine), with the current 4 roles as built-in defaults; assignment surfaced in *Work with users & profiles* — *shipped*: `profiles` table (migration `0009`), `POST/GET /api/profiles` + `DELETE /api/profiles/{id}`, `auth.Principal.Can` resolving a resolved capability set (built-in roles unchanged), `createUser` accepting a profile name; console assignment screen lands in the console increment
 - [ ] Console screens to manage directory bindings, SSO, profiles, and network status (Kerberos *config* is buildable here even though live Kerberos auth needs a KDC to exercise — see the infra-bound list above)
 
 ## Phase 13 — AI-agent access broker 🚧

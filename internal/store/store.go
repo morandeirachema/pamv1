@@ -137,6 +137,16 @@ type AgentKey struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
+// Profile is a named, custom capability set (Phase 12) assignable to users as an
+// alternative to the four built-in roles. Capabilities holds the stable
+// capability names defined in internal/auth.
+type Profile struct {
+	ID           int64     `json:"id"`
+	Name         string    `json:"name"`
+	Capabilities []string  `json:"capabilities"`
+	CreatedAt    time.Time `json:"created_at"`
+}
+
 // Setting is a persisted configuration override (Phase 12): a PAM_* key whose
 // value takes precedence over the environment for the identity backends, SSO,
 // and operational policy. Secret values (bind passwords, client secrets) are
@@ -284,6 +294,16 @@ type Store interface {
 	ListSettings(ctx context.Context) ([]Setting, error)
 	// DeleteSetting removes the override for key, or ErrNotFound.
 	DeleteSetting(ctx context.Context, key string) error
+
+	// CreateProfile inserts a custom permission profile; ErrConflict on a
+	// duplicate name.
+	CreateProfile(ctx context.Context, p *Profile) error
+	// GetProfile returns the profile with the given name, or ErrNotFound.
+	GetProfile(ctx context.Context, name string) (*Profile, error)
+	// ListProfiles returns all custom profiles.
+	ListProfiles(ctx context.Context) ([]Profile, error)
+	// DeleteProfile removes a profile by ID, or ErrNotFound.
+	DeleteProfile(ctx context.Context, id int64) error
 
 	// AppendBrokerAudit appends a pre-chained broker audit event (HMAC and
 	// PrevHash already computed by the caller), populating its ID and TS. The

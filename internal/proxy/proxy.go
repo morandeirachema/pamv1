@@ -186,6 +186,11 @@ func (p *Proxy) authenticate(c ssh.ConnMetadata, password []byte) (*ssh.Permissi
 	if principal.BreakGlass {
 		ext["break_glass"] = "true"
 	}
+	// Resolve the connect capability now (a custom profile carries its own
+	// capabilities that the role string alone cannot express downstream).
+	if principal.Can(auth.CapConnect) {
+		ext["can_connect"] = "true"
+	}
 	return &ssh.Permissions{Extensions: ext}, nil
 }
 
@@ -364,7 +369,7 @@ func (p *Proxy) handleConn(ctx context.Context, nConn net.Conn) {
 
 	// auditor (and any role without CapConnect) may authenticate but not open
 	// sessions through the proxy.
-	if !role.Can(auth.CapConnect) {
+	if ext["can_connect"] != "true" {
 		p.log.Warn("session denied by role", "actor", actor, "role", string(role), "remote", remote)
 		p.audit(ctx, actor, "session.denied",
 			fmt.Sprintf("login:%s role:%s reason:role may not connect", login, role))

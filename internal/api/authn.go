@@ -135,7 +135,7 @@ func (s *Server) me(w http.ResponseWriter, r *http.Request) {
 		"name":         p.Name,
 		"role":         string(p.Role),
 		"break_glass":  p.BreakGlass,
-		"capabilities": p.Role.Capabilities(),
+		"capabilities": p.CapabilityNames(),
 	})
 }
 

@@ -32,7 +32,7 @@ func (s *Server) rdpTunnel(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, "invalid or missing token")
 		return
 	}
-	if principal.EnrollOnly || !principal.Role.Can(auth.CapConnect) {
+	if principal.EnrollOnly || !principal.Can(auth.CapConnect) {
 		writeError(w, http.StatusForbidden, "your role does not permit RDP access")
 		return
 	}

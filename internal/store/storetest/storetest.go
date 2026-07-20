@@ -362,6 +362,30 @@ func RunStoreContract(t *testing.T, st store.Store) {
 		t.Fatal("deleted setting must be gone")
 	}
 
+	// --- profiles (custom RBAC, Phase 12) ---
+	if _, err := st.GetProfile(ctx, "nope"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("GetProfile(missing): want ErrNotFound, got %v", err)
+	}
+	prof := &store.Profile{Name: "readonly", Capabilities: []string{"read_inventory", "read_audit"}}
+	if err := st.CreateProfile(ctx, prof); err != nil {
+		t.Fatalf("CreateProfile: %v", err)
+	}
+	if err := st.CreateProfile(ctx, &store.Profile{Name: "readonly"}); !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("duplicate profile: want ErrConflict, got %v", err)
+	}
+	if got, err := st.GetProfile(ctx, "readonly"); err != nil || len(got.Capabilities) != 2 || got.Capabilities[0] != "read_inventory" {
+		t.Fatalf("GetProfile: %+v err %v", got, err)
+	}
+	if ps, err := st.ListProfiles(ctx); err != nil || len(ps) != 1 {
+		t.Fatalf("ListProfiles: %d err %v", len(ps), err)
+	}
+	if err := st.DeleteProfile(ctx, prof.ID); err != nil {
+		t.Fatalf("DeleteProfile: %v", err)
+	}
+	if _, err := st.GetProfile(ctx, "readonly"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatal("deleted profile must be gone")
+	}
+
 	// --- agent keys + broker audit chain (Phase 13) ---
 	if head, err := st.GetBrokerAuditHead(ctx); err != nil || head != nil {
 		t.Fatalf("GetBrokerAuditHead(empty): head=%v err=%v", head, err)

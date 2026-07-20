@@ -23,10 +23,12 @@ func (s *Server) createUser(w http.ResponseWriter, r *http.Request) {
 	if !readJSON(w, r, &in) {
 		return
 	}
-	role, err := auth.ParseRole(in.Role)
-	if err != nil {
-		writeError(w, http.StatusUnprocessableEntity, `role must be "admin", "user", "auditor" or "approver"`)
-		return
+	// The role is a built-in role or an existing custom profile (Phase 12).
+	if _, err := auth.ParseRole(in.Role); err != nil {
+		if _, perr := s.store.GetProfile(r.Context(), in.Role); perr != nil {
+			writeError(w, http.StatusUnprocessableEntity, `role must be a built-in role (admin|user|auditor|approver) or an existing profile`)
+			return
+		}
 	}
 	if in.Username == "" {
 		writeError(w, http.StatusUnprocessableEntity, "username is required")
@@ -37,7 +39,7 @@ func (s *Server) createUser(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "token generation failed")
 		return
 	}
-	u := store.User{Username: in.Username, Role: string(role), TokenHash: hashHex(token)}
+	u := store.User{Username: in.Username, Role: in.Role, TokenHash: hashHex(token)}
 	if err := s.store.CreateUser(r.Context(), &u); err != nil {
 		storeError(w, err)
 		return

@@ -28,6 +28,7 @@ type Memstore struct {
 	agentKeys  map[int64]store.AgentKey
 	brokerLog  []store.BrokerAuditEvent
 	settings   map[string]store.Setting
+	profiles   map[int64]store.Profile
 }
 
 // New returns an empty in-memory store ready for use.
@@ -44,7 +45,14 @@ func New() *Memstore {
 		checkouts: make(map[int64]store.Checkout),
 		agentKeys: make(map[int64]store.AgentKey),
 		settings:  make(map[string]store.Setting),
+		profiles:  make(map[int64]store.Profile),
 	}
+}
+
+// cloneProfile deep-copies a profile so callers can't mutate the stored slice.
+func cloneProfile(p store.Profile) store.Profile {
+	p.Capabilities = append([]string(nil), p.Capabilities...)
+	return p
 }
 
 // id returns the next monotonically increasing identity; the caller holds the lock.
@@ -611,6 +619,57 @@ func (m *Memstore) DeleteSetting(_ context.Context, key string) error {
 		return store.ErrNotFound
 	}
 	delete(m.settings, key)
+	return nil
+}
+
+// CreateProfile inserts a custom permission profile; ErrConflict on a duplicate name.
+func (m *Memstore) CreateProfile(_ context.Context, p *store.Profile) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, e := range m.profiles {
+		if e.Name == p.Name {
+			return store.ErrConflict
+		}
+	}
+	p.ID = m.id()
+	p.CreatedAt = time.Now().UTC()
+	m.profiles[p.ID] = cloneProfile(*p)
+	return nil
+}
+
+// GetProfile returns the profile with the given name, or ErrNotFound.
+func (m *Memstore) GetProfile(_ context.Context, name string) (*store.Profile, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, p := range m.profiles {
+		if p.Name == name {
+			out := cloneProfile(p)
+			return &out, nil
+		}
+	}
+	return nil, store.ErrNotFound
+}
+
+// ListProfiles returns all custom profiles ordered by name.
+func (m *Memstore) ListProfiles(_ context.Context) ([]store.Profile, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]store.Profile, 0, len(m.profiles))
+	for _, p := range m.profiles {
+		out = append(out, cloneProfile(p))
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out, nil
+}
+
+// DeleteProfile removes a profile by ID; ErrNotFound if absent.
+func (m *Memstore) DeleteProfile(_ context.Context, id int64) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.profiles[id]; !ok {
+		return store.ErrNotFound
+	}
+	delete(m.profiles, id)
 	return nil
 }
 

@@ -61,6 +61,7 @@ func newTestServerOpts(t *testing.T, authn auth.Authenticator, opts api.Options)
 	if err != nil {
 		t.Fatal(err)
 	}
+	resolver.WithProfiles(st) // Phase 12: resolve custom profiles, as main.go does
 	handler, err := api.New(st, v, resolver, authn, opts)
 	if err != nil {
 		t.Fatal(err)

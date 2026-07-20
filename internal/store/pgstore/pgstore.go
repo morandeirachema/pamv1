@@ -553,6 +553,51 @@ func (s *PGStore) DeleteSetting(ctx context.Context, key string) error {
 	return execExpectingRow(ctx, s.pool, `DELETE FROM settings WHERE key = $1`, key)
 }
 
+// CreateProfile inserts a custom permission profile; ErrConflict on a duplicate name.
+func (s *PGStore) CreateProfile(ctx context.Context, p *store.Profile) error {
+	err := s.pool.QueryRow(ctx,
+		`INSERT INTO profiles (name, capabilities) VALUES ($1, $2) RETURNING id, created_at`,
+		p.Name, strings.Join(p.Capabilities, ",")).Scan(&p.ID, &p.CreatedAt)
+	if pgCode(err) == pgUniqueViolation {
+		return store.ErrConflict
+	}
+	return err
+}
+
+// GetProfile returns the profile with the given name, or ErrNotFound.
+func (s *PGStore) GetProfile(ctx context.Context, name string) (*store.Profile, error) {
+	return getOne(ctx, s.pool, scanProfile,
+		`SELECT id, name, capabilities, created_at FROM profiles WHERE name = $1`, name)
+}
+
+// ListProfiles returns all custom profiles ordered by name.
+func (s *PGStore) ListProfiles(ctx context.Context) ([]store.Profile, error) {
+	rows, err := s.pool.Query(ctx, `SELECT id, name, capabilities, created_at FROM profiles ORDER BY name`)
+	if err != nil {
+		return nil, err
+	}
+	return pgx.CollectRows(rows, scanProfile)
+}
+
+// DeleteProfile removes a profile by ID; ErrNotFound if absent.
+func (s *PGStore) DeleteProfile(ctx context.Context, id int64) error {
+	return execExpectingRow(ctx, s.pool, `DELETE FROM profiles WHERE id = $1`, id)
+}
+
+// scanProfile maps one result row into a store.Profile, splitting the
+// comma-separated capabilities column.
+func scanProfile(row pgx.CollectableRow) (store.Profile, error) {
+	var p store.Profile
+	var caps string
+	if err := row.Scan(&p.ID, &p.Name, &caps, &p.CreatedAt); err != nil {
+		return p, err
+	}
+	if caps != "" {
+		p.Capabilities = strings.Split(caps, ",")
+	}
+	return p, nil
+}
+
 const brokerAuditCols = `id, ts, actor, on_behalf_of, actor_chain, action, detail, scope, prev_hash, hmac`
 
 // AppendBrokerAudit inserts a pre-chained broker audit event, populating ID and TS.

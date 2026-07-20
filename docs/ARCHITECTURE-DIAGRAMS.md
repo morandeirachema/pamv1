@@ -191,6 +191,12 @@ erDiagram
     bool Confirmed
     time_Time CreatedAt
   }
+  Profile {
+    int64 ID
+    string Name
+    arr_string Capabilities
+    time_Time CreatedAt
+  }
   Session {
     int64 ID
     string Username
@@ -236,7 +242,7 @@ erDiagram
 
 ## 3. REST API surface
 
-The 58 routes registered on the API mux, with the capability or guard each enforces (see `internal/auth` for the role → capability matrix).
+The 61 routes registered on the API mux, with the capability or guard each enforces (see `internal/auth` for the role → capability matrix).
 
 | Method | Path | Guard |
 |---|---|---|
@@ -271,6 +277,9 @@ The 58 routes registered on the API mux, with the capability or guard each enfor
 | POST | `/api/mfa/enroll` | authenticated |
 | POST | `/api/mfa/recovery-codes` | authenticated |
 | POST | `/api/mfa/verify` | authenticated |
+| GET | `/api/profiles` | CapManageUsers |
+| POST | `/api/profiles` | CapManageUsers |
+| DELETE | `/api/profiles/{id}` | CapManageUsers |
 | GET | `/api/reconcile` | CapManageCredentials |
 | GET | `/api/sessions` | CapReadAudit |
 | DELETE | `/api/sessions/{id}` | CapManageTargets |
