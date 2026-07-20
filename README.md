@@ -218,7 +218,7 @@ disable the proxy with `PAM_SSH_ADDR=off`.
 
 ## Roadmap
 
-All fourteen phases have shipped — full per-phase detail in **[ROADMAP.md](ROADMAP.md)**:
+All fifteen phases have shipped — full per-phase detail in **[ROADMAP.md](ROADMAP.md)**:
 
 | Phase | Theme | Status |
 |---|---|---|
@@ -237,6 +237,70 @@ All fourteen phases have shipped — full per-phase detail in **[ROADMAP.md](ROA
 | 12 | Configuration subsystem + custom-profile RBAC + hot-swap | ✅ shipped |
 | 13 | AI-agent access broker (policy, JIT tools, verifiable audit, MCP, SPIFFE) | ✅ shipped |
 | 14 | SOPS-encrypted Kubernetes secrets (age; Flux/Argo/helm-secrets) | ✅ shipped |
+
+## Coverage vs. commercial PAM (CyberArk, Wallix, …)
+
+pamv1 is an **educational, alpha** project — not a drop-in replacement for
+[CyberArk](https://www.cyberark.com/products/privileged-access-manager/),
+[Wallix Bastion](https://www.wallix.com/privileged-access-management/),
+[BeyondTrust](https://www.beyondtrust.com/),
+[Delinea](https://delinea.com/products/secret-server),
+[Teleport](https://goteleport.com/) or [StrongDM](https://www.strongdm.com/). On the
+**core session/credential loop** it is already at parity — a JIT-injection proxy
+(SSH/WinRM/RDP), tamper-evident hash-chained recordings, rotation + reconciliation +
+checkout leases, M-of-N break-glass, RBAC + AD/Entra/OIDC + MFA, and a verifiable
+audit chain — and its **AI-agent access broker** (policy over the tool *and its
+arguments*, MCP transport, SPIFFE identity) is ahead of most incumbents.
+
+The gaps below are about **breadth and governance**. Each notes how it fits pamv1's
+existing chokepoint architecture, and they map to candidate future phases.
+
+### Tier 1 — structural / connector gaps
+
+| Gap | What the leaders do | pamv1 today | Fit |
+|---|---|---|---|
+| **Safe / vault containers** with delegated ownership | CyberArk's whole authorization model is [Safes](https://docs.cyberark.com/pam-self-hosted/latest/en/content/pasref/safes-and-safe-members.htm) — credential containers with their own members, workflows & delegated admin; Wallix uses target domains | per-target grants + global RBAC — no container to group credentials, delegate team ownership, or scope policy/approval to a collection | extends the grant model; the biggest structural delta and the key to multi-team / multi-tenant use |
+| **Database session proxy** with query-level audit | [Teleport](https://goteleport.com/docs/enroll-resources/database-access/), [StrongDM](https://www.strongdm.com/), CyberArk & Wallix broker native Postgres/MySQL/MSSQL/Oracle with per-query audit + JIT injection | shells + RDP only; no database protocol brokering | **excellent** — a new listener speaking the DB wire protocol, reusing the SSH proxy's decrypt→inject→record pattern |
+| **Live monitoring + command control** | [CyberArk PSM](https://www.cyberark.com/products/privileged-session-manager/) & Wallix let a supervisor watch a live session, block a dangerous command mid-stream (`rm -rf /`, `DROP TABLE`) and terminate it interactively | async recording + session kill only; no live shadow, no command blocking | **excellent** — tee the recording stream to a watcher; add a filter hook in the I/O loop |
+| **Dependent-account propagation** on rotation | CyberArk CPM updates every [consumer](https://docs.cyberark.com/pam-self-hosted/latest/en/content/pasimp/managing-service-accounts-service.htm) of a rotated service account (Windows Services, Scheduled Tasks, IIS App Pools, COM+) | rotates the credential on the target; no notion of consumers | makes **auto-rotating service accounts safe** in a real Windows estate — today a genuine adoption blocker |
+
+### Tier 2 — access-governance depth
+
+- **Access certification / attestation campaigns** — periodic "managers recertify or revoke who has access to what" (a SOX / ISO 27001 / NIS2 control). *No coverage today; the grant model + audit trail are the foundation.*
+- **ITSM / ticketing gate** — require a valid ServiceNow/Jira change ticket before access and stamp its ID into the audit. *The existing 4-eyes approval engine is the hook.*
+- **Richer approval workflows** — multi-tier chains, time-boxed / scheduled access windows, one-time access, mandatory reason codes (pamv1 is single-level 4-eyes today).
+
+### Tier 3 — where the market is moving
+
+| Gap | Leaders | pamv1 today |
+|---|---|---|
+| **Zero Standing Privilege** — ephemeral accounts / short-lived SSH certs instead of a stored standing secret | [CyberArk ZSP](https://www.cyberark.com/what-is/zero-standing-privileges/), Teleport | vaulted standing credential + JIT injection |
+| **Connector / plugin breadth** — network devices (Cisco/Juniper/F5/Palo Alto), database accounts, cloud IAM, VMware/SAP/mainframe | CyberArk's core moat | SSH / WinRM / ssh_key rotation only |
+| **Cloud privileged access (CIEM-lite)** — federated console + short-lived cloud credentials, entitlement right-sizing | CyberArk, Wallix | AWS KMS for the KEK only |
+| **Privileged threat analytics** — behavioural anomaly detection, risk scoring, automated response | CyberArk PTA, Wallix | raw audited stream + syslog/SIEM export (detect downstream) |
+| **Web / SaaS session proxying** — record + inject into web admin consoles | CyberArk Secure Web Sessions, Wallix | SSH/WinRM/RDP only (the heaviest lift) |
+
+### Tier 4 — ecosystem
+
+A [Terraform **provider**](https://developer.hashicorp.com/terraform) for pamv1 objects
+(targets / credentials / policies-as-code — strongly aligned with the IaC ethos) ·
+[Secrets Hub](https://www.cyberark.com/products/secrets-hub/)-style sync-out to AWS
+Secrets Manager / Azure Key Vault · a [Conjur](https://www.conjur.org/)-style
+application-secrets API for non-agent apps · SSH-key fleet discovery · thick-app
+connection components (auto-login into SSMS / Toad / vSphere via RDP RemoteApp).
+
+### Deliberate non-goal
+
+[Endpoint Privilege Management](https://www.beyondtrust.com/privilege-management) —
+removing local admin rights and elevating sudo/apps via an **endpoint agent**
+(BeyondTrust / Delinea's core) — is a different product category that doesn't fit a
+vault + proxy chokepoint, and is **out of scope** by design.
+
+### Candidate next phases
+
+1. **Phase 15 — Database session proxy** (Postgres → MySQL/MSSQL): the biggest coverage win, and it drops straight into the proven proxy pattern.
+2. **Phase 16 — Live monitoring + command control**: turns the existing recording + kill-switch into supervised sessions.
+3. **Phase 17 — Safes / containers + dependent-account propagation**: the authorization upgrade for multi-team use and *safe* service-account rotation.
 
 ## Quickstart
 

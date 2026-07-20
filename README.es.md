@@ -241,6 +241,75 @@ Se han entregado las quince fases — detalle por fase en **[ROADMAP.md](ROADMAP
 | 13 | Bróker de acceso para agentes de IA (política, herramientas JIT, auditoría verificable, MCP, SPIFFE) | ✅ entregada |
 | 14 | Secretos de Kubernetes cifrados con SOPS (age; Flux/Argo/helm-secrets) | ✅ entregada |
 
+## Cobertura frente al PAM comercial (CyberArk, Wallix, …)
+
+pamv1 es un proyecto **educativo y alpha** — no un reemplazo directo de
+[CyberArk](https://www.cyberark.com/products/privileged-access-manager/),
+[Wallix Bastion](https://www.wallix.com/privileged-access-management/),
+[BeyondTrust](https://www.beyondtrust.com/),
+[Delinea](https://delinea.com/products/secret-server),
+[Teleport](https://goteleport.com/) ni [StrongDM](https://www.strongdm.com/). En el
+**bucle central de sesión/credencial** ya está a la par — proxy de inyección JIT
+(SSH/WinRM/RDP), grabaciones encadenadas por hash a prueba de manipulación, rotación
++ reconciliación + concesiones de checkout, break-glass M-de-N, RBAC + AD/Entra/OIDC +
+MFA, y una cadena de auditoría verificable — y su **bróker de acceso para agentes de
+IA** (política sobre la herramienta *y sus argumentos*, transporte MCP, identidad
+SPIFFE) va por delante de la mayoría de los titulares.
+
+Las brechas siguientes son de **amplitud y gobierno**. Cada una indica cómo encaja en
+la arquitectura de punto de estrangulamiento existente de pamv1, y se corresponden con
+posibles fases futuras.
+
+### Nivel 1 — brechas estructurales / de conectores
+
+| Brecha | Qué hacen los líderes | pamv1 hoy | Encaje |
+|---|---|---|---|
+| **Cajas fuertes (safes) / contenedores** con propiedad delegada | Todo el modelo de autorización de CyberArk son las [safes](https://docs.cyberark.com/pam-self-hosted/latest/en/content/pasref/safes-and-safe-members.htm) — contenedores de credenciales con sus propios miembros, flujos y administración delegada; Wallix usa dominios de objetivos | concesiones por objetivo + RBAC global — sin contenedor para agrupar credenciales, delegar la propiedad a un equipo o acotar política/aprobación a una colección | amplía el modelo de concesiones; el mayor salto estructural y la clave para el uso multiequipo / multiinquilino |
+| **Proxy de sesión de base de datos** con auditoría por consulta | [Teleport](https://goteleport.com/docs/enroll-resources/database-access/), [StrongDM](https://www.strongdm.com/), CyberArk y Wallix intermedian Postgres/MySQL/MSSQL/Oracle nativos con auditoría por consulta + inyección JIT | solo shells + RDP; sin intermediación de protocolos de base de datos | **excelente** — un nuevo listener que hable el protocolo de la BD, reutilizando el patrón descifrar→inyectar→grabar del proxy SSH |
+| **Monitorización en vivo + control de comandos** | [CyberArk PSM](https://www.cyberark.com/products/privileged-session-manager/) y Wallix permiten a un supervisor ver una sesión en vivo, bloquear un comando peligroso a mitad de flujo (`rm -rf /`, `DROP TABLE`) y terminarla de forma interactiva | solo grabación asíncrona + corte de sesión; sin observación en vivo ni bloqueo de comandos | **excelente** — replicar el flujo de grabación hacia un observador; añadir un hook de filtrado en el bucle de E/S |
+| **Propagación a cuentas dependientes** al rotar | El CPM de CyberArk actualiza cada [consumidor](https://docs.cyberark.com/pam-self-hosted/latest/en/content/pasimp/managing-service-accounts-service.htm) de una cuenta de servicio rotada (Servicios de Windows, Tareas programadas, App Pools de IIS, COM+) | rota la credencial en el objetivo; sin noción de consumidores | hace **segura la rotación automática de cuentas de servicio** en un parque Windows real — hoy un bloqueante de adopción real |
+
+### Nivel 2 — profundidad de gobierno de accesos
+
+- **Campañas de certificación / atestación de accesos** — "los responsables recertifican o revocan quién tiene acceso a qué" de forma periódica (un control de SOX / ISO 27001 / NIS2). *Sin cobertura hoy; el modelo de concesiones + el rastro de auditoría son la base.*
+- **Pasarela ITSM / tickets** — exigir un ticket de cambio válido de ServiceNow/Jira antes del acceso y grabar su ID en la auditoría. *El motor de aprobación a cuatro ojos existente es el punto de enganche.*
+- **Flujos de aprobación más ricos** — cadenas multinivel, ventanas de acceso temporizadas / programadas, acceso de un solo uso, códigos de motivo obligatorios (pamv1 es hoy de un solo nivel a cuatro ojos).
+
+### Nivel 3 — hacia dónde va el mercado
+
+| Brecha | Líderes | pamv1 hoy |
+|---|---|---|
+| **Cero Privilegio Permanente (ZSP)** — cuentas efímeras / certificados SSH de corta vida en lugar de un secreto permanente almacenado | [CyberArk ZSP](https://www.cyberark.com/what-is/zero-standing-privileges/), Teleport | credencial permanente en el vault + inyección JIT |
+| **Amplitud de conectores / plugins** — dispositivos de red (Cisco/Juniper/F5/Palo Alto), cuentas de BD, IAM en la nube, VMware/SAP/mainframe | el foso principal de CyberArk | solo rotación SSH / WinRM / ssh_key |
+| **Acceso privilegiado en la nube (CIEM ligero)** — consola federada + credenciales de nube de corta vida, ajuste de derechos | CyberArk, Wallix | solo AWS KMS para la KEK |
+| **Analítica de amenazas privilegiadas** — detección de anomalías de comportamiento, puntuación de riesgo, respuesta automatizada | CyberArk PTA, Wallix | flujo auditado en bruto + exportación syslog/SIEM (detectar aguas abajo) |
+| **Proxy de sesiones web / SaaS** — grabar + inyectar en consolas de administración web | CyberArk Secure Web Sessions, Wallix | solo SSH/WinRM/RDP (el mayor esfuerzo) |
+
+### Nivel 4 — ecosistema
+
+Un [**provider** de Terraform](https://developer.hashicorp.com/terraform) para los
+objetos de pamv1 (objetivos / credenciales / políticas como código — muy alineado con
+la filosofía IaC) · sincronización de salida estilo
+[Secrets Hub](https://www.cyberark.com/products/secrets-hub/) hacia AWS Secrets Manager
+/ Azure Key Vault · una API de secretos de aplicación estilo
+[Conjur](https://www.conjur.org/) para apps sin agente · descubrimiento de claves SSH
+del parque · componentes de conexión para apps de escritorio (auto-login en
+SSMS / Toad / vSphere vía RDP RemoteApp).
+
+### No-objetivo deliberado
+
+La [gestión de privilegios en el endpoint (EPM)](https://www.beyondtrust.com/privilege-management)
+— quitar derechos de administrador local y elevar sudo/apps mediante un **agente en el
+endpoint** (el núcleo de BeyondTrust / Delinea) — es una categoría de producto distinta
+que no encaja en un punto de estrangulamiento vault + proxy, y queda **fuera de alcance**
+por diseño.
+
+### Fases candidatas siguientes
+
+1. **Fase 15 — Proxy de sesión de base de datos** (Postgres → MySQL/MSSQL): la mayor ganancia de cobertura, y encaja directamente en el patrón de proxy ya probado.
+2. **Fase 16 — Monitorización en vivo + control de comandos**: convierte la grabación + corte existentes en sesiones supervisadas.
+3. **Fase 17 — Safes / contenedores + propagación a cuentas dependientes**: la mejora de autorización para el uso multiequipo y la rotación *segura* de cuentas de servicio.
+
 ## Inicio rápido
 
 > Las **especificaciones de ejecución** (puertos, recursos, versiones de Docker/Kubernetes, PostgreSQL, almacenamiento, dimensionado) están en **[docs/REQUIREMENTS.md](docs/REQUIREMENTS.md)**.
