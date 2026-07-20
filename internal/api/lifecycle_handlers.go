@@ -122,7 +122,7 @@ type checkoutIn struct {
 // the holder saw can no longer be used. Honors the reveal-disabled policy
 // (break-glass excepted), since a checkout reveals the secret.
 func (s *Server) checkoutCredential(w http.ResponseWriter, r *http.Request) {
-	if s.revealDisabled && !principalFrom(r.Context()).BreakGlass {
+	if s.rt().revealDisabled && !principalFrom(r.Context()).BreakGlass {
 		s.audit(r.Context(), "credential.checkout_denied", "reason:reveal-disabled-by-policy")
 		writeError(w, http.StatusForbidden, "credential checkout is disabled by policy; connect through the proxy")
 		return
@@ -164,7 +164,7 @@ func (s *Server) checkoutCredential(w http.ResponseWriter, r *http.Request) {
 	}
 	co := store.Checkout{
 		CredentialID: cred.ID, TargetID: target.ID, Holder: actorFrom(r.Context()),
-		Reason: in.Reason, ExpiresAt: now.Add(s.checkoutTTL).UTC(),
+		Reason: in.Reason, ExpiresAt: now.Add(s.rt().checkoutTTL).UTC(),
 	}
 	if err := s.store.CreateCheckout(r.Context(), &co, now); err != nil {
 		if errors.Is(err, store.ErrConflict) {

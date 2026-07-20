@@ -18,7 +18,7 @@ type identityResult struct {
 // ?dry_run=true it reports what it would do without changing anything. Requires a
 // configured directory (PAM_LDAP_URL) and CapManageUsers.
 func (s *Server) reconcileIdentities(w http.ResponseWriter, r *http.Request) {
-	if s.directory == nil {
+	if s.rt().directory == nil {
 		writeError(w, http.StatusServiceUnavailable, "identity reconciliation requires a directory (set PAM_LDAP_URL)")
 		return
 	}
@@ -32,7 +32,7 @@ func (s *Server) reconcileIdentities(w http.ResponseWriter, r *http.Request) {
 	results := make([]identityResult, 0, len(users))
 	var revoked int
 	for _, u := range users {
-		exists, enabled, derr := s.directory.UserStatus(r.Context(), u.Username)
+		exists, enabled, derr := s.rt().directory.UserStatus(r.Context(), u.Username)
 		switch {
 		case derr != nil:
 			// Never revoke on uncertainty (a transient directory error).

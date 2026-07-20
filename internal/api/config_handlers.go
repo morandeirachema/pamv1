@@ -41,8 +41,17 @@ func (s *Server) listConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"settings": out,
-		"note":     "Overrides take effect on restart. Bootstrap/transport settings (database, master key, listen/TLS) stay environment-only.",
+		"note":     "Overrides " + s.reloadNote() + ". Bootstrap/transport settings (database, master key, listen/TLS) stay environment-only.",
 	})
+}
+
+// reloadNote describes when a configuration change becomes effective, depending
+// on whether hot-swap (a wired reconfigure closure) is enabled.
+func (s *Server) reloadNote() string {
+	if s.hotSwap() {
+		return "take effect immediately (identity/policy), with networking/TLS still requiring a restart"
+	}
+	return "take effect on restart"
 }
 
 type configIn struct {
@@ -73,12 +82,24 @@ func (s *Server) putConfig(w http.ResponseWriter, r *http.Request) {
 		}
 		setting.Value = enc
 	}
+	// Capture the prior override so a rejected hot-swap can be rolled back rather
+	// than leaving a bad value that would also break the next restart.
+	prev, prevErr := s.store.GetSetting(r.Context(), in.Key)
 	if err := s.store.PutSetting(r.Context(), &setting); err != nil {
 		storeError(w, err)
 		return
 	}
+	if err := s.applyReconfigure(r.Context()); err != nil {
+		if prevErr == nil {
+			_ = s.store.PutSetting(r.Context(), prev)
+		} else {
+			_ = s.store.DeleteSetting(r.Context(), in.Key)
+		}
+		writeError(w, http.StatusUnprocessableEntity, "configuration rejected: "+err.Error())
+		return
+	}
 	s.audit(r.Context(), "config.update", in.Key)
-	writeJSON(w, http.StatusOK, map[string]any{"key": in.Key, "updated": true, "note": "takes effect on restart"})
+	writeJSON(w, http.StatusOK, map[string]any{"key": in.Key, "updated": true, "note": "changes " + s.reloadNote()})
 }
 
 // deleteConfig clears a configuration override, reverting to the environment.
@@ -86,6 +107,12 @@ func (s *Server) deleteConfig(w http.ResponseWriter, r *http.Request) {
 	key := r.PathValue("key")
 	if err := s.store.DeleteSetting(r.Context(), key); err != nil {
 		storeError(w, err)
+		return
+	}
+	// Reverting to the env baseline, which was valid at startup, so a reconfigure
+	// failure here is unexpected; surface it but leave the override cleared.
+	if err := s.applyReconfigure(r.Context()); err != nil {
+		writeError(w, http.StatusInternalServerError, "override cleared but reload failed: "+err.Error())
 		return
 	}
 	s.audit(r.Context(), "config.revert", key)

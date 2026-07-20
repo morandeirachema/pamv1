@@ -28,7 +28,7 @@ type loginIn struct {
 // used as X-API-Key (portal) or the SSH proxy password, exactly like a per-user
 // token — its role comes from the user's directory groups.
 func (s *Server) login(w http.ResponseWriter, r *http.Request) {
-	if s.authn == nil {
+	if s.rt().authn == nil {
 		writeError(w, http.StatusServiceUnavailable, "password login is not configured")
 		return
 	}
@@ -36,7 +36,7 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	if !readJSON(w, r, &in) {
 		return
 	}
-	principal, err := s.authn.Authenticate(r.Context(), in.Username, in.Password)
+	principal, err := s.rt().authn.Authenticate(r.Context(), in.Username, in.Password)
 	if err != nil {
 		s.log.Warn("login failed", "user", in.Username, "remote", r.RemoteAddr)
 		s.auditAs(r.Context(), in.Username, "login.failed", "reason:credentials remote:"+r.RemoteAddr)
@@ -66,7 +66,7 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusUnauthorized, "invalid multi-factor code")
 			return
 		}
-	case s.mfaRequired:
+	case s.rt().mfaRequired:
 		// Policy requires MFA but the user has none yet: issue an
 		// enrollment-only session so they can set it up, nothing else.
 		token, _, err := s.issueSession(r.Context(), principal, auth.SessionScopeEnroll)

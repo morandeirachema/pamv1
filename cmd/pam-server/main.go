@@ -402,7 +402,9 @@ func run() error {
 	// Phase 12: overlay DB-persisted configuration onto the env-derived config
 	// before building the identity backends and policy-driven components, so
 	// stored settings take effect (identity/SSO/policy only; bootstrap/transport
-	// stay environment-only).
+	// stay environment-only). base keeps the pristine env baseline so the hot-swap
+	// reconfigure closure can rebuild from env + the current overrides.
+	base := *cfg
 	if err := applyStoredConfig(ctx, st, v, cfg, log); err != nil {
 		return err
 	}
@@ -445,6 +447,37 @@ func run() error {
 	if err != nil {
 		return err
 	}
+
+	// reconfigure reproduces the hot-swappable RuntimeConfig from the pristine env
+	// baseline plus the current DB overrides, so PUT/DELETE /api/config can rebuild
+	// the identity backends and operational policy without a restart (Phase 12).
+	reconfigure := func(ctx context.Context) (*api.RuntimeConfig, error) {
+		c := base
+		if err := applyStoredConfig(ctx, st, v, &c, log); err != nil {
+			return nil, err
+		}
+		an, dir, err := buildAuthenticator(&c, log)
+		if err != nil {
+			return nil, err
+		}
+		op, err := buildOIDC(ctx, &c, log)
+		if err != nil {
+			return nil, err
+		}
+		return &api.RuntimeConfig{
+			Authn:            an,
+			Directory:        dir,
+			OIDC:             op,
+			OIDCRoleMap:      roleMap(c.OIDCRoleAdmin, c.OIDCRoleUser, c.OIDCRoleAuditor, c.OIDCRoleApprover),
+			MFARequired:      c.MFARequired,
+			RevealDisabled:   c.RevealDisabled,
+			ApprovalRequired: c.RequireApproval,
+			ApprovalWindow:   c.ApprovalWindow,
+			CheckoutTTL:      c.CheckoutTTL,
+			AllowedProtocols: splitAndTrim(c.AllowedProtocols),
+		}, nil
+	}
+
 	handler, err := api.New(st, v, resolver, authn, api.Options{
 		Sessions:            sessions,
 		SSHHostKeyCallback:  upstreamHostKey,
@@ -470,6 +503,7 @@ func run() error {
 		CheckoutTTL:         cfg.CheckoutTTL,
 		AllowedProtocols:    splitAndTrim(cfg.AllowedProtocols),
 		Directory:           directory,
+		Reconfigure:         reconfigure,
 		BrokerPolicy:        brokerPolicy,
 		BrokerAuditKey:      brokerAuditKey,
 		BrokerAuditSignKey:  brokerSignKey,

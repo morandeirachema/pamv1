@@ -33,7 +33,7 @@ func (s *Server) createAccessRequest(w http.ResponseWriter, r *http.Request) {
 		TargetID:  in.TargetID,
 		Reason:    in.Reason,
 		Status:    "pending",
-		ExpiresAt: time.Now().Add(s.approvalWindow).UTC(),
+		ExpiresAt: time.Now().Add(s.rt().approvalWindow).UTC(),
 	}
 	if err := s.store.CreateAccessRequest(r.Context(), &ar); err != nil {
 		storeError(w, err)
@@ -117,7 +117,7 @@ func (s *Server) decideAccessRequest(w http.ResponseWriter, r *http.Request, dec
 // requireApprovalFor reports whether connecting to target needs an approved
 // access request (per-target flag or the global OT policy).
 func (s *Server) requireApprovalFor(t *store.Target) bool {
-	return s.approvalRequired || t.RequireApproval
+	return s.rt().approvalRequired || t.RequireApproval
 }
 
 // enforceApproval reports whether the caller may connect to target under the

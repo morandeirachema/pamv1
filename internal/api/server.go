@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/morandeirachema/pamv1/internal/agentid"
@@ -139,6 +140,11 @@ type Options struct {
 	// Directory (optional) backs identity reconciliation: pamv1 revokes access for
 	// users the directory reports as disabled. nil disables the reconcile endpoint.
 	Directory auth.DirectorySource
+	// Reconfigure (optional) rebuilds the hot-swappable RuntimeConfig from the
+	// current stored configuration (Phase 12). When set, PUT/DELETE /api/config
+	// take effect without a restart; nil keeps the startup snapshot (changes
+	// apply on the next restart).
+	Reconfigure func(context.Context) (*RuntimeConfig, error)
 	// BrokerPolicy (optional) enables the AI-agent access broker (Phase 13). When
 	// non-nil the broker routes are served; BrokerAuditKey (32 bytes) and
 	// BrokerAuditSignKey are then required for the tamper-evident audit chain.
@@ -151,19 +157,14 @@ type Server struct {
 	store              store.Store
 	vault              *vault.Vault
 	resolver           *auth.Resolver
-	authn              auth.Authenticator // password login (e.g. AD); nil if not configured
 	winrm              winrm.Runner
-	mfaRequired        bool
 	recordingDir       string
-	oidc               *oidc.Provider
-	oidcRoleMap        map[string]auth.Role
 	portalURL          string
 	guacdAddr          string
 	guacdRecordingPath string
 	guacdRDPSecurity   string
 	guacdIgnoreCert    bool
 	authLimiter        *rateLimiter
-	revealDisabled     bool
 	sessions           *session.Registry
 	breakGlassHash     []byte
 	bgThreshold        int
@@ -172,22 +173,106 @@ type Server struct {
 	alerter            alert.Notifier
 	rotators           map[string]rotate.Rotator
 	verifiers          map[string]rotate.Verifier
-	approvalRequired   bool
-	approvalWindow     time.Duration
-	checkoutTTL        time.Duration
 	airGap             bool
 	discoveryDial      func(ctx context.Context, network, addr string) (net.Conn, error)
-	allowedProtocols   map[string]bool
-	directory          auth.DirectorySource
 	metrics            *metrics.Metrics
 	log                *slog.Logger
 	mux                *http.ServeMux
 	handler            http.Handler
+	// rtc is the atomically-swappable snapshot of runtime-overridable settings
+	// (identity backends + operational policy). PUT /api/config rebuilds it via
+	// reconfigure without a restart (Phase 12). Read it through s.rt().
+	rtc atomic.Pointer[runtimeConf]
+	// reconfigure rebuilds the runtime snapshot from current stored config; nil
+	// disables hot-swap (changes then apply on the next restart).
+	reconfigure func(context.Context) (*RuntimeConfig, error)
 	// AI-agent access broker (Phase 13); nil unless a policy file is configured.
 	broker        *broker.Broker
 	agentVerifier agentid.Verifier
 	auditChain    *auditchain.Chain
 }
+
+// RuntimeConfig is the set of settings PUT /api/config can change without a
+// server restart (Phase 12 hot-swap): the identity backends and operational
+// policy. main builds it from the base env config plus stored overrides and
+// hands the server a Reconfigure closure that reproduces it after each change.
+// Transport/bootstrap settings (listeners, TLS, DB URL, KEK) are not here —
+// they stay environment-only and require a restart.
+type RuntimeConfig struct {
+	Authn            auth.Authenticator
+	Directory        auth.DirectorySource
+	OIDC             *oidc.Provider
+	OIDCRoleMap      map[string]auth.Role
+	MFARequired      bool
+	RevealDisabled   bool
+	ApprovalRequired bool
+	ApprovalWindow   time.Duration
+	CheckoutTTL      time.Duration
+	AllowedProtocols []string
+}
+
+// runtimeConf is the server's immutable in-memory copy of a RuntimeConfig,
+// stored behind s.rtc (atomic.Pointer) so in-flight requests read a consistent
+// snapshot while a swap is in progress.
+type runtimeConf struct {
+	authn            auth.Authenticator
+	directory        auth.DirectorySource
+	oidc             *oidc.Provider
+	oidcRoleMap      map[string]auth.Role
+	mfaRequired      bool
+	revealDisabled   bool
+	approvalRequired bool
+	approvalWindow   time.Duration
+	checkoutTTL      time.Duration
+	allowedProtocols map[string]bool
+}
+
+// snapshot converts an externally-built RuntimeConfig into the internal
+// immutable form, defaulting the approval window and checkout TTL exactly as New
+// does so a hot swap never installs a zero duration.
+func snapshot(rc RuntimeConfig) *runtimeConf {
+	if rc.ApprovalWindow <= 0 {
+		rc.ApprovalWindow = 60 * time.Minute
+	}
+	if rc.CheckoutTTL <= 0 {
+		rc.CheckoutTTL = 30 * time.Minute
+	}
+	return &runtimeConf{
+		authn:            rc.Authn,
+		directory:        rc.Directory,
+		oidc:             rc.OIDC,
+		oidcRoleMap:      rc.OIDCRoleMap,
+		mfaRequired:      rc.MFARequired,
+		revealDisabled:   rc.RevealDisabled,
+		approvalRequired: rc.ApprovalRequired,
+		approvalWindow:   rc.ApprovalWindow,
+		checkoutTTL:      rc.CheckoutTTL,
+		allowedProtocols: protocolSet(rc.AllowedProtocols),
+	}
+}
+
+// rt returns the current runtime configuration snapshot. Never nil after New.
+func (s *Server) rt() *runtimeConf { return s.rtc.Load() }
+
+// applyReconfigure rebuilds the runtime snapshot from the current stored config
+// and installs it atomically, so identity backends and policy take effect
+// without a restart. A nil reconfigure (e.g. in tests) leaves the running
+// snapshot in place and the change applies on the next restart.
+func (s *Server) applyReconfigure(ctx context.Context) error {
+	if s.reconfigure == nil {
+		return nil
+	}
+	rc, err := s.reconfigure(ctx)
+	if err != nil {
+		return err
+	}
+	s.rtc.Store(snapshot(*rc))
+	return nil
+}
+
+// hotSwap reports whether runtime configuration changes take effect immediately
+// (a reconfigure closure is wired) rather than on the next restart.
+func (s *Server) hotSwap() bool { return s.reconfigure != nil }
 
 // New builds the HTTP handler. The resolver authenticates the X-API-Key header
 // into a Principal (bootstrap admin key, break-glass key, per-user token, or a
@@ -220,14 +305,6 @@ func New(st store.Store, v *vault.Vault, resolver *auth.Resolver, authn auth.Aut
 		// Air-gapped deployments must make no outbound calls; drop the webhook.
 		alerter = alert.Noop{}
 	}
-	approvalWindow := opts.ApprovalWindow
-	if approvalWindow <= 0 {
-		approvalWindow = 60 * time.Minute
-	}
-	checkoutTTL := opts.CheckoutTTL
-	if checkoutTTL <= 0 {
-		checkoutTTL = 30 * time.Minute
-	}
 	sshConn := rotate.SSHConnector{HostKeyCallback: opts.SSHHostKeyCallback}
 	rotators := opts.Rotators
 	if rotators == nil {
@@ -247,19 +324,14 @@ func New(st store.Store, v *vault.Vault, resolver *auth.Resolver, authn auth.Aut
 		store:              st,
 		vault:              v,
 		resolver:           resolver,
-		authn:              authn,
 		winrm:              runner,
-		mfaRequired:        opts.MFARequired,
 		recordingDir:       opts.RecordingDir,
-		oidc:               opts.OIDC,
-		oidcRoleMap:        opts.OIDCRoleMap,
 		portalURL:          portalURL,
 		guacdAddr:          opts.GuacdAddr,
 		guacdRecordingPath: opts.GuacdRecordingPath,
 		guacdRDPSecurity:   opts.GuacdRDPSecurity,
 		guacdIgnoreCert:    opts.GuacdIgnoreCert,
 		authLimiter:        newRateLimiter(opts.AuthRatePerMin),
-		revealDisabled:     opts.RevealDisabled,
 		sessions:           opts.Sessions,
 		breakGlassHash:     bgHash,
 		bgThreshold:        opts.BreakGlassThreshold,
@@ -268,17 +340,28 @@ func New(st store.Store, v *vault.Vault, resolver *auth.Resolver, authn auth.Aut
 		alerter:            alerter,
 		rotators:           rotators,
 		verifiers:          verifiers,
-		approvalRequired:   opts.RequireApproval,
-		approvalWindow:     approvalWindow,
-		checkoutTTL:        checkoutTTL,
 		airGap:             opts.AirGap,
 		discoveryDial:      opts.DiscoveryDial,
-		allowedProtocols:   protocolSet(opts.AllowedProtocols),
-		directory:          opts.Directory,
+		reconfigure:        opts.Reconfigure,
 		metrics:            metrics.New(),
 		log:                logging.Component("api"),
 		mux:                http.NewServeMux(),
 	}
+	// The initial runtime snapshot comes from opts (built by main from the base
+	// env config + stored overrides); PUT /api/config later swaps it via
+	// applyReconfigure.
+	s.rtc.Store(snapshot(RuntimeConfig{
+		Authn:            authn,
+		Directory:        opts.Directory,
+		OIDC:             opts.OIDC,
+		OIDCRoleMap:      opts.OIDCRoleMap,
+		MFARequired:      opts.MFARequired,
+		RevealDisabled:   opts.RevealDisabled,
+		ApprovalRequired: opts.RequireApproval,
+		ApprovalWindow:   opts.ApprovalWindow,
+		CheckoutTTL:      opts.CheckoutTTL,
+		AllowedProtocols: opts.AllowedProtocols,
+	}))
 	if s.sessions != nil {
 		s.metrics.SetActiveSessionsSource(func() int { return len(s.sessions.List()) })
 	}
@@ -535,7 +618,8 @@ func protocolSet(ps []string) map[string]bool {
 // protocolAllowed reports whether a target using proto may be created or
 // connected to under the configured allowlist (nil allowlist = all allowed).
 func (s *Server) protocolAllowed(proto string) bool {
-	return s.allowedProtocols == nil || s.allowedProtocols[proto]
+	allowed := s.rt().allowedProtocols
+	return allowed == nil || allowed[proto]
 }
 
 // readyz reports readiness: the server is up AND its store backend is reachable.

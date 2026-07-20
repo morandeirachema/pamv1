@@ -99,7 +99,7 @@ func (s *Server) listCredentials(w http.ResponseWriter, r *http.Request) {
 func (s *Server) revealCredential(w http.ResponseWriter, r *http.Request) {
 	// When reveal is disabled by policy, only break-glass may still reveal —
 	// everyone else must go through the recorded, JIT-injecting proxy.
-	if s.revealDisabled && !principalFrom(r.Context()).BreakGlass {
+	if s.rt().revealDisabled && !principalFrom(r.Context()).BreakGlass {
 		s.audit(r.Context(), "credential.reveal_denied", "reason:reveal-disabled-by-policy")
 		writeError(w, http.StatusForbidden, "credential reveal is disabled by policy; connect through the proxy")
 		return
