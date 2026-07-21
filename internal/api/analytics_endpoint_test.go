@@ -46,3 +46,17 @@ func TestAnalyticsRiskEndpoint(t *testing.T) {
 		t.Fatalf("a plain user must not read analytics, got %d", s)
 	}
 }
+
+// TestAnalyticsWindowCapped proves an oversized ?window_min= is clamped, so a
+// single request can't be made to score the entire audit history.
+func TestAnalyticsWindowCapped(t *testing.T) {
+	srv, _ := newTestServerOpts(t, nil, api.Options{Analytics: analytics.New(analytics.Config{})})
+	status, data := do(t, srv, http.MethodGet, "/api/analytics/risk?window_min=99999999", testAPIKey, nil)
+	if status != http.StatusOK {
+		t.Fatalf("status %d: %s", status, data)
+	}
+	const maxMinutes = 7 * 24 * 60 // matches maxAnalyticsWindow
+	if wm := int(jsonMap(t, data)["window_minutes"].(float64)); wm > maxMinutes {
+		t.Fatalf("window_minutes not capped: got %d, want <= %d", wm, maxMinutes)
+	}
+}

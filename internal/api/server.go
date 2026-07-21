@@ -222,9 +222,10 @@ type Server struct {
 	sshCA              *sshca.CertAuthority
 	analytics          *analytics.Engine
 	analyticsWindow    time.Duration
+	analyticsCooldown  time.Duration
 	analyticsAutoKill  bool
 	analyticsMu        sync.Mutex
-	analyticsAlerted   map[string]int // actor → highest score already alerted on
+	analyticsAlerted   map[string]analyticsAlert // actor → last alert (score + time)
 	metrics            *metrics.Metrics
 	log                *slog.Logger
 	mux                *http.ServeMux
@@ -404,7 +405,7 @@ func New(st store.Store, v *vault.Vault, resolver *auth.Resolver, authn auth.Aut
 		analytics:          opts.Analytics,
 		analyticsWindow:    opts.AnalyticsWindow,
 		analyticsAutoKill:  opts.AnalyticsAutoKill,
-		analyticsAlerted:   make(map[string]int),
+		analyticsAlerted:   make(map[string]analyticsAlert),
 		metrics:            metrics.New(),
 		log:                logging.Component("api"),
 		mux:                http.NewServeMux(),
@@ -427,6 +428,10 @@ func New(st store.Store, v *vault.Vault, resolver *auth.Resolver, authn auth.Aut
 	if s.analyticsWindow <= 0 {
 		s.analyticsWindow = time.Hour
 	}
+	// A flagged actor is re-alerted (and, if critical, re-killed) once per cooldown
+	// so a sustained or recurring incident isn't suppressed forever; the cooldown
+	// tracks the scoring window.
+	s.analyticsCooldown = s.analyticsWindow
 	if s.sessions != nil {
 		s.metrics.SetActiveSessionsSource(func() int { return len(s.sessions.List()) })
 	}

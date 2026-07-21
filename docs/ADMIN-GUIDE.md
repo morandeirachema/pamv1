@@ -190,7 +190,8 @@ All configuration is environment variables (12-factor). Full descriptions in
 | `PAM_DB_ADDR` | | `off` | PostgreSQL session-proxy bind (Phase 15), e.g. `:5433`; `off` disables it. |
 | `PAM_COMMAND_DENY_FILE` | | (off) | Regex denylist file for command control (Phase 16); blocks matching commands on exec/WinRM/SQL. |
 | `PAM_ANALYTICS_INTERVAL_MIN` | | `0` (off) | Threat-analytics worker interval (Phase 23); `0` leaves the read-only `GET /api/analytics/risk` endpoint on. See §9.7. |
-| `PAM_ANALYTICS_WINDOW_MIN` / `_AUTO_KILL` / `_BUSINESS_START` / `_BUSINESS_END` | | `60` / `false` / `7` / `20` | Risk-scoring window, auto-kill of critical actors' sessions, and business hours for the off-hours signal. |
+| `PAM_ANALYTICS_WINDOW_MIN` / `_AUTO_KILL` / `_BUSINESS_START` / `_BUSINESS_END` | | `60` / `false` / `7` / `20` | Risk-scoring window (also the re-alert cooldown), auto-kill of critical actors' sessions, and business hours for the off-hours signal. |
+| `PAM_ANALYTICS_TIMEZONE` | | (UTC) | IANA timezone the business hours are interpreted in (audit timestamps are UTC). |
 | `PAM_SSH_HOST_KEY` | | (ephemeral) | Path to persist the proxy SSH host key. |
 | `PAM_SSH_CA_KEY` | | (ZSP off) | Path to the Zero Standing Privilege SSH CA key (Phase 22); presence enables `ssh_ca` credentials (mint short-lived certs). See §6. |
 | `PAM_SSH_CERT_TTL_MIN` | | `2` | Validity (minutes) of a minted ZSP certificate. |
@@ -1038,13 +1039,19 @@ live sessions are terminated (`analytics.auto_response`):
 PAM_ANALYTICS_INTERVAL_MIN=5      # score every 5 minutes (0 = worker off, endpoint stays on)
 PAM_ANALYTICS_WINDOW_MIN=60       # how far back each pass looks
 PAM_ANALYTICS_AUTO_KILL=true      # cut off a critical-risk actor's live sessions
-PAM_ANALYTICS_BUSINESS_START=7    # business hours (local) for the off-hours signal…
+PAM_ANALYTICS_BUSINESS_START=7    # business hours for the off-hours signal…
 PAM_ANALYTICS_BUSINESS_END=20     # …outside 07:00–20:00 or on a weekend counts as off-hours
+PAM_ANALYTICS_TIMEZONE=America/New_York   # interpret business hours in this zone (empty = UTC)
 ```
 
-A steady state is not re-alerted every pass (a per-actor high-water mark); a
-worsening trend is. Tune sensitivity by defaulting business hours or by leaving
-auto-kill off until you trust the scores in your environment.
+Audit timestamps are stored in **UTC**, so set `PAM_ANALYTICS_TIMEZONE` (an IANA
+name) if your business hours are local — otherwise the off-hours window is
+evaluated in UTC. A high-risk actor is not re-alerted every pass, but a sustained
+or recurring incident **is** re-alerted (and, if critical, re-killed) once per
+`PAM_ANALYTICS_WINDOW_MIN`, so a repeat incident is never silently suppressed. The
+read endpoint's `?window_min=` is capped (at 7 days) so a single request can't be
+made to score the entire audit history. Leave auto-kill off until you trust the
+scores in your environment.
 
 ---
 

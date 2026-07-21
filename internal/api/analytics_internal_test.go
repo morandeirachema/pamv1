@@ -131,6 +131,36 @@ func TestAnalyticsPassDedupes(t *testing.T) {
 	}
 }
 
+// TestAnalyticsPassCooldownReAlerts proves a sustained/recurring high-risk actor
+// is re-alerted after the cooldown (not suppressed forever) and that the
+// alerted-set is pruned rather than growing without bound.
+func TestAnalyticsPassCooldownReAlerts(t *testing.T) {
+	srv, st, capt, _ := newAnalyticsServer(t, false)
+	// Keep the seeded events inside a long window while using a short cooldown, so
+	// advancing `now` past the cooldown does not also age the events out.
+	srv.analyticsWindow = 10 * time.Hour
+	srv.analyticsCooldown = 30 * time.Minute
+	seedAudit(t, st, "mallory", "breakglass.access", 2) // critical (score 100)
+
+	t0 := time.Now()
+	srv.analyticsPass(context.Background(), t0)
+	srv.analyticsPass(context.Background(), t0.Add(10*time.Minute)) // within cooldown
+	if got := capt.types()["analytics.risk_flagged"]; got != 1 {
+		t.Fatalf("within cooldown: want 1 alert, got %d", got)
+	}
+	srv.analyticsPass(context.Background(), t0.Add(45*time.Minute)) // past cooldown
+	if got := capt.types()["analytics.risk_flagged"]; got != 2 {
+		t.Fatalf("after cooldown a sustained incident must re-alert: want 2, got %d", got)
+	}
+	// The alerted-set holds only the one active actor — it does not accumulate.
+	srv.analyticsMu.Lock()
+	n := len(srv.analyticsAlerted)
+	srv.analyticsMu.Unlock()
+	if n != 1 {
+		t.Fatalf("alerted map should be pruned to the active actor, holds %d", n)
+	}
+}
+
 // auditActions returns a count of audit actions in the store.
 func auditActions(t *testing.T, st store.Store) map[string]int {
 	t.Helper()

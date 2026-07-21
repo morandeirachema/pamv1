@@ -204,6 +204,13 @@ func (s *Server) checkoutCredential(w http.ResponseWriter, r *http.Request) {
 	if !s.gateCredentialAccess(w, r, target, "credential.checkout") {
 		return
 	}
+	// A Zero Standing Privilege credential has no stored secret to lease. Refuse
+	// before creating a lease (which we'd then have to roll back after a decrypt of
+	// the empty SecretEnc failed, emitting a misleading credential.decrypt_failed).
+	if cred.SecretType == "ssh_ca" {
+		writeError(w, http.StatusUnprocessableEntity, "this credential has no stored secret (zero standing privilege); connect through the proxy")
+		return
+	}
 	var in checkoutIn
 	if r.ContentLength != 0 {
 		if !readJSON(w, r, &in) {

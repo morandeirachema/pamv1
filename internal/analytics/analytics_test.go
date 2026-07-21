@@ -96,6 +96,29 @@ func TestScoreAuthFailureBurstAndSort(t *testing.T) {
 	}
 }
 
+// TestOffHoursTimezone proves the off-hours signal is evaluated in the
+// configured timezone, not blindly in the UTC of the audit timestamp.
+func TestOffHoursTimezone(t *testing.T) {
+	ny, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		t.Skip("tzdata unavailable")
+	}
+	// Monday 23:00 UTC = 19:00 EDT (July): off-hours in UTC (>= 20:00), but inside
+	// business hours (07:00–20:00) in New York.
+	ts := time.Date(2026, 7, 20, 23, 0, 0, 0, time.UTC)
+	score := func(loc *time.Location) []Finding {
+		return New(Config{Location: loc}).Score([]store.AuditEvent{
+			{Actor: "bob", Action: "session.start", TS: ts},
+		})
+	}
+	if f := score(time.UTC); len(f) != 1 {
+		t.Fatalf("23:00 UTC should score off-hours when interpreted as UTC, got %+v", f)
+	}
+	if f := score(ny); len(f) != 0 {
+		t.Fatalf("23:00 UTC = 19:00 EDT should be in-hours in New York, got %+v", f)
+	}
+}
+
 // TestPerSignalCap proves a single signal category cannot exceed the cap.
 func TestPerSignalCap(t *testing.T) {
 	cfg := DefaultConfig()

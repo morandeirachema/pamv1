@@ -38,6 +38,21 @@ func TestLoadValidation(t *testing.T) {
 			t.Fatal("PAM_LDAP_INSECURE_SKIP_VERIFY must not be a runtime-overridable setting")
 		}
 	})
+	t.Run("zsp cert ttl too long", func(t *testing.T) {
+		setRequired(t)
+		t.Setenv("PAM_SSH_CA_KEY", "/data/ca")
+		t.Setenv("PAM_SSH_CERT_TTL_MIN", "2000") // > 24h
+		if _, err := Load(); err == nil || !strings.Contains(err.Error(), "PAM_SSH_CERT_TTL_MIN") {
+			t.Fatalf("Load() = %v, want PAM_SSH_CERT_TTL_MIN too-long error", err)
+		}
+	})
+	t.Run("invalid analytics timezone", func(t *testing.T) {
+		setRequired(t)
+		t.Setenv("PAM_ANALYTICS_TIMEZONE", "Nowhere/Fake")
+		if _, err := Load(); err == nil || !strings.Contains(err.Error(), "PAM_ANALYTICS_TIMEZONE") {
+			t.Fatalf("Load() = %v, want PAM_ANALYTICS_TIMEZONE error", err)
+		}
+	})
 }
 
 // TestLoadRequiredVars checks each required variable is reported when missing and

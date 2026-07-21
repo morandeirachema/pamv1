@@ -135,6 +135,13 @@ func (s *Server) revealCredential(w http.ResponseWriter, r *http.Request) {
 	if !s.gateCredentialAccess(w, r, target, "credential.reveal") {
 		return
 	}
+	// A Zero Standing Privilege credential stores no secret — there is nothing to
+	// reveal. Refuse cleanly rather than trying to decrypt an empty SecretEnc
+	// (which would 500 and log a misleading credential.decrypt_failed).
+	if c.SecretType == "ssh_ca" {
+		writeError(w, http.StatusUnprocessableEntity, "this credential has no stored secret (zero standing privilege); connect through the proxy")
+		return
+	}
 	secret, err := s.vault.Decrypt(r.Context(), c.SecretEnc, store.CredentialAAD(c.TargetID, c.ID))
 	if err != nil {
 		s.audit(r.Context(), "credential.decrypt_failed", fmt.Sprintf("credential:%d target:%d op:reveal", c.ID, c.TargetID))

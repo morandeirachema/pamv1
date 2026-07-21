@@ -1,6 +1,7 @@
 package api_test
 
 import (
+	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"net/http"
@@ -81,6 +82,43 @@ func TestZSPCredentialValidation(t *testing.T) {
 	}
 	if strings.Contains(string(data), `"secret"`) || strings.Contains(string(data), `"secret_enc"`) {
 		t.Fatalf("credential listing leaked a secret field: %s", data)
+	}
+}
+
+// TestZSPRevealCheckoutRefused proves reveal and checkout of a Zero Standing
+// Privilege credential are refused with a clean 422 (not a 500), and that no
+// misleading credential.decrypt_failed audit is written for the empty secret.
+func TestZSPRevealCheckoutRefused(t *testing.T) {
+	srv, st := newTestServerStore(t)
+	status, data := do(t, srv, http.MethodPost, "/api/targets", testAPIKey, map[string]any{
+		"name": "web-zsp", "host": "10.0.0.9", "port": 22, "os_type": "linux", "protocol": "ssh",
+	})
+	if status != http.StatusCreated {
+		t.Fatalf("create target: %d %s", status, data)
+	}
+	tid := int64(jsonMap(t, data)["id"].(float64))
+	status, data = do(t, srv, http.MethodPost, "/api/credentials", testAPIKey, map[string]any{
+		"target_id": tid, "username": "root", "secret_type": "ssh_ca",
+	})
+	if status != http.StatusCreated {
+		t.Fatalf("create ssh_ca credential: %d %s", status, data)
+	}
+	cid := itoa(int64(jsonMap(t, data)["id"].(float64)))
+
+	if s, b := do(t, srv, http.MethodPost, "/api/credentials/"+cid+"/reveal", testAPIKey, nil); s != http.StatusUnprocessableEntity {
+		t.Fatalf("reveal of ssh_ca should be 422, got %d %s", s, b)
+	}
+	if s, b := do(t, srv, http.MethodPost, "/api/credentials/"+cid+"/checkout", testAPIKey, nil); s != http.StatusUnprocessableEntity {
+		t.Fatalf("checkout of ssh_ca should be 422, got %d %s", s, b)
+	}
+	events, err := st.ListAudit(context.Background(), 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range events {
+		if e.Action == "credential.decrypt_failed" {
+			t.Fatalf("ssh_ca reveal/checkout must not emit credential.decrypt_failed")
+		}
 	}
 }
 

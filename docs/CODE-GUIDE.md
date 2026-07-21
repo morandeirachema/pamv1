@@ -640,17 +640,25 @@ opaque model, so every point of a score traces to a named signal.
   `auth_failure`, `off_hours`, `decrypt_failure`, `high_velocity` — each with a
   configurable weight and a per-signal cap. The total maps to a level
   (low/medium/high/critical) via thresholds. `Config` carries the weights,
-  thresholds, business hours (for off-hours), and velocity limit; `New` fills zero
-  fields from `DefaultConfig` (a single break-glass access alone reaches **high**).
+  thresholds, business hours + their `Location` (off-hours is evaluated in
+  `PAM_ANALYTICS_TIMEZONE`, default UTC, because audit timestamps are UTC), and the
+  velocity limit; `New` fills zero fields from `DefaultConfig` (a single break-glass
+  access alone reaches **high**).
 - **Read API** — `GET /api/analytics/risk` (`CapReadAudit`, `?min_level=` /
   `?window_min=`) scores the recent window (`store.ExportAudit`) into per-actor
   findings sorted by score, so an auditor can review risk without changing access.
+  `?window_min=` is clamped (7 days) so a single request can't score the whole
+  audit table.
 - **Worker + automated response** — `RunAnalyticsWorker` (`PAM_ANALYTICS_INTERVAL_MIN`)
-  scores each tick and, for a **newly elevated** high/critical actor (a per-actor
-  high-water mark suppresses steady-state re-alerting), appends
+  scores each tick and, for a **newly elevated** high/critical actor, appends
   `analytics.risk_flagged` + fires the alert channel, and — with
   `PAM_ANALYTICS_AUTO_KILL` — terminates a critical actor's live sessions via
-  `session.Registry.KillByActor` (audit `analytics.auto_response`).
+  `session.Registry.KillByActor` (audit `analytics.auto_response`). The
+  alerted-set stores `{score, time}` per actor: a worsening trend alerts
+  immediately, a steady state within the cooldown is not re-alerted, and after the
+  cooldown (`PAM_ANALYTICS_WINDOW_MIN`) a sustained/recurring incident re-alerts
+  and re-kills — the set is pruned on each pass so it can't grow unbounded from
+  attacker-controllable actor names.
 
 ---
 

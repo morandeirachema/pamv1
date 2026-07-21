@@ -538,10 +538,18 @@ func run() error {
 
 	// Privileged threat analytics (Phase 23): a behavioral risk scorer over the
 	// audit trail. Always available as a read-only endpoint; the background worker
-	// runs when PAM_ANALYTICS_INTERVAL_MIN > 0.
+	// runs when PAM_ANALYTICS_INTERVAL_MIN > 0. The off-hours signal is evaluated
+	// in the configured timezone (config.Load has already validated it).
+	analyticsLoc := time.UTC
+	if cfg.AnalyticsTimezone != "" {
+		if loc, lerr := time.LoadLocation(cfg.AnalyticsTimezone); lerr == nil {
+			analyticsLoc = loc
+		}
+	}
 	analyticsEngine := analytics.New(analytics.Config{
 		BusinessStart: cfg.AnalyticsBusinessStart,
 		BusinessEnd:   cfg.AnalyticsBusinessEnd,
+		Location:      analyticsLoc,
 	})
 
 	handler, err := api.New(st, v, resolver, authn, api.Options{

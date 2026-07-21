@@ -122,13 +122,15 @@ type Config struct {
 	// background risk-scoring worker (0 disables it; the read-only risk endpoint
 	// stays available). AnalyticsWindow is how far back each scoring pass looks.
 	// AnalyticsAutoKill terminates a critical-risk actor's live sessions.
-	// AnalyticsBusinessStart/End bound business hours (local) for the off-hours
-	// signal.
+	// AnalyticsBusinessStart/End bound business hours for the off-hours signal,
+	// interpreted in AnalyticsTimezone (an IANA name; empty = UTC, matching the
+	// UTC audit timestamps).
 	AnalyticsInterval      time.Duration
 	AnalyticsWindow        time.Duration
 	AnalyticsAutoKill      bool
 	AnalyticsBusinessStart int
 	AnalyticsBusinessEnd   int
+	AnalyticsTimezone      string
 
 	// Broker (Phase 13, AI-agent access broker). Setting BrokerPolicyFile enables
 	// the broker; the audit key + seed are then required (fail-loud).
@@ -305,6 +307,7 @@ func Load() (*Config, error) {
 		AnalyticsAutoKill:      boolean("PAM_ANALYTICS_AUTO_KILL", false),
 		AnalyticsBusinessStart: integer("PAM_ANALYTICS_BUSINESS_START", 7),
 		AnalyticsBusinessEnd:   integer("PAM_ANALYTICS_BUSINESS_END", 20),
+		AnalyticsTimezone:      os.Getenv("PAM_ANALYTICS_TIMEZONE"),
 		BrokerPolicyFile:       os.Getenv("PAM_BROKER_POLICY_FILE"),
 		BrokerAuditKey:         os.Getenv("PAM_BROKER_AUDIT_KEY"),
 		BrokerAuditSignSeed:    os.Getenv("PAM_BROKER_AUDIT_SIGN_SEED"),
@@ -420,10 +423,21 @@ func Load() (*Config, error) {
 		cfg.AnalyticsBusinessStart >= cfg.AnalyticsBusinessEnd {
 		errs = append(errs, "PAM_ANALYTICS_BUSINESS_START/_END must satisfy 0 <= START < END <= 24")
 	}
-	// A Zero Standing Privilege certificate must have a positive lifetime; a
-	// zero/negative TTL would mint an already-expired certificate every session.
+	// A bad timezone name must fail loud, not silently fall back to UTC and score
+	// the off-hours signal in the wrong zone.
+	if cfg.AnalyticsTimezone != "" {
+		if _, err := time.LoadLocation(cfg.AnalyticsTimezone); err != nil {
+			errs = append(errs, fmt.Sprintf("PAM_ANALYTICS_TIMEZONE %q is not a valid IANA timezone", cfg.AnalyticsTimezone))
+		}
+	}
+	// A Zero Standing Privilege certificate must have a positive, short lifetime; a
+	// zero/negative TTL would mint an already-expired certificate, and an overly
+	// long one silently becomes a standing credential (defeating the point of ZSP).
 	if cfg.SSHCAKeyPath != "" && cfg.SSHCertTTL <= 0 {
 		errs = append(errs, "PAM_SSH_CERT_TTL_MIN must be >= 1 when PAM_SSH_CA_KEY is set")
+	}
+	if cfg.SSHCAKeyPath != "" && cfg.SSHCertTTL > 24*time.Hour {
+		errs = append(errs, "PAM_SSH_CERT_TTL_MIN must be <= 1440 (24h) to keep ZSP certificates short-lived")
 	}
 	// Rate limits are "0 = off"; a negative value must fail loud rather than
 	// silently disable throttling (a fat-fingered minus turning off brute-force

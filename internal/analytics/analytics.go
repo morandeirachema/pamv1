@@ -38,7 +38,7 @@ type Weights struct {
 }
 
 // Config tunes the scorer: signal weights, per-signal caps, level thresholds,
-// business hours (local time) and the session-velocity threshold.
+// business hours and the session-velocity threshold.
 type Config struct {
 	Weights       Weights
 	PerSignalCap  int // max points any single signal category may contribute
@@ -48,6 +48,10 @@ type Config struct {
 	BusinessStart int // first business hour, inclusive [0,23]
 	BusinessEnd   int // first non-business hour, exclusive [1,24]
 	VelocityLimit int // sessions within the window before velocity counts as risk
+	// Location is the timezone the business hours are interpreted in. Audit
+	// timestamps are stored in UTC, so an operator whose business hours are local
+	// must set this (e.g. "America/New_York"); nil defaults to UTC.
+	Location *time.Location
 }
 
 // DefaultConfig returns sensible defaults: business hours 07:00–20:00 Mon–Fri,
@@ -131,6 +135,9 @@ func New(cfg Config) *Engine {
 	}
 	if cfg.Weights == (Weights{}) {
 		cfg.Weights = d.Weights
+	}
+	if cfg.Location == nil {
+		cfg.Location = time.UTC
 	}
 	return &Engine{cfg: cfg}
 }
@@ -259,9 +266,11 @@ func (e *Engine) level(score int) string {
 	}
 }
 
-// offHours reports whether ts falls outside business hours (in ts's own
-// location) or on a weekend.
+// offHours reports whether ts falls outside business hours or on a weekend,
+// evaluated in the configured business-hours timezone (audit timestamps are
+// UTC, so this converts before reading the weekday/hour).
 func (e *Engine) offHours(ts time.Time) bool {
+	ts = ts.In(e.cfg.Location)
 	if wd := ts.Weekday(); wd == time.Saturday || wd == time.Sunday {
 		return true
 	}

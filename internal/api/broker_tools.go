@@ -201,6 +201,11 @@ func (t *sshExecTool) Execute(ctx context.Context, p *auth.Principal, args broke
 	if err != nil {
 		return broker.Result{}, err
 	}
+	if cred.SecretType == "ssh_ca" {
+		// Zero Standing Privilege credentials have no stored secret; the ephemeral
+		// certificate path is the interactive proxy, not this one-shot exec.
+		return broker.Result{}, fmt.Errorf("ssh_exec does not support zero-standing-privilege (ssh_ca) credentials")
+	}
 	secret, err := t.s.vault.Decrypt(ctx, cred.SecretEnc, store.CredentialAAD(target.ID, cred.ID))
 	if err != nil {
 		return broker.Result{}, fmt.Errorf("credential decrypt failed")
@@ -364,6 +369,9 @@ func (t *revealCredentialTool) Execute(ctx context.Context, p *auth.Principal, a
 	cred, target, err := t.s.authorizeAgentCredential(ctx, p, credID)
 	if err != nil {
 		return broker.Result{}, err
+	}
+	if cred.SecretType == "ssh_ca" {
+		return broker.Result{}, fmt.Errorf("this credential has no stored secret (zero standing privilege)")
 	}
 	secret, err := t.s.vault.Decrypt(ctx, cred.SecretEnc, store.CredentialAAD(target.ID, cred.ID))
 	if err != nil {
