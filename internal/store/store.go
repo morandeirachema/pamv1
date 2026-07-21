@@ -48,8 +48,31 @@ type Target struct {
 	Protocol string `json:"protocol"` // ssh | winrm | rdp
 	// RequireApproval gates connections behind an approved access request
 	// (4-eyes / maintenance-window control, used in OT deployments).
-	RequireApproval bool      `json:"require_approval"`
-	CreatedAt       time.Time `json:"created_at"`
+	RequireApproval bool `json:"require_approval"`
+	// SafeID, when set, places the target in a safe (Phase 17): safe members may
+	// connect to every target in the safe. nil means the target is not in a safe.
+	SafeID    *int64    `json:"safe_id,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// Safe is a named container that groups targets and delegates who may access
+// them (Phase 17). Membership is an additional grant path alongside per-target
+// grants: a member of a target's safe may connect to it.
+type Safe struct {
+	ID          int64     `json:"id"`
+	Name        string    `json:"name"`
+	Description string    `json:"description"`
+	CreatedAt   time.Time `json:"created_at"`
+}
+
+// SafeMember authorizes a subject (a user or a role) on a safe. CanManage marks
+// a delegated safe administrator (may add/remove members of that safe).
+type SafeMember struct {
+	ID          int64  `json:"id"`
+	SafeID      int64  `json:"safe_id"`
+	SubjectType string `json:"subject_type"` // user | role
+	Subject     string `json:"subject"`
+	CanManage   bool   `json:"can_manage"`
 }
 
 // AccessRequest is a user's request to connect to a target, subject to approval
@@ -247,6 +270,30 @@ type Store interface {
 	ListTargetGrants(ctx context.Context, targetID int64) ([]TargetGrant, error)
 	// DeleteTargetGrant removes a grant by ID, or ErrNotFound.
 	DeleteTargetGrant(ctx context.Context, id int64) error
+	// EffectiveTargetGrants returns a target's direct grants unioned with the
+	// grants derived from its safe's membership (Phase 17). The connect-time
+	// authorization decision uses this, so a target in a safe is reachable by the
+	// safe's members. An empty result means the target is unrestricted (open).
+	EffectiveTargetGrants(ctx context.Context, targetID int64) ([]TargetGrant, error)
+
+	// CreateSafe inserts a safe, populating its ID and CreatedAt.
+	CreateSafe(ctx context.Context, s *Safe) error
+	// ListSafes returns all safes ordered by name.
+	ListSafes(ctx context.Context) ([]Safe, error)
+	// GetSafe returns a safe by ID, or ErrNotFound.
+	GetSafe(ctx context.Context, id int64) (*Safe, error)
+	// DeleteSafe removes a safe by ID (its members cascade; member targets are
+	// unassigned), or ErrNotFound.
+	DeleteSafe(ctx context.Context, id int64) error
+	// AddSafeMember adds a member to a safe (ErrConflict on a duplicate subject,
+	// ErrNotFound if the safe does not exist).
+	AddSafeMember(ctx context.Context, m *SafeMember) error
+	// ListSafeMembers returns a safe's members ordered by id.
+	ListSafeMembers(ctx context.Context, safeID int64) ([]SafeMember, error)
+	// DeleteSafeMember removes a safe member by ID, or ErrNotFound.
+	DeleteSafeMember(ctx context.Context, id int64) error
+	// AssignTargetSafe sets (or clears, when safeID is nil) a target's safe.
+	AssignTargetSafe(ctx context.Context, targetID int64, safeID *int64) error
 
 	// Access requests (4-eyes approval workflow).
 	CreateAccessRequest(ctx context.Context, ar *AccessRequest) error

@@ -417,7 +417,7 @@ func (p *Proxy) handleConn(ctx context.Context, nConn net.Conn) {
 	}
 
 	// Per-target authorization: honor the target's access grants.
-	grants, err := p.store.ListTargetGrants(ctx, target.ID)
+	grants, err := p.store.EffectiveTargetGrants(ctx, target.ID)
 	if err != nil {
 		p.log.Error("target grants lookup failed", "target", target.Name, "err", err)
 		rejectAll(chans, ssh.Prohibited, "pamv1: authorization check failed")

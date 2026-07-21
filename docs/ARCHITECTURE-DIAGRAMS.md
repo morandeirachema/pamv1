@@ -206,6 +206,19 @@ erDiagram
     arr_string Capabilities
     time_Time CreatedAt
   }
+  Safe {
+    int64 ID
+    string Name
+    string Description
+    time_Time CreatedAt
+  }
+  SafeMember {
+    int64 ID
+    int64 SafeID
+    string SubjectType
+    string Subject
+    bool CanManage
+  }
   Session {
     int64 ID
     string Username
@@ -229,6 +242,7 @@ erDiagram
     string OSType
     string Protocol
     bool RequireApproval
+    ptr_int64 SafeID
     time_Time CreatedAt
   }
   TargetGrant {
@@ -244,6 +258,8 @@ erDiagram
     time_Time CreatedAt
   }
   Credential ||--o{ Checkout : "has"
+  Safe ||--o{ SafeMember : "has"
+  Safe ||--o{ Target : "has"
   Target ||--o{ AccessRequest : "has"
   Target ||--o{ Checkout : "has"
   Target ||--o{ Credential : "has"
@@ -252,7 +268,7 @@ erDiagram
 
 ## 3. REST API surface
 
-The 68 routes registered on the API mux, with the capability or guard each enforces (see `internal/auth` for the role → capability matrix).
+The 75 routes registered on the API mux, with the capability or guard each enforces (see `internal/auth` for the role → capability matrix).
 
 | Method | Path | Guard |
 |---|---|---|
@@ -293,6 +309,12 @@ The 68 routes registered on the API mux, with the capability or guard each enfor
 | POST | `/api/profiles` | CapManageUsers |
 | DELETE | `/api/profiles/{id}` | CapManageUsers |
 | GET | `/api/reconcile` | CapManageCredentials |
+| GET | `/api/safes` | CapReadInventory |
+| POST | `/api/safes` | CapManageTargets |
+| DELETE | `/api/safes/{id}` | CapManageTargets |
+| GET | `/api/safes/{id}/members` | CapReadInventory |
+| POST | `/api/safes/{id}/members` | CapReadInventory |
+| DELETE | `/api/safes/{id}/members/{mid}` | CapReadInventory |
 | GET | `/api/sessions` | CapReadAudit |
 | DELETE | `/api/sessions/{id}` | CapManageTargets |
 | GET | `/api/sessions/{id}/stream` | CapReadAudit |
@@ -304,6 +326,7 @@ The 68 routes registered on the API mux, with the capability or guard each enfor
 | POST | `/api/targets/{id}/grants` | CapManageTargets |
 | DELETE | `/api/targets/{id}/grants/{gid}` | CapManageTargets |
 | GET | `/api/targets/{id}/rdp` | token (query) |
+| PUT | `/api/targets/{id}/safe` | CapManageTargets |
 | POST | `/api/targets/{id}/winrm` | CapConnect |
 | GET | `/api/users` | CapManageUsers |
 | POST | `/api/users` | CapManageUsers |

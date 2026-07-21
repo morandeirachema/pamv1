@@ -89,6 +89,55 @@ func RunStoreContract(t *testing.T, st store.Store) {
 		t.Fatalf("DeleteTargetGrant: %v", err)
 	}
 
+	// --- safes (Phase 17): container membership as an effective grant ---
+	sf := &store.Safe{Name: "prod-db", Description: "production databases"}
+	if err := st.CreateSafe(ctx, sf); err != nil {
+		t.Fatalf("CreateSafe: %v", err)
+	}
+	if err := st.CreateSafe(ctx, &store.Safe{Name: "prod-db"}); !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("duplicate safe: want ErrConflict, got %v", err)
+	}
+	if got, err := st.GetSafe(ctx, sf.ID); err != nil || got.Name != "prod-db" {
+		t.Fatalf("GetSafe: %+v err %v", got, err)
+	}
+	sm := &store.SafeMember{SafeID: sf.ID, SubjectType: "role", Subject: "user", CanManage: false}
+	if err := st.AddSafeMember(ctx, sm); err != nil {
+		t.Fatalf("AddSafeMember: %v", err)
+	}
+	if err := st.AddSafeMember(ctx, &store.SafeMember{SafeID: sf.ID, SubjectType: "role", Subject: "user"}); !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("duplicate safe member: want ErrConflict, got %v", err)
+	}
+	if err := st.AddSafeMember(ctx, &store.SafeMember{SafeID: 999999, SubjectType: "user", Subject: "x"}); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("member on missing safe: want ErrNotFound, got %v", err)
+	}
+	// A target with no grants is unrestricted; placing it in a safe restricts it
+	// to the safe's members, surfaced through EffectiveTargetGrants.
+	if eg, err := st.EffectiveTargetGrants(ctx, tgt.ID); err != nil || len(eg) != 0 {
+		t.Fatalf("EffectiveTargetGrants(ungated): %d err %v", len(eg), err)
+	}
+	if err := st.AssignTargetSafe(ctx, tgt.ID, &sf.ID); err != nil {
+		t.Fatalf("AssignTargetSafe: %v", err)
+	}
+	eg, err := st.EffectiveTargetGrants(ctx, tgt.ID)
+	if err != nil || len(eg) != 1 || eg[0].SubjectType != "role" || eg[0].Subject != "user" {
+		t.Fatalf("EffectiveTargetGrants(in safe): %+v err %v", eg, err)
+	}
+	// The target now carries its safe id.
+	if tt, _ := st.GetTarget(ctx, tgt.ID); tt.SafeID == nil || *tt.SafeID != sf.ID {
+		t.Fatalf("target safe_id not persisted: %+v", tt)
+	}
+	if err := st.DeleteSafeMember(ctx, sm.ID); err != nil {
+		t.Fatalf("DeleteSafeMember: %v", err)
+	}
+	// Deleting the safe unassigns the target (ON DELETE SET NULL) rather than
+	// deleting it.
+	if err := st.DeleteSafe(ctx, sf.ID); err != nil {
+		t.Fatalf("DeleteSafe: %v", err)
+	}
+	if tt, _ := st.GetTarget(ctx, tgt.ID); tt == nil || tt.SafeID != nil {
+		t.Fatalf("target should survive safe deletion with a nil safe_id: %+v", tt)
+	}
+
 	// --- access requests (4-eyes) ---
 	ar := &store.AccessRequest{Requester: "alice", TargetID: tgt.ID, Reason: "patch", Status: "pending", ExpiresAt: future}
 	if err := st.CreateAccessRequest(ctx, ar); err != nil {

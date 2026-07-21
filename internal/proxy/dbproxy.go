@@ -347,7 +347,7 @@ func (d *DBProxy) handleConn(ctx context.Context, nConn net.Conn) {
 		d.deny(ctx, backend, actor, login, "protocol not allowed by policy")
 		return
 	}
-	grants, err := d.store.ListTargetGrants(ctx, target.ID)
+	grants, err := d.store.EffectiveTargetGrants(ctx, target.ID)
 	if err != nil {
 		d.log.Error("target grants lookup failed", "target", target.Name, "err", err)
 		d.fail(backend, "58000", "pamv1: authorization check failed")

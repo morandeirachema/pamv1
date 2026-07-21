@@ -12,42 +12,46 @@ import (
 )
 
 type Memstore struct {
-	mu         sync.Mutex
-	nextID     int64
-	targets    map[int64]store.Target
-	creds      map[int64]store.Credential
-	users      map[int64]store.User
-	sessions   map[int64]store.Session
-	mfa        map[string]store.MFAEnrollment
-	recovery   map[string]map[string]bool // username -> set of code hashes
-	grants     map[int64]store.TargetGrant
-	accessReq  map[int64]store.AccessRequest
-	checkouts  map[int64]store.Checkout
-	oidcStates map[string]oidcState
-	audit      []store.AuditEvent
-	agentKeys  map[int64]store.AgentKey
-	brokerLog  []store.BrokerAuditEvent
-	brokerTok  map[string]store.BrokerToken
-	settings   map[string]store.Setting
-	profiles   map[int64]store.Profile
+	mu          sync.Mutex
+	nextID      int64
+	targets     map[int64]store.Target
+	creds       map[int64]store.Credential
+	users       map[int64]store.User
+	sessions    map[int64]store.Session
+	mfa         map[string]store.MFAEnrollment
+	recovery    map[string]map[string]bool // username -> set of code hashes
+	grants      map[int64]store.TargetGrant
+	accessReq   map[int64]store.AccessRequest
+	checkouts   map[int64]store.Checkout
+	oidcStates  map[string]oidcState
+	audit       []store.AuditEvent
+	agentKeys   map[int64]store.AgentKey
+	brokerLog   []store.BrokerAuditEvent
+	brokerTok   map[string]store.BrokerToken
+	settings    map[string]store.Setting
+	profiles    map[int64]store.Profile
+	safes       map[int64]store.Safe
+	safeMembers map[int64]store.SafeMember
 }
 
 // New returns an empty in-memory store ready for use.
 func New() *Memstore {
 	return &Memstore{
-		targets:   make(map[int64]store.Target),
-		creds:     make(map[int64]store.Credential),
-		users:     make(map[int64]store.User),
-		sessions:  make(map[int64]store.Session),
-		mfa:       make(map[string]store.MFAEnrollment),
-		recovery:  make(map[string]map[string]bool),
-		grants:    make(map[int64]store.TargetGrant),
-		accessReq: make(map[int64]store.AccessRequest),
-		checkouts: make(map[int64]store.Checkout),
-		agentKeys: make(map[int64]store.AgentKey),
-		brokerTok: make(map[string]store.BrokerToken),
-		settings:  make(map[string]store.Setting),
-		profiles:  make(map[int64]store.Profile),
+		targets:     make(map[int64]store.Target),
+		creds:       make(map[int64]store.Credential),
+		users:       make(map[int64]store.User),
+		sessions:    make(map[int64]store.Session),
+		mfa:         make(map[string]store.MFAEnrollment),
+		recovery:    make(map[string]map[string]bool),
+		grants:      make(map[int64]store.TargetGrant),
+		accessReq:   make(map[int64]store.AccessRequest),
+		checkouts:   make(map[int64]store.Checkout),
+		agentKeys:   make(map[int64]store.AgentKey),
+		brokerTok:   make(map[string]store.BrokerToken),
+		settings:    make(map[string]store.Setting),
+		profiles:    make(map[int64]store.Profile),
+		safes:       make(map[int64]store.Safe),
+		safeMembers: make(map[int64]store.SafeMember),
 	}
 }
 
@@ -175,6 +179,148 @@ func (m *Memstore) DeleteTargetGrant(_ context.Context, id int64) error {
 		return store.ErrNotFound
 	}
 	delete(m.grants, id)
+	return nil
+}
+
+// EffectiveTargetGrants unions a target's direct grants with grants derived from
+// its safe's membership (Phase 17).
+func (m *Memstore) EffectiveTargetGrants(_ context.Context, targetID int64) ([]store.TargetGrant, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]store.TargetGrant, 0)
+	for _, g := range m.grants {
+		if g.TargetID == targetID {
+			out = append(out, g)
+		}
+	}
+	if t, ok := m.targets[targetID]; ok && t.SafeID != nil {
+		for _, sm := range m.safeMembers {
+			if sm.SafeID == *t.SafeID {
+				out = append(out, store.TargetGrant{ID: sm.ID, TargetID: targetID, SubjectType: sm.SubjectType, Subject: sm.Subject})
+			}
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out, nil
+}
+
+// CreateSafe inserts a safe, assigning ID and CreatedAt.
+func (m *Memstore) CreateSafe(_ context.Context, sf *store.Safe) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, ex := range m.safes {
+		if ex.Name == sf.Name {
+			return store.ErrConflict
+		}
+	}
+	sf.ID = m.id()
+	sf.CreatedAt = time.Now().UTC()
+	m.safes[sf.ID] = *sf
+	return nil
+}
+
+// ListSafes returns all safes ordered by name.
+func (m *Memstore) ListSafes(_ context.Context) ([]store.Safe, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]store.Safe, 0, len(m.safes))
+	for _, sf := range m.safes {
+		out = append(out, sf)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out, nil
+}
+
+// GetSafe returns a safe by ID, or ErrNotFound.
+func (m *Memstore) GetSafe(_ context.Context, id int64) (*store.Safe, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	sf, ok := m.safes[id]
+	if !ok {
+		return nil, store.ErrNotFound
+	}
+	return &sf, nil
+}
+
+// DeleteSafe removes a safe, cascading its members and unassigning its targets.
+func (m *Memstore) DeleteSafe(_ context.Context, id int64) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.safes[id]; !ok {
+		return store.ErrNotFound
+	}
+	delete(m.safes, id)
+	for mid, sm := range m.safeMembers {
+		if sm.SafeID == id {
+			delete(m.safeMembers, mid)
+		}
+	}
+	for tid, t := range m.targets {
+		if t.SafeID != nil && *t.SafeID == id {
+			t.SafeID = nil
+			m.targets[tid] = t
+		}
+	}
+	return nil
+}
+
+// AddSafeMember adds a member to a safe.
+func (m *Memstore) AddSafeMember(_ context.Context, mem *store.SafeMember) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.safes[mem.SafeID]; !ok {
+		return store.ErrNotFound
+	}
+	for _, ex := range m.safeMembers {
+		if ex.SafeID == mem.SafeID && ex.SubjectType == mem.SubjectType && ex.Subject == mem.Subject {
+			return store.ErrConflict
+		}
+	}
+	mem.ID = m.id()
+	m.safeMembers[mem.ID] = *mem
+	return nil
+}
+
+// ListSafeMembers returns a safe's members ordered by id.
+func (m *Memstore) ListSafeMembers(_ context.Context, safeID int64) ([]store.SafeMember, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]store.SafeMember, 0)
+	for _, sm := range m.safeMembers {
+		if sm.SafeID == safeID {
+			out = append(out, sm)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out, nil
+}
+
+// DeleteSafeMember removes a safe member by ID, or ErrNotFound.
+func (m *Memstore) DeleteSafeMember(_ context.Context, id int64) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.safeMembers[id]; !ok {
+		return store.ErrNotFound
+	}
+	delete(m.safeMembers, id)
+	return nil
+}
+
+// AssignTargetSafe sets (or clears, when safeID is nil) a target's safe.
+func (m *Memstore) AssignTargetSafe(_ context.Context, targetID int64, safeID *int64) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	t, ok := m.targets[targetID]
+	if !ok {
+		return store.ErrNotFound
+	}
+	if safeID != nil {
+		if _, ok := m.safes[*safeID]; !ok {
+			return store.ErrNotFound
+		}
+	}
+	t.SafeID = safeID
+	m.targets[targetID] = t
 	return nil
 }
 

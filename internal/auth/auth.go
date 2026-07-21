@@ -157,8 +157,7 @@ func (r Role) Capabilities() []string {
 // its grants. A target with no grants is open to any connect-capable principal;
 // admins may always connect; otherwise a grant must match the user or its role.
 func CanConnectTarget(p *Principal, grants []store.TargetGrant) bool {
-	roles := p.effectiveRoles()
-	for _, r := range roles {
+	for _, r := range p.effectiveRoles() {
 		if r == RoleAdmin {
 			return true
 		}
@@ -167,15 +166,23 @@ func CanConnectTarget(p *Principal, grants []store.TargetGrant) bool {
 		return true
 	}
 	for _, g := range grants {
-		switch g.SubjectType {
-		case "role":
-			for _, r := range roles {
-				if g.Subject == string(r) {
-					return true
-				}
-			}
-		case "user":
-			if g.Subject == p.Name {
+		if SubjectMatches(p, g.SubjectType, g.Subject) {
+			return true
+		}
+	}
+	return false
+}
+
+// SubjectMatches reports whether p matches an authorization subject: a "user"
+// with p's name, or a "role" that p holds (any of its effective roles). Shared
+// by target grants and safe membership (Phase 17).
+func SubjectMatches(p *Principal, subjectType, subject string) bool {
+	switch subjectType {
+	case "user":
+		return subject == p.Name
+	case "role":
+		for _, r := range p.effectiveRoles() {
+			if subject == string(r) {
 				return true
 			}
 		}

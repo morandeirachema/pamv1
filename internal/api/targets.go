@@ -198,7 +198,7 @@ func (s *Server) deleteTargetGrant(w http.ResponseWriter, r *http.Request) {
 // authorizedForTarget reports whether the caller may connect to a target under
 // its access grants.
 func (s *Server) authorizedForTarget(ctx context.Context, targetID int64) (bool, error) {
-	grants, err := s.store.ListTargetGrants(ctx, targetID)
+	grants, err := s.store.EffectiveTargetGrants(ctx, targetID)
 	if err != nil {
 		return false, err
 	}

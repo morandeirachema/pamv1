@@ -59,7 +59,7 @@ func (s *Server) rdpTunnel(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, "rdp is not allowed by policy")
 		return
 	}
-	grants, err := s.store.ListTargetGrants(r.Context(), target.ID)
+	grants, err := s.store.EffectiveTargetGrants(r.Context(), target.ID)
 	if err != nil {
 		storeError(w, err)
 		return

@@ -547,3 +547,78 @@ func TestProxyExecBlocked(t *testing.T) {
 	}
 	assertAuditContains(t, st, "command.blocked", "rm -rf")
 }
+
+// TestSafeMembershipGrantsConnect proves that placing a target in a safe
+// restricts it to the safe's members (a non-member is denied), and that safe
+// membership grants connect access (Phase 17) — the connect gate honors the
+// effective grants, not just direct target grants.
+func TestSafeMembershipGrantsConnect(t *testing.T) {
+	host, port := startUpstream(t, upstreamUser, upstreamSecret, targetOutput)
+	st := memstore.New()
+	v := mustVault(t)
+	target := seedTarget(t, st, v, host, port) // web-01, no direct grants
+	ctx := context.Background()
+
+	// A plain "user" identity (per-user token = hex(sha256(token))).
+	const userToken = "carol-token"
+	sum := sha256.Sum256([]byte(userToken))
+	if err := st.CreateUser(ctx, &store.User{Username: "carol", Role: "user", TokenHash: hex.EncodeToString(sum[:])}); err != nil {
+		t.Fatal(err)
+	}
+
+	// A safe containing web-01 whose only member is a DIFFERENT user.
+	sf := &store.Safe{Name: "restricted"}
+	if err := st.CreateSafe(ctx, sf); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.AddSafeMember(ctx, &store.SafeMember{SafeID: sf.ID, SubjectType: "user", Subject: "alice"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.AssignTargetSafe(ctx, target.ID, &sf.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	resolver, err := auth.NewResolver(st, proxyAPIKey, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	px, err := proxy.New(st, v, resolver, proxy.Config{HostKey: mustSigner(t), RecordingDir: t.TempDir(), DialTimeout: 5 * time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := serveProxy(t, px)
+
+	// carol is not a member of the safe → the target is now restricted to her.
+	client, err := dialProxy(t, addr, upstreamUser+"@web-01", userToken)
+	if err != nil {
+		t.Fatalf("auth should pass: %v", err)
+	}
+	if sess, err := client.NewSession(); err == nil {
+		sess.Close()
+		client.Close()
+		t.Fatal("a non-member must be denied a target in a safe")
+	}
+	client.Close()
+
+	// Add carol's role as a safe member → she may now connect.
+	if err := st.AddSafeMember(ctx, &store.SafeMember{SafeID: sf.ID, SubjectType: "role", Subject: "user"}); err != nil {
+		t.Fatal(err)
+	}
+	client2, err := dialProxy(t, addr, upstreamUser+"@web-01", userToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client2.Close()
+	sess, err := client2.NewSession()
+	if err != nil {
+		t.Fatalf("a safe member should connect: %v", err)
+	}
+	defer sess.Close()
+	out, err := sess.CombinedOutput("echo hi")
+	if err != nil {
+		t.Fatalf("exec: %v", err)
+	}
+	if string(out) != targetOutput {
+		t.Fatalf("output = %q, want %q", out, targetOutput)
+	}
+}

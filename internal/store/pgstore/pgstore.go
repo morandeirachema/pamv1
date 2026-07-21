@@ -159,7 +159,7 @@ func (s *PGStore) CreateTarget(ctx context.Context, t *store.Target) error {
 // ListTargets returns all targets ordered by ID.
 func (s *PGStore) ListTargets(ctx context.Context) ([]store.Target, error) {
 	rows, err := s.pool.Query(ctx,
-		`SELECT id, name, host, port, os_type, protocol, require_approval, created_at
+		`SELECT id, name, host, port, os_type, protocol, require_approval, safe_id, created_at
 		 FROM targets ORDER BY id`)
 	if err != nil {
 		return nil, err
@@ -170,7 +170,7 @@ func (s *PGStore) ListTargets(ctx context.Context) ([]store.Target, error) {
 // GetTarget returns the target with the given ID, or ErrNotFound.
 func (s *PGStore) GetTarget(ctx context.Context, id int64) (*store.Target, error) {
 	return getOne(ctx, s.pool, scanTarget,
-		`SELECT id, name, host, port, os_type, protocol, require_approval, created_at
+		`SELECT id, name, host, port, os_type, protocol, require_approval, safe_id, created_at
 		 FROM targets WHERE id = $1`, id)
 }
 
@@ -258,6 +258,104 @@ func (s *PGStore) ListTargetGrants(ctx context.Context, targetID int64) ([]store
 // DeleteTargetGrant removes a grant by ID; ErrNotFound if absent.
 func (s *PGStore) DeleteTargetGrant(ctx context.Context, id int64) error {
 	return execExpectingRow(ctx, s.pool, `DELETE FROM target_grants WHERE id = $1`, id)
+}
+
+// EffectiveTargetGrants unions a target's direct grants with grants derived from
+// its safe's membership, so a target placed in a safe is reachable by the safe's
+// members (Phase 17).
+func (s *PGStore) EffectiveTargetGrants(ctx context.Context, targetID int64) ([]store.TargetGrant, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT id, target_id, subject_type, subject FROM target_grants WHERE target_id = $1
+		 UNION
+		 SELECT sm.id, $1::bigint, sm.subject_type, sm.subject
+		   FROM safe_members sm JOIN targets t ON t.safe_id = sm.safe_id
+		  WHERE t.id = $1
+		 ORDER BY id`, targetID)
+	if err != nil {
+		return nil, err
+	}
+	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (store.TargetGrant, error) {
+		var g store.TargetGrant
+		err := row.Scan(&g.ID, &g.TargetID, &g.SubjectType, &g.Subject)
+		return g, err
+	})
+}
+
+// CreateSafe inserts a safe, populating its ID and CreatedAt.
+func (s *PGStore) CreateSafe(ctx context.Context, sf *store.Safe) error {
+	err := s.pool.QueryRow(ctx,
+		`INSERT INTO safes (name, description) VALUES ($1, $2) RETURNING id, created_at`,
+		sf.Name, sf.Description,
+	).Scan(&sf.ID, &sf.CreatedAt)
+	if pgCode(err) == pgUniqueViolation {
+		return store.ErrConflict
+	}
+	return err
+}
+
+// ListSafes returns all safes ordered by name.
+func (s *PGStore) ListSafes(ctx context.Context) ([]store.Safe, error) {
+	rows, err := s.pool.Query(ctx, `SELECT id, name, description, created_at FROM safes ORDER BY name`)
+	if err != nil {
+		return nil, err
+	}
+	return pgx.CollectRows(rows, scanSafe)
+}
+
+// GetSafe returns a safe by ID, or ErrNotFound.
+func (s *PGStore) GetSafe(ctx context.Context, id int64) (*store.Safe, error) {
+	return getOne(ctx, s.pool, scanSafe, `SELECT id, name, description, created_at FROM safes WHERE id = $1`, id)
+}
+
+// DeleteSafe removes a safe by ID (members cascade; targets are unassigned).
+func (s *PGStore) DeleteSafe(ctx context.Context, id int64) error {
+	return execExpectingRow(ctx, s.pool, `DELETE FROM safes WHERE id = $1`, id)
+}
+
+// AddSafeMember adds a member to a safe.
+func (s *PGStore) AddSafeMember(ctx context.Context, m *store.SafeMember) error {
+	err := s.pool.QueryRow(ctx,
+		`INSERT INTO safe_members (safe_id, subject_type, subject, can_manage) VALUES ($1, $2, $3, $4) RETURNING id`,
+		m.SafeID, m.SubjectType, m.Subject, m.CanManage,
+	).Scan(&m.ID)
+	switch pgCode(err) {
+	case pgUniqueViolation:
+		return store.ErrConflict
+	case pgForeignKeyViolation:
+		return store.ErrNotFound
+	}
+	return err
+}
+
+// ListSafeMembers returns a safe's members ordered by id.
+func (s *PGStore) ListSafeMembers(ctx context.Context, safeID int64) ([]store.SafeMember, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT id, safe_id, subject_type, subject, can_manage FROM safe_members WHERE safe_id = $1 ORDER BY id`, safeID)
+	if err != nil {
+		return nil, err
+	}
+	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (store.SafeMember, error) {
+		var m store.SafeMember
+		err := row.Scan(&m.ID, &m.SafeID, &m.SubjectType, &m.Subject, &m.CanManage)
+		return m, err
+	})
+}
+
+// DeleteSafeMember removes a safe member by ID, or ErrNotFound.
+func (s *PGStore) DeleteSafeMember(ctx context.Context, id int64) error {
+	return execExpectingRow(ctx, s.pool, `DELETE FROM safe_members WHERE id = $1`, id)
+}
+
+// AssignTargetSafe sets (or clears, when safeID is nil) a target's safe.
+func (s *PGStore) AssignTargetSafe(ctx context.Context, targetID int64, safeID *int64) error {
+	return execExpectingRow(ctx, s.pool, `UPDATE targets SET safe_id = $2 WHERE id = $1`, targetID, safeID)
+}
+
+// scanSafe scans one safe row.
+func scanSafe(row pgx.CollectableRow) (store.Safe, error) {
+	var sf store.Safe
+	err := row.Scan(&sf.ID, &sf.Name, &sf.Description, &sf.CreatedAt)
+	return sf, err
 }
 
 // DeleteCredential removes a credential by ID; ErrNotFound if absent.
@@ -918,7 +1016,7 @@ func (s *PGStore) Close() {
 // scanTarget maps one result row into a store.Target.
 func scanTarget(row pgx.CollectableRow) (store.Target, error) {
 	var t store.Target
-	err := row.Scan(&t.ID, &t.Name, &t.Host, &t.Port, &t.OSType, &t.Protocol, &t.RequireApproval, &t.CreatedAt)
+	err := row.Scan(&t.ID, &t.Name, &t.Host, &t.Port, &t.OSType, &t.Protocol, &t.RequireApproval, &t.SafeID, &t.CreatedAt)
 	return t, err
 }
 

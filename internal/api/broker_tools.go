@@ -52,7 +52,7 @@ func (s *Server) authorizeAgentTarget(ctx context.Context, p *auth.Principal, na
 	if !s.protocolAllowed(target.Protocol) {
 		return nil, fmt.Errorf("%s is not allowed by policy", target.Protocol)
 	}
-	grants, err := s.store.ListTargetGrants(ctx, target.ID)
+	grants, err := s.store.EffectiveTargetGrants(ctx, target.ID)
 	if err != nil {
 		return nil, err
 	}
@@ -93,7 +93,7 @@ func (s *Server) authorizeAgentCredential(ctx context.Context, p *auth.Principal
 	if err != nil {
 		return nil, nil, err
 	}
-	grants, err := s.store.ListTargetGrants(ctx, target.ID)
+	grants, err := s.store.EffectiveTargetGrants(ctx, target.ID)
 	if err != nil {
 		return nil, nil, err
 	}
