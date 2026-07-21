@@ -122,6 +122,13 @@ under [`deploy/k8s/sops/`](../deploy/k8s/sops/) — `apply.sh` streams
 encrypted manifest is committed. See its [README](../deploy/k8s/sops/README.md)
 for Flux/Argo/helm-secrets wiring.
 
+Or, if you run **CyberArk Conjur**, pamv1 can fetch its own bootstrap secrets
+from it at startup instead (Phase 18) — set `PAM_CONJUR_URL` and pam-server pulls
+`PAM_MASTER_KEY`/`PAM_API_KEY`/`PAM_DATABASE_URL`/… from Conjur, with a
+Kubernetes projected-token (`authn-jwt`) so **no secret lives in Git at all**.
+SOPS and Conjur both ship; SOPS stays the zero-dependency default. See
+[`deploy/k8s/conjur/`](../deploy/k8s/conjur/).
+
 The deployment runs non-root, read-only root filesystem, all capabilities
 dropped, under the restricted [Pod Security Standard](https://kubernetes.io/docs/concepts/security/pod-security-standards/). Recordings and the host key live on a writable `/data` volume. Readiness is gated on `/readyz` (DB reachable), liveness on `/healthz`.
 
@@ -170,6 +177,7 @@ All configuration is environment variables (12-factor). Full descriptions in
 | Variable | Required | Default | Purpose |
 |---|---|---|---|
 | `PAM_KEK_PROVIDER` | | `local` | Vault key backend: `local` (dev/test), `vault-transit`, `aws-kms`, or `pkcs11` (HSM). |
+| `PAM_CONJUR_URL` (+ `PAM_CONJUR_*`) | | (off) | Source bootstrap `PAM_*` secrets from CyberArk Conjur at startup (Phase 18); see [deploy/k8s/conjur](../deploy/k8s/conjur/). |
 | `PAM_MASTER_KEY` | local only | — | Local KEK key (`-genkey`). **Back it up securely.** Dev/test only. |
 | `PAM_KEK_TRANSIT_ADDR` / `_TOKEN` / `_KEY` | transit only | — | HashiCorp Vault Transit KEK (production). |
 | `PAM_KEK_AWS_KEY_ID` / `_AWS_REGION` | aws-kms only | — | AWS KMS KEK (production). |
@@ -958,6 +966,7 @@ shell access where you need that guarantee.
 
 | Date | Change |
 |---|---|
+| 2026-07-21 | Phase 18: **Conjur secret sourcing** — an alternative to SOPS: set `PAM_CONJUR_URL` and pam-server fetches its own bootstrap secrets from CyberArk Conjur at startup (authn-api-key or Kubernetes authn-jwt). Both ship; SOPS stays the default. See [deploy/k8s/conjur/README.md](../deploy/k8s/conjur/README.md) |
 | 2026-07-21 | Phase 17: **safes + dependent-account propagation** — group targets into delegated-access safes (`/api/safes`, a member reaches every target in the safe; `can_manage` delegated administration) and declare a credential's consumers (`/api/credentials/{id}/dependencies`) so rotation updates the Windows Services / Scheduled Tasks / IIS App Pools that use it. See §7 → *Safes* and *Dependent accounts* |
 | 2026-07-21 | Phase 16: **live session monitoring + command control** — watch an SSH/PostgreSQL session live over `GET /api/sessions/{id}/stream` (SSE, `CapReadAudit`); block dangerous commands on exec/WinRM/SQL via a regex denylist (`PAM_COMMAND_DENY_FILE`, audited `command.blocked`). See §9.4 |
 | 2026-07-20 | Phase 15: **PostgreSQL database session proxy** (`PAM_DB_ADDR`) — brokers `postgres` targets with JIT credential injection and **per-statement query audit** (`db.query`); operators use `psql user=<dbcred>@<target>` with their PAM key. Same authorization gates as the SSH proxy; upstream auth via SCRAM-SHA-256/MD5/cleartext. See §5 → *Database targets (PostgreSQL)* |

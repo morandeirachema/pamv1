@@ -25,14 +25,15 @@ unapologetically **AS/400 / IBM 5250 green-screen console**, because touching a 
 
 Built phase by phase with a single rule: **every phase is functional end to end** — it
 runs, passes tests, and deploys as Infrastructure-as-Code. The **[roadmap](ROADMAP.md)** runs
-0–17 and **all eighteen phases have shipped** — from the JIT SSH proxy and RBAC, through
+0–18 and **all nineteen phases have shipped** — from the JIT SSH proxy and RBAC, through
 AD/Entra/OIDC login, Windows targets, break-glass quorum, OT/industrial adaptation, NIS2
 tooling, scale/HA and the full 5250 console, to a hot-swappable configuration subsystem with
 custom-profile RBAC, an **AI-agent access broker** (policy engine, JIT tool execution,
 verifiable audit, MCP transport and SPIFFE identity), **SOPS-encrypted Kubernetes secrets**,
 a **PostgreSQL database session proxy** (JIT injection + per-statement query audit),
-**supervised sessions** (live monitoring + command control), and **safes + dependent-account
-propagation** — which closes all four Tier-1 gaps against the commercial leaders. It remains
+**supervised sessions** (live monitoring + command control), **safes + dependent-account
+propagation** — which closes all four Tier-1 gaps against the commercial leaders — and optional
+**CyberArk Conjur** sourcing of pamv1's own bootstrap secrets (alongside SOPS). It remains
 an **alpha, educational** codebase — read it, run it, learn from it, but don't trust it with
 real secrets.
 
@@ -178,6 +179,7 @@ PAM for AI agents — the same chokepoint, extended to autonomous tools. Opt-in 
 - **Observability** — a dependency-free [Prometheus](https://prometheus.io/) `/metrics` endpoint (request counts by status, audit volume, break-glass use, rotations, active-sessions gauge), plus a health/readiness split (`/healthz` liveness, `/readyz` checks the database).
 - **IaC deployment** — [Docker](https://docs.docker.com/) (distroless, non-root), [docker-compose](https://docs.docker.com/compose/) with hardened Postgres, [Kubernetes](https://kubernetes.io/) manifests under the restricted Pod Security Standard, a **[Helm chart](deploy/helm/pamv1)**, and a [Terraform](https://developer.hashicorp.com/terraform) module. Releases are built by digest with an **[SBOM](https://www.cisa.gov/sbom), [cosign](https://docs.sigstore.dev/) keyless signature and SLSA provenance**.
 - **Encrypted secrets in git** — the Kubernetes secret manifest can be sealed with **[SOPS](https://github.com/getsops/sops) + [age](https://age-encryption.org/)**: values are encrypted while `kind`/`metadata` stay reviewable, decrypted at deploy time (`sops -d \| kubectl apply -f -`, plaintext never on disk) or natively by Flux / Argo / helm-secrets — so secrets live in the **same IaC repo** without leaking. See **[deploy/k8s/sops/](deploy/k8s/sops/)**.
+- **Or source secrets from CyberArk Conjur** — as a runtime alternative to SOPS, set `PAM_CONJUR_URL` and pamv1 fetches its own bootstrap secrets (master key, API key, DB URL, …) from **[Conjur](https://www.conjur.org/)** at startup, authenticating with a host API key or a **Kubernetes `authn-jwt`** projected token — so no bootstrap secret lives in Git at all. Both mechanisms ship; SOPS stays the zero-dependency default. See **[deploy/k8s/conjur/](deploy/k8s/conjur/)**.
 
 ## Roles, users & profiles
 
@@ -224,7 +226,7 @@ disable the proxy with `PAM_SSH_ADDR=off`.
 
 ## Roadmap
 
-All eighteen phases have shipped — full per-phase detail in **[ROADMAP.md](ROADMAP.md)**:
+All nineteen phases have shipped — full per-phase detail in **[ROADMAP.md](ROADMAP.md)**:
 
 | Phase | Theme | Status |
 |---|---|---|
@@ -246,6 +248,7 @@ All eighteen phases have shipped — full per-phase detail in **[ROADMAP.md](ROA
 | 15 | PostgreSQL database session proxy (JIT injection + query audit) | ✅ shipped |
 | 16 | Live session monitoring (SSE) + command control | ✅ shipped |
 | 17 | Safes (delegated-access containers) + dependent-account propagation | ✅ shipped |
+| 18 | CyberArk Conjur secret sourcing (optional, alongside SOPS) | ✅ shipped |
 
 ## Coverage vs. commercial PAM (CyberArk, Wallix, …)
 

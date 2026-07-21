@@ -62,6 +62,9 @@ flowchart LR
     n_metrics[metrics]
     n_session[session]
   end
+  subgraph n_Other["Other"]
+    n_conjur[conjur]
+  end
   n_agentid --> n_auth
   n_agentid --> n_store
   n_alert --> n_logging
@@ -96,6 +99,7 @@ flowchart LR
   n_broker --> n_logging
   n_broker --> n_policy
   n_broker --> n_store
+  n_conjur --> n_logging
   n_maint --> n_store
   n_maint --> n_vault
   n_memstore --> n_store
@@ -105,6 +109,7 @@ flowchart LR
   n_pam_server --> n_auditchain
   n_pam_server --> n_auth
   n_pam_server --> n_config
+  n_pam_server --> n_conjur
   n_pam_server --> n_logging
   n_pam_server --> n_maint
   n_pam_server --> n_memstore

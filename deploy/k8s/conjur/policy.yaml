@@ -1,0 +1,43 @@
+# pamv1 Conjur policy (Phase 18) — policy-as-code for the bootstrap secrets that
+# pamv1 sources at startup instead of from a sealed manifest.
+#
+# Load it (as a Conjur admin):
+#   conjur policy load -b root -f policy.yaml
+#
+# Then set the values (never committed — they live only in Conjur):
+#   conjur variable set -i pamv1/master-key           -v "$(./pam-server -genkey)"
+#   conjur variable set -i pamv1/api-key              -v "$(openssl rand -hex 24)"
+#   conjur variable set -i pamv1/database-url         -v 'postgres://pam:...@postgres:5432/pam?sslmode=verify-full'
+#   conjur variable set -i pamv1/break-glass-key-hash -v '<sha256-hex>'
+#   conjur variable set -i pamv1/broker-audit-key     -v "$(openssl rand -base64 32)"    # only if the broker is enabled
+#
+# pam-server reads these at boot: PAM_CONJUR_URL + PAM_CONJUR_POLICY_PREFIX=pamv1
+# → PAM_MASTER_KEY, PAM_API_KEY, PAM_DATABASE_URL, PAM_BREAK_GLASS_KEY_HASH,
+# PAM_BROKER_AUDIT_KEY (and _SIGN_SEED). Any variable absent here is simply not
+# sourced from Conjur — provide it via env/SOPS instead.
+
+- !policy
+  id: pamv1
+  body:
+    # The bootstrap secrets pamv1 sources at startup.
+    - &secrets
+      - !variable master-key
+      - !variable api-key
+      - !variable database-url
+      - !variable break-glass-key-hash
+      - !variable broker-audit-key
+      - !variable broker-audit-sign-seed
+
+    # A machine identity for the pam-server workload (authn-api-key). For the
+    # Kubernetes-native, no-bootstrap-secret path use authn-jwt instead — see the
+    # README; the host is then annotated with its service-account identity.
+    - !host
+      id: pam-server
+      annotations:
+        description: The pamv1 server process; reads its own bootstrap secrets.
+
+    # pam-server may read (and fetch the value of) those secrets — nothing else.
+    - !permit
+      role: !host pam-server
+      privileges: [read, execute]
+      resources: *secrets

@@ -36,6 +36,7 @@ import (
 	"github.com/morandeirachema/pamv1/internal/auditchain"
 	"github.com/morandeirachema/pamv1/internal/auth"
 	"github.com/morandeirachema/pamv1/internal/config"
+	"github.com/morandeirachema/pamv1/internal/conjur"
 	"github.com/morandeirachema/pamv1/internal/logging"
 	"github.com/morandeirachema/pamv1/internal/maint"
 	"github.com/morandeirachema/pamv1/internal/oidc"
@@ -358,6 +359,13 @@ func roleMap(admin, user, auditor, approver string) map[string]auth.Role {
 // handler, optionally launches the credential-lifecycle worker and the SSH
 // proxy, then serves HTTP(S) until interrupted and shuts down gracefully.
 func run() error {
+	// Optionally source pamv1's own bootstrap secrets from CyberArk Conjur
+	// (Phase 18) before reading the environment. A no-op unless PAM_CONJUR_URL is
+	// set; SOPS/env remains the default. Fail-loud so a configured-but-unreachable
+	// Conjur never starts the server with empty secrets.
+	if err := conjur.SourceEnv(context.Background()); err != nil {
+		return fmt.Errorf("conjur secret source: %w", err)
+	}
 	cfg, err := config.Load()
 	if err != nil {
 		return err

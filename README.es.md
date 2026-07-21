@@ -26,7 +26,7 @@ de fósforo verde** sin concesiones, porque tocar un PAM debe *sentirse* serio.
 
 Construido fase a fase con una regla: **cada fase es funcional de principio a fin** — arranca,
 pasa los tests y se despliega como Infraestructura-como-Código. El **[roadmap](ROADMAP.md)**
-abarca de la 0 a la 17 y **se han entregado las dieciocho fases** — desde el proxy SSH JIT y el
+abarca de la 0 a la 18 y **se han entregado las diecinueve fases** — desde el proxy SSH JIT y el
 RBAC, pasando por el login AD/Entra/OIDC, los objetivos Windows, el quórum de break-glass, la
 adaptación OT/industrial, las herramientas NIS2, escala/HA y la consola 5250 completa, hasta un
 subsistema de configuración con hot-swap y RBAC de perfiles personalizados, un **bróker de
@@ -35,8 +35,9 @@ verificable, transporte MCP e identidad SPIFFE), **secretos de Kubernetes cifrad
 un **proxy de sesión de base de datos PostgreSQL** (inyección JIT + auditoría por sentencia SQL),
 **sesiones supervisadas** (monitorización en vivo + control de comandos) y **safes + propagación
 a cuentas dependientes** — lo que cierra las cuatro brechas de Nivel 1 frente a los líderes
-comerciales. Sigue siendo un proyecto **alpha y educativo** — léelo, ejecútalo, aprende de él,
-pero no le confíes secretos reales.
+comerciales — y el aprovisionamiento opcional de los secretos de arranque de pamv1 desde
+**CyberArk Conjur** (junto a SOPS). Sigue siendo un proyecto **alpha y educativo** — léelo,
+ejecútalo, aprende de él, pero no le confíes secretos reales.
 
 🔎 **Resumen interactivo:** [página del proyecto](https://claude.ai/code/artifact/b9f19443-5ad1-42d2-955f-e43ca17ac542) — qué funciona, arquitectura y hoja de ruta de un vistazo &nbsp;·&nbsp; 📖 **[Read it in English →](README.md)**
 
@@ -181,6 +182,7 @@ Opcional vía `PAM_BROKER_POLICY_FILE`.
 - **Observabilidad** — un endpoint [Prometheus](https://prometheus.io/) `/metrics` sin dependencias (conteos por estado, volumen de auditoría, uso de break-glass, rotaciones, gauge de sesiones activas), más una separación liveness/readiness (`/healthz`, `/readyz` que comprueba la BD).
 - **Despliegue como código** — [Docker](https://docs.docker.com/) (distroless, sin root), [docker-compose](https://docs.docker.com/compose/) con Postgres endurecida, manifiestos [Kubernetes](https://kubernetes.io/) bajo el PSS restringido, un **[chart de Helm](deploy/helm/pamv1)** y un módulo de [Terraform](https://developer.hashicorp.com/terraform). Las releases se construyen por digest con **[SBOM](https://www.cisa.gov/sbom), firma keyless [cosign](https://docs.sigstore.dev/) y procedencia SLSA**.
 - **Secretos cifrados en git** — el manifiesto de Secret de Kubernetes puede sellarse con **[SOPS](https://github.com/getsops/sops) + [age](https://age-encryption.org/)**: los valores se cifran mientras `kind`/`metadata` quedan legibles, y se descifra al desplegar (`sops -d \| kubectl apply -f -`, el texto plano nunca toca el disco) o de forma nativa con Flux / Argo / helm-secrets — así los secretos viven en el **mismo repo de IaC** sin filtrarse. Ver **[deploy/k8s/sops/](deploy/k8s/sops/)**.
+- **O aprovisiona los secretos desde CyberArk Conjur** — como alternativa en tiempo de ejecución a SOPS, define `PAM_CONJUR_URL` y pamv1 obtiene sus secretos de arranque (clave maestra, clave de API, URL de la BD, …) de **[Conjur](https://www.conjur.org/)** al arrancar, autenticándose con una clave de API de host o un token proyectado de Kubernetes (**`authn-jwt`**) — de modo que ningún secreto de arranque vive en Git. Ambos mecanismos se entregan; SOPS sigue siendo el predeterminado sin dependencias. Ver **[deploy/k8s/conjur/](deploy/k8s/conjur/)**.
 
 ## Roles, usuarios y perfiles
 
@@ -227,7 +229,7 @@ ves la credencial. Las grabaciones van a `PAM_RECORDING_DIR`; desactiva el proxy
 
 ## Hoja de ruta
 
-Se han entregado las dieciocho fases — detalle por fase en **[ROADMAP.md](ROADMAP.md)**:
+Se han entregado las diecinueve fases — detalle por fase en **[ROADMAP.md](ROADMAP.md)**:
 
 | Fase | Tema | Estado |
 |---|---|---|
@@ -249,6 +251,7 @@ Se han entregado las dieciocho fases — detalle por fase en **[ROADMAP.md](ROAD
 | 15 | Proxy de sesión de base de datos PostgreSQL (inyección JIT + auditoría de consultas) | ✅ entregada |
 | 16 | Monitorización de sesiones en vivo (SSE) + control de comandos | ✅ entregada |
 | 17 | Safes (contenedores de acceso delegado) + propagación a cuentas dependientes | ✅ entregada |
+| 18 | Aprovisionamiento de secretos desde CyberArk Conjur (opcional, junto a SOPS) | ✅ entregada |
 
 ## Cobertura frente al PAM comercial (CyberArk, Wallix, …)
 

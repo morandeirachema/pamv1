@@ -1,0 +1,82 @@
+# pam-server sourcing its bootstrap secrets from Conjur (Phase 18) instead of a
+# Kubernetes Secret. This is the runtime-broker alternative to deploy/k8s/sops;
+# either mechanism works, and SOPS remains the zero-dependency default.
+#
+# Two authentication modes are shown:
+#   • authn-api-key — a host API key in a small Secret (uncomment the env below).
+#   • authn-jwt     — the pod proves its Kubernetes identity with a projected
+#                     service-account token; NO bootstrap secret in Git at all
+#                     (the default in this manifest). See the README for the
+#                     matching Conjur authn-jwt policy.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pam-server
+  namespace: pamv1
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: pam-server }
+  template:
+    metadata:
+      labels: { app: pam-server }
+    spec:
+      serviceAccountName: pam-server
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        fsGroup: 65532
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: pam-server
+          image: ghcr.io/morandeirachema/pamv1:latest
+          args: ["-healthcheck=false"]
+          ports:
+            - { containerPort: 8080, name: http }
+            - { containerPort: 2222, name: ssh }
+          env:
+            # --- Conjur secret sourcing ---
+            - { name: PAM_CONJUR_URL, value: "https://conjur.pamv1.svc.cluster.local" }
+            - { name: PAM_CONJUR_ACCOUNT, value: "default" }
+            - { name: PAM_CONJUR_POLICY_PREFIX, value: "pamv1" }
+            # authn-jwt (Kubernetes-native, no bootstrap secret in Git):
+            - { name: PAM_CONJUR_AUTHN_JWT_SERVICE_ID, value: "kubernetes" }
+            - { name: PAM_CONJUR_JWT_FILE, value: "/var/run/secrets/conjur/token" }
+            # trust Conjur's TLS via a mounted CA bundle:
+            - { name: PAM_CONJUR_CACERT, value: "/etc/conjur/ca.pem" }
+            # --- authn-api-key alternative (comment out authn-jwt above):
+            # - { name: PAM_CONJUR_AUTHN_LOGIN, value: "host/pamv1/pam-server" }
+            # - name: PAM_CONJUR_API_KEY
+            #   valueFrom: { secretKeyRef: { name: conjur-host, key: api-key } }
+            #
+            # Non-secret runtime config still comes from the environment/IaC:
+            - { name: PAM_LISTEN_ADDR, value: ":8080" }
+            - { name: PAM_KEK_PROVIDER, value: "local" }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          volumeMounts:
+            - { name: conjur-token, mountPath: /var/run/secrets/conjur, readOnly: true }
+            - { name: conjur-ca, mountPath: /etc/conjur, readOnly: true }
+            - { name: data, mountPath: /data }
+      volumes:
+        # A projected service-account token scoped to the Conjur audience — the
+        # kubelet refreshes it; Conjur's authn-jwt verifies it. No secret in Git.
+        - name: conjur-token
+          projected:
+            sources:
+              - serviceAccountToken:
+                  path: token
+                  audience: conjur
+                  expirationSeconds: 600
+        - name: conjur-ca
+          configMap: { name: conjur-ca }
+        - name: data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: pam-server
+  namespace: pamv1
