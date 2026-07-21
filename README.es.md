@@ -57,6 +57,7 @@ confíes secretos reales.
 - **[Guía de administración](docs/ADMIN-GUIDE.md)** — desplegar, configurar, gestionar objetivos / credenciales / usuarios / roles, break-glass, registro y auditoría.
 - **[Arquitectura — alto nivel](docs/ARCHITECTURE-HIGH-LEVEL.md)** y **[bajo nivel](docs/ARCHITECTURE-LOW-LEVEL.md)** (el mapa más completo — léelo primero), más **[diagramas derivados del código](docs/ARCHITECTURE-DIAGRAMS.md)** (grafo de paquetes, modelo de datos, superficie REST — generados desde el código y verificados por CI).
 - **[Matriz de puertos y flujos](docs/PORTS-AND-FLOWS.md)** · **[runbook de copia y restauración](docs/BACKUP-AND-RESTORE.md)** · **[guía de despliegue OT](docs/OT-DEPLOYMENT.md)** · **[pack de cumplimiento NIS2](docs/NIS2-COMPLIANCE.md)**.
+- **[Proyectos PAM de código abierto relacionados](docs/RELATED-PROJECTS.md)** — cómo se sitúa pamv1 entre JumpServer, Teleport, Warpgate, Vault/OpenBao, step-ca, Guacamole y otros (documento en inglés).
 
 ## Arquitectura
 
