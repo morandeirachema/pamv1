@@ -24,20 +24,30 @@ de fósforo verde** sin concesiones, porque tocar un PAM debe *sentirse* serio.
 > devuelve el resultado. Quítale la credencial al solicitante y con ella se va casi toda la
 > superficie de ataque.
 
+<p align="center">
+  <img src="docs/img/portal-main-menu.svg" alt="Menú principal de pamv1 — consola AS/400 / 5250 de fósforo verde" width="720">
+  <br><em>La consola de gestión — pantalla verde AS/400 / IBM 5250, orientada al teclado (el ratón es opcional).</em>
+</p>
+
 Construido fase a fase con una regla: **cada fase es funcional de principio a fin** — arranca,
 pasa los tests y se despliega como Infraestructura-como-Código. El **[roadmap](ROADMAP.md)**
-abarca de la 0 a la 21 y **se han entregado las veintidós fases** — desde el proxy SSH JIT y el
+abarca de la 0 a la 24 y **se han entregado las veinticinco fases** — desde el proxy SSH JIT y el
 RBAC, pasando por el login AD/Entra/OIDC, los objetivos Windows, el quórum de break-glass, la
 adaptación OT/industrial, las herramientas NIS2, escala/HA y la consola 5250 completa, hasta un
 subsistema de configuración con hot-swap y RBAC de perfiles personalizados, un **bróker de
 acceso para agentes de IA** (motor de políticas, ejecución JIT de herramientas, auditoría
 verificable, transporte MCP e identidad SPIFFE), **secretos de Kubernetes cifrados con SOPS**,
 un **proxy de sesión de base de datos PostgreSQL** (inyección JIT + auditoría por sentencia SQL),
-**sesiones supervisadas** (monitorización en vivo + control de comandos) y **safes + propagación
+**sesiones supervisadas** (monitorización en vivo + control de comandos), **safes + propagación
 a cuentas dependientes** — lo que cierra las cuatro brechas de Nivel 1 frente a los líderes
-comerciales — y el aprovisionamiento opcional de los secretos de arranque de pamv1 desde
-**CyberArk Conjur** (junto a SOPS) y la **profundidad de gobierno de accesos** — campañas de certificación, una pasarela ITSM/tickets y flujos de aprobación más ricos (Nivel 2). Sigue siendo un proyecto **alpha y educativo** — léelo,
-ejecútalo, aprende de él, pero no le confíes secretos reales.
+comerciales — el aprovisionamiento opcional de los secretos de arranque de pamv1 desde
+**CyberArk Conjur** (junto a SOPS), la **profundidad de gobierno de accesos** (campañas de
+certificación, una pasarela ITSM/tickets y flujos de aprobación más ricos — Nivel 2), el
+**Privilegio Cero Permanente** (certificados SSH efímeros y de corta vida) y la **analítica de
+amenazas privilegiadas** (puntuación de riesgo conductual + respuesta automática — Nivel 3), y
+una **API de secretos para aplicaciones** estilo Conjur para apps que no son agentes (Nivel 4).
+Sigue siendo un proyecto **alpha y educativo** — léelo, ejecútalo, aprende de él, pero no le
+confíes secretos reales.
 
 🔎 **Resumen interactivo:** [página del proyecto](https://claude.ai/code/artifact/b9f19443-5ad1-42d2-955f-e43ca17ac542) — qué funciona, arquitectura y hoja de ruta de un vistazo &nbsp;·&nbsp; 📖 **[Read it in English →](README.md)**
 
@@ -127,7 +137,7 @@ resultado.
 
 ## Qué funciona hoy
 
-Fases 0–14, agrupadas por área. Cada capacidad está cubierta por tests y se despliega como código.
+Fases 0–24, agrupadas por área. Cada capacidad está cubierta por tests y se despliega como código.
 
 ### Identidad y acceso
 
@@ -158,7 +168,12 @@ Fases 0–14, agrupadas por área. Cada capacidad está cubierta por tests y se 
 
 ### Configuración y la consola de gestión
 
-- **Consola de gestión AS/400** — una consola completa consciente de roles en fósforo verde: Sign On, un menú principal numerado y pantallas `Work with…` para objetivos y concesiones, credenciales (revelar/prestar/rotar/reconciliar), sesiones activas (monitor en vivo + corte), solicitudes de acceso a cuatro ojos, usuarios y perfiles, MFA, descubrimiento, reconciliación, auditoría (filtro + exportación CSV), break-glass, **perfiles de permisos**, **configuración del sistema** y **config efectiva + exportación a IaC** — opciones numéricas (`4=Borrar`, `5=Ver`), teclas F, líneas de barrido. El menú muestra solo lo que tu rol permite.
+- **Consola de gestión AS/400** — una consola completa consciente de roles en fósforo verde: Sign On, un menú principal numerado y pantallas `Work with…` para objetivos y concesiones, credenciales (revelar/prestar/rotar/reconciliar), sesiones activas (monitor en vivo + corte), solicitudes de acceso a cuatro ojos, usuarios y perfiles, MFA, descubrimiento, reconciliación, auditoría (filtro + exportación CSV), break-glass, **perfiles de permisos**, **configuración del sistema**, **config efectiva + exportación a IaC** y **secretos de aplicación** — opciones numéricas (`4=Borrar`, `5=Ver`), teclas F, líneas de barrido. Es **orientada al teclado** (el ratón es opcional): el foco cae en el campo de cada pantalla, `Esc` vuelve atrás, `↑/↓` mueven entre filas. El menú muestra solo lo que tu rol permite.
+
+<p align="center">
+  <img src="docs/img/portal-app-secrets.svg" alt="Trabajar con secretos de aplicación — pantalla de la consola 5250" width="720">
+  <br><em>Menú 15 — <em>Work with application secrets</em>: acuñar identidades de aplicación y concederles credenciales individuales (Nivel 4).</em>
+</p>
 - **Configuración con hot-swap** — los ajustes de identidad, SSO y política operativa pasan a ser editables y **persistidos en la BD**, y se **aplican en caliente sin reiniciar** (secretos cifrados en el vault, un cambio rechazado se revierte). Una pantalla de solo lectura de config efectiva + salud de backends y una **exportación a IaC** (`env` / Helm / Terraform) devuelven los cambios de la consola a código. El arranque y la red/TLS permanecen solo en el entorno a propósito.
 
 ### El bróker de acceso para agentes de IA
@@ -229,7 +244,7 @@ ves la credencial. Las grabaciones van a `PAM_RECORDING_DIR`; desactiva el proxy
 
 ## Hoja de ruta
 
-Se han entregado las veintidós fases — detalle por fase en **[ROADMAP.md](ROADMAP.md)**:
+Se han entregado las veinticinco fases (0–24) — detalle por fase en **[ROADMAP.md](ROADMAP.md)**:
 
 | Fase | Tema | Estado |
 |---|---|---|
@@ -255,6 +270,9 @@ Se han entregado las veintidós fases — detalle por fase en **[ROADMAP.md](ROA
 | 19 | Campañas de certificación / atestación de accesos | ✅ entregada |
 | 20 | Pasarela ITSM / tickets en las solicitudes de acceso | ✅ entregada |
 | 21 | Flujos de aprobación más ricos (N-de-M, ventanas programadas, códigos de motivo) | ✅ entregada |
+| 22 | Privilegio Cero Permanente (certificados SSH efímeros de corta vida) | ✅ entregada |
+| 23 | Analítica de amenazas privilegiadas (riesgo conductual + respuesta automática) | ✅ entregada |
+| 24 | API de secretos para aplicaciones (entrega estilo Conjur para apps sin agente) | ✅ entregada |
 
 ## Cobertura frente al PAM comercial (CyberArk, Wallix, …)
 
@@ -296,22 +314,31 @@ posibles fases futuras.
 
 | Brecha | Líderes | pamv1 hoy |
 |---|---|---|
-| **Cero Privilegio Permanente (ZSP)** — cuentas efímeras / certificados SSH de corta vida en lugar de un secreto permanente almacenado | [CyberArk ZSP](https://www.cyberark.com/what-is/zero-standing-privileges/), Teleport | credencial permanente en el vault + inyección JIT |
-| **Amplitud de conectores / plugins** — dispositivos de red (Cisco/Juniper/F5/Palo Alto), cuentas de BD, IAM en la nube, VMware/SAP/mainframe | el foso principal de CyberArk | solo rotación SSH / WinRM / ssh_key |
-| **Acceso privilegiado en la nube (CIEM ligero)** — consola federada + credenciales de nube de corta vida, ajuste de derechos | CyberArk, Wallix | solo AWS KMS para la KEK |
-| **Analítica de amenazas privilegiadas** — detección de anomalías de comportamiento, puntuación de riesgo, respuesta automatizada | CyberArk PTA, Wallix | flujo auditado en bruto + exportación syslog/SIEM (detectar aguas abajo) |
-| **Proxy de sesiones web / SaaS** — grabar + inyectar en consolas de administración web | CyberArk Secure Web Sessions, Wallix | solo SSH/WinRM/RDP (el mayor esfuerzo) |
+| ~~**Cero Privilegio Permanente**~~ **✅ entregado (Fase 22)** — certificados SSH efímeros de corta vida en lugar de un secreto permanente | [CyberArk ZSP](https://www.cyberark.com/what-is/zero-standing-privileges/), Teleport | una credencial `ssh_ca` **no guarda secreto**; el proxy acuña un certificado de corta vida (`PAM_SSH_CA_KEY`) firmado por la CA de pamv1 por sesión — la cuenta no tiene credencial permanente |
+| ~~**Analítica de amenazas privilegiadas**~~ **✅ entregado (Fase 23)** — puntuación de riesgo conductual + respuesta automática | CyberArk PTA, Wallix | `internal/analytics` puntúa la auditoría en riesgo explicable por actor (`GET /api/analytics/risk`); un worker alerta y puede cortar las sesiones de un actor crítico |
+| **Amplitud de conectores / plugins** — dispositivos de red (Cisco/Juniper/F5/Palo Alto), cuentas de BD, IAM en la nube, VMware/SAP/mainframe | el foso principal de CyberArk | SSH (incl. dispositivos de red) / WinRM / PostgreSQL / rotación ssh_key — **requiere dispositivos/BD reales** para extenderlo con honestidad |
+| **Acceso privilegiado en la nube (CIEM ligero)** — consola federada + credenciales de nube de corta vida, ajuste de derechos | CyberArk, Wallix | solo AWS KMS para la KEK — **requiere una cuenta de nube** para acuñar credenciales de nube de corta vida |
+| **Proxy de sesiones web / SaaS** — grabar + inyectar en consolas de administración web | CyberArk Secure Web Sessions, Wallix | solo SSH/WinRM/RDP (el mayor esfuerzo; **requiere un navegador + consola SaaS**) |
+
+Dos de las cinco brechas de Nivel 3 están cerradas. Las tres restantes requieren cada una
+infraestructura externa o una cuenta para construirlas con honestidad — catalogadas, con
+qué levantar, en **[docs/EXTERNAL-INFRA-GAPS.md](docs/EXTERNAL-INFRA-GAPS.md)**.
 
 ### Nivel 4 — ecosistema
 
-Un [**provider** de Terraform](https://developer.hashicorp.com/terraform) para los
-objetos de pamv1 (objetivos / credenciales / políticas como código — muy alineado con
-la filosofía IaC) · sincronización de salida estilo
-[Secrets Hub](https://www.cyberark.com/products/secrets-hub/) hacia AWS Secrets Manager
-/ Azure Key Vault · una API de secretos de aplicación estilo
-[Conjur](https://www.conjur.org/) para apps sin agente · descubrimiento de claves SSH
-del parque · componentes de conexión para apps de escritorio (auto-login en
-SSMS / Toad / vSphere vía RDP RemoteApp).
+- ~~**API de secretos para apps sin agente**~~ **✅ entregado (Fase 24)** — una vía estilo
+  [Conjur](https://www.conjur.org/) (`PAM_APP_SECRETS_ENABLED`) donde una aplicación recupera
+  los secretos que se le han **concedido explícitamente** con una clave portadora
+  (`GET /v1/app-secrets/{credential_id}`); denegación por defecto, conceder requiere
+  `reveal_secret`, cada recuperación auditada.
+- Pendientes (requieren infraestructura/cuenta externa): un
+  [**provider** de Terraform](https://developer.hashicorp.com/terraform) para los objetos de
+  pamv1 (un módulo aparte + el Registry de Terraform) · sincronización de salida estilo
+  [Secrets Hub](https://www.cyberark.com/products/secrets-hub/) hacia AWS Secrets Manager /
+  Azure Key Vault (una cuenta de nube) · descubrimiento de claves SSH del parque a escala (un
+  parque de hosts real) · componentes de conexión para apps de escritorio (auto-login en
+  SSMS / Toad / vSphere vía RDP RemoteApp — hosts Windows RemoteApp). Ver
+  [docs/EXTERNAL-INFRA-GAPS.md](docs/EXTERNAL-INFRA-GAPS.md).
 
 ### No-objetivo deliberado
 
@@ -327,7 +354,7 @@ por diseño.
 2. ~~**Fase 16 — Monitorización en vivo + control de comandos**~~ ✅ **entregada** (stream SSE en vivo + control de comandos regex en exec/WinRM/SQL).
 3. ~~**Fase 17 — Safes / contenedores + propagación a cuentas dependientes**~~ ✅ **entregada** — la mejora de autorización para el uso multiequipo y la rotación *segura* de cuentas de servicio.
 
-**Las cuatro brechas de Nivel 1 están cerradas.** Los niveles restantes (profundidad de gobierno, ZSP, amplitud de conectores, nube, analítica, proxy web) son la siguiente frontera.
+**Las cuatro brechas de Nivel 1 y las tres de Nivel 2 están cerradas**, **dos de las cinco de Nivel 3** (Privilegio Cero Permanente, analítica de amenazas) y la **primera de Nivel 4** (la API de secretos para aplicaciones). El resto del Nivel 3 (amplitud de conectores, CIEM en la nube, proxy web) y del Nivel 4 (provider de Terraform, sincronización Secrets-Hub, descubrimiento de claves SSH, componentes para apps de escritorio) son la siguiente frontera — cada uno condicionado a infraestructura externa o cuentas, catalogado en [docs/EXTERNAL-INFRA-GAPS.md](docs/EXTERNAL-INFRA-GAPS.md).
 
 ## Inicio rápido
 

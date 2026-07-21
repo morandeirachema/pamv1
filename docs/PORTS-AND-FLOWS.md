@@ -4,8 +4,12 @@
 > deployment flow changes. This is the reference for firewall rules, security
 > groups, NetworkPolicies and OT segmentation.
 >
-> Last updated: 2026-07-21 · Reflects: **Phases 0–18**. Ports marked *planned* have
-> no listener/dialer yet — do not open them until the phase lands.
+> Last updated: 2026-07-21 · Reflects: **Phases 0–24**. Ports marked *planned* have
+> no listener/dialer yet — do not open them until the phase lands. Phases 19–24 add
+> **no new listeners**: certification/ticketing/approvals (19–21), threat analytics
+> (23) and the application-secrets API (24) all ride the existing HTTP control plane
+> (`:8080`), and Zero Standing Privilege (22) is served over the existing SSH proxy
+> (`:2222`) — it only adds an outbound SSH-certificate authentication to targets.
 
 Legend: ✅ implemented · 🔷 planned (roadmap phase noted). All ports are TCP
 unless stated. `pam-server` is a single binary exposing the portal/API and the

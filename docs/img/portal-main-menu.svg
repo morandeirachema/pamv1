@@ -1,0 +1,54 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 620" font-family="ui-monospace, 'Cascadia Mono', Menlo, Consolas, monospace" font-size="15">
+  <defs>
+    <pattern id="scan" width="1" height="3" patternUnits="userSpaceOnUse">
+      <rect width="1" height="1" fill="rgba(0,0,0,0.22)"/>
+    </pattern>
+    <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="0.6" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <style>
+      .g{fill:#2eff7b}.w{fill:#eaffea}.c{fill:#4be0e0}.d{fill:#2f7d4a}
+      text{white-space:pre}
+    </style>
+  </defs>
+  <rect width="900" height="620" fill="#050705"/>
+  <rect x="10" y="10" width="880" height="600" fill="none" stroke="#123c1f" rx="6"/>
+  <g filter="url(#glow)">
+    <!-- header -->
+    <text x="28" y="42" class="w">PAMMAIN</text>
+    <text x="450" y="42" class="g" text-anchor="middle">PAMV1 Main Menu</text>
+    <text x="872" y="42" class="w" text-anchor="end">SYSTEM: PAMV1</text>
+    <text x="28" y="64" class="g">bootstrap-admin / admin</text>
+    <text x="872" y="64" class="c" text-anchor="end">21/07/26  18:52:04</text>
+    <line x1="28" y1="76" x2="872" y2="76" stroke="#123c1f"/>
+
+    <text x="28" y="102" class="g">Select one of the following:</text>
+
+    <text x="64" y="140" class="g" xml:space="preserve"> 1. Work with targets</text>
+    <text x="64" y="161" class="g" xml:space="preserve"> 2. Work with credentials</text>
+    <text x="64" y="182" class="g" xml:space="preserve"> 3. Credential check-out / check-in</text>
+    <text x="64" y="203" class="g" xml:space="preserve"> 4. Work with active sessions</text>
+    <text x="64" y="224" class="g" xml:space="preserve"> 5. Work with access requests</text>
+    <text x="64" y="245" class="g" xml:space="preserve"> 6. Rotation &amp; reconciliation</text>
+    <text x="64" y="266" class="g" xml:space="preserve"> 7. Discovery scan</text>
+    <text x="64" y="287" class="g" xml:space="preserve"> 8. Work with users &amp; profiles</text>
+    <text x="64" y="308" class="g" xml:space="preserve"> 9. Multi-factor authentication (yourself)</text>
+    <text x="64" y="329" class="g">10. Display audit trail</text>
+    <text x="64" y="350" class="g">11. Break-glass unseal</text>
+    <text x="64" y="371" class="g">12. Work with permission profiles</text>
+    <text x="64" y="392" class="g">13. System configuration</text>
+    <text x="64" y="413" class="g">14. Effective config &amp; IaC export</text>
+    <text x="64" y="434" class="g">15. Work with application secrets</text>
+    <text x="64" y="455" class="g">90. Sign off</text>
+
+    <text x="28" y="493" class="g">Selection or command</text>
+    <text x="28" y="514" class="g" xml:space="preserve">===&gt; </text>
+    <rect x="72" y="502" width="9" height="16" fill="#2eff7b"/>
+
+    <line x1="28" y1="536" x2="872" y2="536" stroke="#123c1f"/>
+    <text x="28" y="560" class="c">F3=Sign off   F5=Refresh</text>
+    <text x="28" y="581" class="d" font-size="13">Enter=Confirm   Esc=Back   Tab / ↑↓=Move   (the mouse is optional)</text>
+  </g>
+  <rect width="900" height="620" fill="url(#scan)"/>
+</svg>

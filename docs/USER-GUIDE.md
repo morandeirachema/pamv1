@@ -8,7 +8,7 @@ review activity. If you deploy or administer pamv1, see the
 > user-facing behavior changes (portal, connecting, roles). Add a row to the
 > [change log](#8-change-log) with each update.
 >
-> Last updated: 2026-07-21 · Reflects: **Phases 0–18** — the 5250 console (11), custom permission profiles (12), the database session proxy you connect to with `psql` (15), and supervised sessions (16: a supervisor may watch live, and a command can be blocked by policy). See the [ROADMAP](../ROADMAP.md).
+> Last updated: 2026-07-21 · Reflects: **Phases 0–24** — the 5250 console (11, now keyboard-first), custom permission profiles (12), the database session proxy you connect to with `psql` (15), supervised sessions (16: a supervisor may watch live, and a command can be blocked by policy), and Zero Standing Privilege on some targets (22: no stored password — pamv1 signs a short-lived certificate for your session). See the [ROADMAP](../ROADMAP.md).
 
 > ⚠️ Educational / pre-production project — see the [README](../README.md).
 

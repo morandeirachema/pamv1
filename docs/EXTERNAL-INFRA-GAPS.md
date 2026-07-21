@@ -8,7 +8,7 @@
 > live. This is the operator's checklist of what you must stand up (and what to
 > re-verify) before relying on each capability in production.
 >
-> Last updated: 2026-07-21 · Reflects Phases 0–23.
+> Last updated: 2026-07-21 · Reflects Phases 0–24.
 
 ## Legend
 

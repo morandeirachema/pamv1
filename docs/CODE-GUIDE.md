@@ -8,7 +8,7 @@
 > map) — by explaining *how the code actually runs*. Keep it current: when you
 > change a subsystem, update its section here in the same change.
 >
-> Last updated: 2026-07-21 · Reflects Phases 0–23.
+> Last updated: 2026-07-21 · Reflects Phases 0–24.
 
 ---
 

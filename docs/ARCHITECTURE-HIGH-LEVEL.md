@@ -9,7 +9,7 @@
 > [ARCHITECTURE-DIAGRAMS.md](ARCHITECTURE-DIAGRAMS.md). This file holds the
 > hand-authored conceptual diagrams below.
 >
-> Last updated: 2026-07-21 · Reflects: **Phases 0–19 shipped** — the PostgreSQL database session proxy (15), live session monitoring + command control (16), safes + dependent-account propagation (17), optional CyberArk Conjur secret sourcing (18), access certification campaigns (19), an ITSM/ticketing gate (20), and richer approval workflows (21). All four Tier-1 and all three Tier-2 (access-governance) competitive-coverage gaps are now closed. See the [ROADMAP](../ROADMAP.md) for the authoritative per-phase status.
+> Last updated: 2026-07-21 · Reflects: **Phases 0–24 shipped** — the PostgreSQL database session proxy (15), live session monitoring + command control (16), safes + dependent-account propagation (17), optional CyberArk Conjur secret sourcing (18), access certification campaigns (19), an ITSM/ticketing gate (20), richer approval workflows (21), Zero Standing Privilege via ephemeral SSH certificates (22), privileged threat analytics (23), and a Conjur-style application-secrets API for non-agent apps (24). All four Tier-1 and all three Tier-2 competitive-coverage gaps are closed, plus **two of five Tier-3** (Zero Standing Privilege, threat analytics) and the **first Tier-4** (application secrets); the 5250 console is now **keyboard-first**. See the [ROADMAP](../ROADMAP.md) for the authoritative per-phase status and [EXTERNAL-INFRA-GAPS.md](EXTERNAL-INFRA-GAPS.md) for what remains.
 
 ## 1. Purpose
 
@@ -173,6 +173,9 @@ flowchart LR
 
 | Date | Change |
 |---|---|
+| 2026-07-21 | Phase 24: **application-secrets API** (Tier-4) — a Conjur-style path (`PAM_APP_SECRETS_ENABLED`) where a non-agent application retrieves the specific secrets it was **explicitly granted** with a bearer key (`GET /v1/app-secrets/{credential_id}`); default-deny, granting needs `reveal_secret`, every retrieval audited. Managed from a keyboard-first 5250 console screen (menu 15). Also: the console is now **keyboard-first** (mouse optional) |
+| 2026-07-21 | Phase 23: **privileged threat analytics** (Tier-3) — an explainable behavioral risk scorer over the audit trail (`GET /api/analytics/risk`); a background worker alerts on newly elevated high/critical actors and can terminate a critical actor's live sessions. Named signals, per-signal caps, a re-alert cooldown; the CyberArk PTA gap |
+| 2026-07-21 | Phase 22: **Zero Standing Privilege** (Tier-3) — an `ssh_ca` credential stores no secret; the proxy mints a short-lived SSH certificate just-in-time per session (`PAM_SSH_CA_KEY`), so the account has no standing credential. The Teleport / CyberArk ZSP model on the existing chokepoint |
 | 2026-07-21 | Phase 21: **richer approval workflows** — an access request can require several distinct approvers (N-of-M chains), be scheduled for a future maintenance window (not-before/not-after), and demand a reason code. Completes the Tier-2 access-governance gaps |
 | 2026-07-21 | Phase 20: **ITSM / ticketing gate** — an access request can require a change/incident ticket, validated by a regex format and/or a webhook the ITSM system answers 2xx for a valid ticket, then stamped into the audit trail. The "no access without an approved change" control (`PAM_REQUIRE_TICKET`) |
 | 2026-07-21 | Phase 19: **access certification campaigns** — a manager creates a campaign that snapshots who currently has access to what (target grants + safe members), then certifies or revokes each item; a revoke removes the underlying grant. The SOX/ISO/NIS2 access-review control, and the first Tier-2 competitive-coverage gap |

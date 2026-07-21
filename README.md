@@ -23,20 +23,28 @@ unapologetically **AS/400 / IBM 5250 green-screen console**, because touching a 
 > audited control plane that holds the secret and hands back only the result. Take away the
 > credential from the requester and most of the attack surface goes with it.
 
+<p align="center">
+  <img src="docs/img/portal-main-menu.svg" alt="pamv1 AS/400 / 5250 green-screen main menu" width="720">
+  <br><em>The management console — an AS/400 / IBM 5250 green-screen, keyboard-first (the mouse is optional).</em>
+</p>
+
 Built phase by phase with a single rule: **every phase is functional end to end** — it
 runs, passes tests, and deploys as Infrastructure-as-Code. The **[roadmap](ROADMAP.md)** runs
-0–21 and **all twenty-two phases have shipped** — from the JIT SSH proxy and RBAC, through
+0–24 and **all twenty-five phases have shipped** — from the JIT SSH proxy and RBAC, through
 AD/Entra/OIDC login, Windows targets, break-glass quorum, OT/industrial adaptation, NIS2
 tooling, scale/HA and the full 5250 console, to a hot-swappable configuration subsystem with
 custom-profile RBAC, an **AI-agent access broker** (policy engine, JIT tool execution,
 verifiable audit, MCP transport and SPIFFE identity), **SOPS-encrypted Kubernetes secrets**,
 a **PostgreSQL database session proxy** (JIT injection + per-statement query audit),
 **supervised sessions** (live monitoring + command control), **safes + dependent-account
-propagation** — which closes all four Tier-1 gaps against the commercial leaders — and optional
-**CyberArk Conjur** sourcing of pamv1's own bootstrap secrets (alongside SOPS), and
-**access-governance** depth — certification campaigns, an ITSM/ticketing gate, and richer
-approval workflows (Tier-2). It remains an **alpha, educational** codebase — read it, run it,
-learn from it, but don't trust it with real secrets.
+propagation** — which closes all four Tier-1 gaps against the commercial leaders — optional
+**CyberArk Conjur** sourcing of pamv1's own bootstrap secrets (alongside SOPS),
+**access-governance** depth (certification campaigns, an ITSM/ticketing gate, and richer
+approval workflows — Tier-2), **Zero Standing Privilege** (ephemeral short-lived SSH
+certificates) and **privileged threat analytics** (behavioral risk scoring + automated
+response — Tier-3), and a **Conjur-style application-secrets API** for non-agent apps
+(Tier-4). It remains an **alpha, educational** codebase — read it, run it, learn from it,
+but don't trust it with real secrets.
 
 🔎 **Live overview:** [interactive project page](https://claude.ai/code/artifact/a1b34e5b-cd84-4fc7-8389-ebb1897495f7) — what works, architecture and roadmap at a glance &nbsp;·&nbsp; 📖 **[Léelo en español →](README.es.md)**
 
@@ -125,7 +133,7 @@ JIT credential, and the agent receives only the result.
 
 ## What works today
 
-Phases 0–14, grouped by area. Every capability is exercised by tests and deploys as code.
+Phases 0–24, grouped by area. Every capability is exercised by tests and deploys as code.
 
 ### Identity & access
 
@@ -156,7 +164,13 @@ Phases 0–14, grouped by area. Every capability is exercised by tests and deplo
 
 ### Configuration & the management console
 
-- **AS/400 management console** — a full role-aware console in green phosphor: Sign On, a numbered main menu, and menu-driven `Work with…` screens for targets & grants, credentials (reveal/check-out/rotate/reconcile), active sessions (live monitor + kill), 4-eyes access requests, users & profiles, MFA, discovery, reconciliation, audit (filter + CSV export), break-glass, **permission profiles**, **system configuration** and **effective config + IaC export** — numeric options (`4=Delete`, `5=Display`), F-keys, scanlines. The menu shows only what your role permits.
+- **AS/400 management console** — a full role-aware console in green phosphor: Sign On, a numbered main menu, and menu-driven `Work with…` screens for targets & grants, credentials (reveal/check-out/rotate/reconcile), active sessions (live monitor + kill), 4-eyes access requests, users & profiles, MFA, discovery, reconciliation, audit (filter + CSV export), break-glass, **permission profiles**, **system configuration**, **effective config + IaC export** and **application secrets** — numeric options (`4=Delete`, `5=Display`), F-keys, scanlines. It is **keyboard-first** (the mouse is optional): focus lands on each screen's field, `Esc` goes back, `↑/↓` move between rows. The menu shows only what your role permits.
+
+<p align="center">
+  <img src="docs/img/portal-app-secrets.svg" alt="Work with application secrets — the 5250 console screen" width="720">
+  <br><em>Menu 15 — <em>Work with application secrets</em>: mint app identities and grant them individual credentials (Tier-4).</em>
+</p>
+
 - **Hot-swappable configuration** — the identity, SSO and operational-policy settings become editable settings **persisted in the database** and **applied live without a restart** (secrets vault-encrypted at rest, a rejected change rolled back). A read-only effective-config + backend-health screen and an **IaC export** (`env` / Helm / Terraform) round-trip console changes back into code. Bootstrap and networking/TLS deliberately stay environment-only.
 
 ### The AI-agent access broker
@@ -227,7 +241,7 @@ disable the proxy with `PAM_SSH_ADDR=off`.
 
 ## Roadmap
 
-All twenty-two phases have shipped — full per-phase detail in **[ROADMAP.md](ROADMAP.md)**:
+All twenty-five phases (0–24) have shipped — full per-phase detail in **[ROADMAP.md](ROADMAP.md)**:
 
 | Phase | Theme | Status |
 |---|---|---|
@@ -253,6 +267,9 @@ All twenty-two phases have shipped — full per-phase detail in **[ROADMAP.md](R
 | 19 | Access certification / attestation campaigns | ✅ shipped |
 | 20 | ITSM / ticketing gate on access requests | ✅ shipped |
 | 21 | Richer approval workflows (N-of-M, scheduled windows, reason codes) | ✅ shipped |
+| 22 | Zero Standing Privilege (ephemeral short-lived SSH certificates) | ✅ shipped |
+| 23 | Privileged threat analytics (behavioral risk scoring + auto-response) | ✅ shipped |
+| 24 | Application-secrets API (Conjur-style delivery for non-agent apps) | ✅ shipped |
 
 ## Coverage vs. commercial PAM (CyberArk, Wallix, …)
 
