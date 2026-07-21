@@ -130,6 +130,10 @@ type AccessRequest struct {
 	CreatedAt time.Time  `json:"created_at"`
 	DecidedAt *time.Time `json:"decided_at,omitempty"`
 	ExpiresAt time.Time  `json:"expires_at"`
+	// Ticket is an optional ITSM change/incident reference (Phase 20). When
+	// ticket validation is configured it is validated before the request is
+	// created, and it is recorded in the audit trail.
+	Ticket string `json:"ticket,omitempty"`
 }
 
 // Credential is a privileged account on a Target. SecretEnc is always an

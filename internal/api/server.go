@@ -25,6 +25,7 @@ import (
 	"github.com/morandeirachema/pamv1/internal/rotate"
 	"github.com/morandeirachema/pamv1/internal/session"
 	"github.com/morandeirachema/pamv1/internal/store"
+	"github.com/morandeirachema/pamv1/internal/ticket"
 	"github.com/morandeirachema/pamv1/internal/vault"
 	"github.com/morandeirachema/pamv1/internal/web"
 	"github.com/morandeirachema/pamv1/internal/winrm"
@@ -125,6 +126,11 @@ type Options struct {
 	// ApprovalWindow is how long an approved access request stays valid
 	// (default 60m).
 	ApprovalWindow time.Duration
+	// TicketValidator validates an ITSM change/incident ticket on access
+	// requests (Phase 20); nil disables validation. RequireTicket makes a ticket
+	// mandatory on every access request.
+	TicketValidator *ticket.Validator
+	RequireTicket   bool
 	// CheckoutTTL is the lifetime of a credential checkout lease (default 30m).
 	CheckoutTTL time.Duration
 	// AirGap disables all outbound network calls (alert webhooks) for isolated
@@ -184,6 +190,8 @@ type Server struct {
 	bgTTL              time.Duration
 	unseal             *unsealState
 	alerter            alert.Notifier
+	ticketValidator    *ticket.Validator
+	requireTicket      bool
 	rotators           map[string]rotate.Rotator
 	verifiers          map[string]rotate.Verifier
 	sshConnector       rotate.SSHConnector // one-shot SSH exec for the broker's ssh_exec tool
@@ -340,6 +348,8 @@ func New(st store.Store, v *vault.Vault, resolver *auth.Resolver, authn auth.Aut
 		vault:              v,
 		resolver:           resolver,
 		winrm:              runner,
+		ticketValidator:    opts.TicketValidator,
+		requireTicket:      opts.RequireTicket,
 		recordingDir:       opts.RecordingDir,
 		portalURL:          portalURL,
 		guacdAddr:          opts.GuacdAddr,

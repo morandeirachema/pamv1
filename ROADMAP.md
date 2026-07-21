@@ -4,12 +4,12 @@ Guiding principle: **fully functional at every step**. Each phase ships somethin
 
 Status: ✅ done · 🚧 in progress · ⬜ planned
 
-**Phases 0–19 are shipped** — through the CyberArk/Wallix-style console, the AI-agent
-access broker (MCP + SPIFFE), SOPS-encrypted secrets, and then the four **Tier-1
+**Phases 0–20 are shipped** — through the CyberArk/Wallix-style console, the AI-agent
+access broker (MCP + SPIFFE), SOPS-encrypted secrets, the four **Tier-1
 competitive-coverage gaps** closed (a PostgreSQL session proxy, supervised sessions
 with command control, safes, dependent-account propagation), optional CyberArk Conjur
-secret sourcing, and the first **Tier-2** access-governance gap (certification
-campaigns) — see their sections below. Beyond those,
+secret sourcing, and the **Tier-2** access-governance gaps landing (certification
+campaigns, an ITSM/ticketing gate) — see their sections below. Beyond those,
 a few items genuinely require external infrastructure to build and verify
 honestly, so they are left as documented follow-ons rather than faked:
 
@@ -269,3 +269,12 @@ The first [Tier-2 competitive-coverage gap](README.md#coverage-vs-commercial-pam
 - [x] **Audit vocabulary**: `certification.campaign_created` · `certification.item_certified` · `certification.item_revoked` · `certification.campaign_closed`
 - [x] **Tests**: store contract (CRUD, decide, close, missing-campaign `ErrNotFound`) and an end-to-end API test (a campaign snapshots a grant + a safe member; revoke deletes the grant, certify retains the member, a closed campaign returns 409; auditor can read, a plain user cannot manage)
 - Deferred (documented): scheduled/recurring campaigns, scoped campaigns (per-safe or per-owner), reviewer assignment + reminders, and a 5250 console review screen
+
+## Phase 20 — ITSM / ticketing gate ✅
+
+The second [Tier-2 competitive-coverage gap](README.md#coverage-vs-commercial-pam-cyberark-wallix-): "no privileged access without an approved change ticket" — the ServiceNow/Jira integration compliance teams expect, hung on the existing 4-eyes access-request engine.
+
+- [x] **Ticket validator** (`internal/ticket`, no new dependency): two optional, composable checks — a **regex format** (`PAM_TICKET_PATTERN`, e.g. a ServiceNow/Jira number) and a **webhook** (`PAM_TICKET_VALIDATE_URL`) the ITSM system answers `2xx` for a valid, approved ticket (`POST {"ticket":"<id>"}`). A nil validator accepts any ticket (disabled)
+- [x] **Gate on access requests**: `POST /api/access-requests` accepts a `ticket`; when `PAM_REQUIRE_TICKET` is set it is mandatory (422 otherwise), a configured validator must pass (422 + `access.ticket_rejected` audit on failure), and the ticket is **stamped into the request and the audit trail** (`store.AccessRequest.Ticket`, migration `0015`)
+- [x] **Tests**: a `ticket` unit test (disabled / bad-pattern / format reject) and an end-to-end API test with a fake ITSM webhook (missing → 422, bad format → 422, webhook-rejected → 422, an approved ticket → 201 and recorded)
+- Deferred (documented): a first-class ServiceNow/Jira connector (this ships the generic webhook + regex hook), and gating the connect path directly on a live ticket lookup (today the ticket is validated at request time)

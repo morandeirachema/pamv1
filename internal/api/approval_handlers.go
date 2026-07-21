@@ -15,6 +15,7 @@ import (
 type accessRequestIn struct {
 	TargetID int64  `json:"target_id"`
 	Reason   string `json:"reason"`
+	Ticket   string `json:"ticket"`
 }
 
 // createAccessRequest files a request to connect to a target. The requester is
@@ -28,18 +29,32 @@ func (s *Server) createAccessRequest(w http.ResponseWriter, r *http.Request) {
 		storeError(w, err)
 		return
 	}
+	// ITSM / ticketing gate (Phase 20): require and/or validate a change ticket
+	// before the request is created; the ticket is recorded in the audit trail.
+	if s.requireTicket && in.Ticket == "" {
+		writeError(w, http.StatusUnprocessableEntity, "a change/incident ticket is required for access requests")
+		return
+	}
+	if in.Ticket != "" && s.ticketValidator.Enabled() {
+		if err := s.ticketValidator.Validate(r.Context(), in.Ticket); err != nil {
+			s.audit(r.Context(), "access.ticket_rejected", fmt.Sprintf("target:%d ticket:%q reason:%v", in.TargetID, in.Ticket, err))
+			writeError(w, http.StatusUnprocessableEntity, "ticket rejected: "+err.Error())
+			return
+		}
+	}
 	ar := store.AccessRequest{
 		Requester: actorFrom(r.Context()),
 		TargetID:  in.TargetID,
 		Reason:    in.Reason,
 		Status:    "pending",
 		ExpiresAt: time.Now().Add(s.rt().approvalWindow).UTC(),
+		Ticket:    in.Ticket,
 	}
 	if err := s.store.CreateAccessRequest(r.Context(), &ar); err != nil {
 		storeError(w, err)
 		return
 	}
-	s.audit(r.Context(), "access.request", fmt.Sprintf("request:%d target:%d reason:%q", ar.ID, ar.TargetID, ar.Reason))
+	s.audit(r.Context(), "access.request", fmt.Sprintf("request:%d target:%d reason:%q ticket:%q", ar.ID, ar.TargetID, ar.Reason, ar.Ticket))
 	writeJSON(w, http.StatusCreated, ar)
 }
 

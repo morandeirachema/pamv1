@@ -47,6 +47,7 @@ import (
 	"github.com/morandeirachema/pamv1/internal/store"
 	"github.com/morandeirachema/pamv1/internal/store/memstore"
 	"github.com/morandeirachema/pamv1/internal/store/pgstore"
+	"github.com/morandeirachema/pamv1/internal/ticket"
 	"github.com/morandeirachema/pamv1/internal/vault"
 	"github.com/morandeirachema/pamv1/internal/winrm"
 	"golang.org/x/crypto/ssh"
@@ -515,6 +516,11 @@ func run() error {
 		}, nil
 	}
 
+	ticketValidator, err := ticket.New(cfg.TicketPattern, cfg.TicketValidateURL)
+	if err != nil {
+		return err
+	}
+
 	handler, err := api.New(st, v, resolver, authn, api.Options{
 		Sessions:            sessions,
 		Live:                liveHub,
@@ -537,6 +543,8 @@ func run() error {
 		Alerter:             alerter,
 		RequireApproval:     cfg.RequireApproval,
 		ApprovalWindow:      cfg.ApprovalWindow,
+		TicketValidator:     ticketValidator,
+		RequireTicket:       cfg.RequireTicket,
 		AirGap:              cfg.AirGap,
 		CheckoutTTL:         cfg.CheckoutTTL,
 		AllowedProtocols:    splitAndTrim(cfg.AllowedProtocols),

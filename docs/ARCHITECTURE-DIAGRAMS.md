@@ -64,6 +64,7 @@ flowchart LR
   end
   subgraph n_Other["Other"]
     n_conjur[conjur]
+    n_ticket[ticket]
   end
   n_agentid --> n_auth
   n_agentid --> n_store
@@ -86,6 +87,7 @@ flowchart LR
   n_api --> n_session
   n_api --> n_shamir
   n_api --> n_store
+  n_api --> n_ticket
   n_api --> n_vault
   n_api --> n_web
   n_api --> n_winrm
@@ -120,6 +122,7 @@ flowchart LR
   n_pam_server --> n_session
   n_pam_server --> n_shamir
   n_pam_server --> n_store
+  n_pam_server --> n_ticket
   n_pam_server --> n_vault
   n_pam_server --> n_winrm
   n_pgstore --> n_logging
@@ -151,6 +154,7 @@ erDiagram
     time_Time CreatedAt
     ptr_time_Time DecidedAt
     time_Time ExpiresAt
+    string Ticket
   }
   AgentKey {
     int64 ID

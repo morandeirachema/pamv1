@@ -486,9 +486,9 @@ func (s *PGStore) CreateAccessRequest(ctx context.Context, ar *store.AccessReque
 		ar.Status = "pending"
 	}
 	err := s.pool.QueryRow(ctx,
-		`INSERT INTO access_requests (requester, target_id, reason, status, expires_at)
-		 VALUES ($1, $2, $3, $4, $5) RETURNING id, created_at`,
-		ar.Requester, ar.TargetID, ar.Reason, ar.Status, ar.ExpiresAt,
+		`INSERT INTO access_requests (requester, target_id, reason, status, expires_at, ticket)
+		 VALUES ($1, $2, $3, $4, $5, $6) RETURNING id, created_at`,
+		ar.Requester, ar.TargetID, ar.Reason, ar.Status, ar.ExpiresAt, ar.Ticket,
 	).Scan(&ar.ID, &ar.CreatedAt)
 	if pgCode(err) == pgForeignKeyViolation {
 		return store.ErrNotFound
@@ -499,7 +499,7 @@ func (s *PGStore) CreateAccessRequest(ctx context.Context, ar *store.AccessReque
 // GetAccessRequest returns the access request with the given ID, or ErrNotFound.
 func (s *PGStore) GetAccessRequest(ctx context.Context, id int64) (*store.AccessRequest, error) {
 	return getOne(ctx, s.pool, scanAccessRequest,
-		`SELECT id, requester, target_id, reason, status, approver, created_at, decided_at, expires_at
+		`SELECT id, requester, target_id, reason, status, approver, created_at, decided_at, expires_at, ticket
 		 FROM access_requests WHERE id = $1`, id)
 }
 
@@ -507,7 +507,7 @@ func (s *PGStore) GetAccessRequest(ctx context.Context, id int64) (*store.Access
 // ""), ordered by ID.
 func (s *PGStore) ListAccessRequests(ctx context.Context, status string) ([]store.AccessRequest, error) {
 	rows, err := s.pool.Query(ctx,
-		`SELECT id, requester, target_id, reason, status, approver, created_at, decided_at, expires_at
+		`SELECT id, requester, target_id, reason, status, approver, created_at, decided_at, expires_at, ticket
 		 FROM access_requests WHERE ($1 = '' OR status = $1) ORDER BY id`, status)
 	if err != nil {
 		return nil, err
@@ -1140,7 +1140,7 @@ func scanTarget(row pgx.CollectableRow) (store.Target, error) {
 func scanAccessRequest(row pgx.CollectableRow) (store.AccessRequest, error) {
 	var ar store.AccessRequest
 	err := row.Scan(&ar.ID, &ar.Requester, &ar.TargetID, &ar.Reason, &ar.Status,
-		&ar.Approver, &ar.CreatedAt, &ar.DecidedAt, &ar.ExpiresAt)
+		&ar.Approver, &ar.CreatedAt, &ar.DecidedAt, &ar.ExpiresAt, &ar.Ticket)
 	return ar, err
 }
 

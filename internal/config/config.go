@@ -89,6 +89,12 @@ type Config struct {
 	RequireApproval bool
 	ApprovalWindow  time.Duration
 	AirGap          bool
+	// ITSM / ticketing gate (Phase 20). RequireTicket makes an access request
+	// carry a change/incident ticket; TicketPattern is a regex it must match and
+	// TicketValidateURL is a webhook the ITSM system answers 2xx for a valid ticket.
+	RequireTicket     bool
+	TicketPattern     string
+	TicketValidateURL string
 	// CheckoutTTL is the lifetime of a credential checkout lease.
 	CheckoutTTL time.Duration
 	// AllowedProtocols restricts which target protocols may be created and
@@ -258,6 +264,9 @@ func Load() (*Config, error) {
 		RequireRecording:    boolean("PAM_REQUIRE_RECORDING", false),
 		RequireApproval:     boolean("PAM_REQUIRE_APPROVAL", false),
 		ApprovalWindow:      time.Duration(integer("PAM_APPROVAL_WINDOW_MIN", 60)) * time.Minute,
+		RequireTicket:       boolean("PAM_REQUIRE_TICKET", false),
+		TicketPattern:       os.Getenv("PAM_TICKET_PATTERN"),
+		TicketValidateURL:   os.Getenv("PAM_TICKET_VALIDATE_URL"),
 		AirGap:              boolean("PAM_OT_AIRGAP", false),
 		CheckoutTTL:         time.Duration(integer("PAM_CHECKOUT_TTL_MIN", 30)) * time.Minute,
 		AllowedProtocols:    os.Getenv("PAM_ALLOWED_PROTOCOLS"),

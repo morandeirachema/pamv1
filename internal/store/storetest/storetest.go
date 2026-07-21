@@ -197,9 +197,12 @@ func RunStoreContract(t *testing.T, st store.Store) {
 	}
 
 	// --- access requests (4-eyes) ---
-	ar := &store.AccessRequest{Requester: "alice", TargetID: tgt.ID, Reason: "patch", Status: "pending", ExpiresAt: future}
+	ar := &store.AccessRequest{Requester: "alice", TargetID: tgt.ID, Reason: "patch", Status: "pending", ExpiresAt: future, Ticket: "CHG1001"}
 	if err := st.CreateAccessRequest(ctx, ar); err != nil {
 		t.Fatalf("CreateAccessRequest: %v", err)
+	}
+	if a, _ := st.GetAccessRequest(ctx, ar.ID); a == nil || a.Ticket != "CHG1001" {
+		t.Fatalf("access-request ticket not round-tripped: %+v", a)
 	}
 	if ok, _ := st.HasActiveApproval(ctx, "alice", tgt.ID, now); ok {
 		t.Fatal("pending request must not count as an active approval")
