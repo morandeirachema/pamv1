@@ -89,7 +89,7 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - name: build image
-        run: docker build -t pamv1:ci .
+        run: docker build -f deploy/docker/Dockerfile -t pamv1:ci .
 
   # Phase 14: prove the committed SOPS example is really encrypted and round-trips
   # with the throwaway demo key (guards against an accidental plaintext commit).

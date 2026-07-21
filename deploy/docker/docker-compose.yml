@@ -43,7 +43,9 @@ services:
     restart: "no"
 
   pam:
-    build: .
+    build:
+      context: ../..                       # the repo root (source + root .dockerignore)
+      dockerfile: deploy/docker/Dockerfile
     restart: unless-stopped
     depends_on:
       db:

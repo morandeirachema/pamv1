@@ -34,7 +34,7 @@ export PAM_DATABASE_URL=memory
 
 `pam-server` utility flags: `-genkey` prints a new `PAM_MASTER_KEY`; `-hashkey` reads an emergency key on stdin and prints its SHA-256 for `PAM_BREAK_GLASS_KEY_HASH`.
 
-Full stack (hardened Postgres + server): `cp .env.example .env` (fill the keys), then `docker compose up --build`. Deploy manifests live in `deploy/k8s/` and `deploy/terraform/` (all infra is IaC — do not hand-apply).
+Full stack (hardened Postgres + server): from `deploy/docker/`, `cp .env.example .env` (fill the keys), then `docker compose up --build`. The Docker/compose files live in `deploy/docker/` (`Dockerfile`, `Dockerfile.pkcs11`, `docker-compose.yml`, `.env.example`); other deploy manifests live in `deploy/k8s/`, `deploy/helm/` and `deploy/terraform/` (all infra is IaC — do not hand-apply). The repo root keeps only `go.mod`/`go.sum`, `README*`, `ROADMAP.md`, `LICENSE`, `CLAUDE.md` and position-sensitive dotfiles (`.dockerignore`, `.gitignore`, `.sops.yaml`).
 
 CI (`.github/workflows/ci.yml`) gates on: `gofmt -l`, `go vet`, `go build`, `go test -race`, and a Docker image build.
 

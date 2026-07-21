@@ -164,7 +164,7 @@ addresses, TLS, DB URL, KEK) stay environment-only and require a restart.
 
 The full env-var table lives in
 [ARCHITECTURE-LOW-LEVEL.md §4](ARCHITECTURE-LOW-LEVEL.md#4-configuration-env-pam_)
-and [.env.example](../.env.example).
+and [.env.example](../deploy/docker/.env.example).
 
 ### 3.2 `vault` — envelope encryption
 
@@ -872,7 +872,8 @@ export PAM_MASTER_KEY=$(./pam-server -genkey)
 export PAM_API_KEY=demo-key PAM_DATABASE_URL=memory
 ./pam-server                  # portal+API :8080, SSH proxy :2222
 
-# Full stack
+# Full stack (Docker/compose files live in deploy/docker/)
+cd deploy/docker
 cp .env.example .env          # fill the keys
 docker compose up --build
 ```

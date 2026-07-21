@@ -89,9 +89,10 @@ export PAM_DATABASE_URL=memory
 
 ### 3.3 docker-compose (recommended for pre-production)
 
-Brings up a hardened PostgreSQL ([`scram-sha-256`](https://www.postgresql.org/docs/current/auth-password.html)) plus pam-server.
+Brings up a hardened PostgreSQL ([`scram-sha-256`](https://www.postgresql.org/docs/current/auth-password.html)) plus pam-server. The Docker/compose files live under `deploy/docker/`:
 
 ```bash
+cd deploy/docker
 cp .env.example .env
 # edit .env: set PAM_MASTER_KEY, PAM_API_KEY, POSTGRES_PASSWORD (and optionally the break-glass hash)
 docker compose up --build
@@ -172,7 +173,7 @@ plain-HTTP port off-host. Use `sslmode=verify-full` and, later, LDAPS for AD.
 ## 4. Configuration reference
 
 All configuration is environment variables (12-factor). Full descriptions in
-[.env.example](../.env.example) and the [low-level architecture doc](ARCHITECTURE-LOW-LEVEL.md#4-configuration-env-pam_).
+[.env.example](../deploy/docker/.env.example) and the [low-level architecture doc](ARCHITECTURE-LOW-LEVEL.md#4-configuration-env-pam_).
 
 | Variable | Required | Default | Purpose |
 |---|---|---|---|
@@ -181,7 +182,7 @@ All configuration is environment variables (12-factor). Full descriptions in
 | `PAM_MASTER_KEY` | local only | — | Local KEK key (`-genkey`). **Back it up securely.** Dev/test only. |
 | `PAM_KEK_TRANSIT_ADDR` / `_TOKEN` / `_KEY` | transit only | — | HashiCorp Vault Transit KEK (production). |
 | `PAM_KEK_AWS_KEY_ID` / `_AWS_REGION` | aws-kms only | — | AWS KMS KEK (production). |
-| `PAM_KEK_PKCS11_MODULE` / `_PIN` / `_KEY_LABEL` / `_TOKEN_LABEL` | pkcs11 only | — | On-prem HSM KEK — needs the `pkcs11`-tagged build (`Dockerfile.pkcs11`). |
+| `PAM_KEK_PKCS11_MODULE` / `_PIN` / `_KEY_LABEL` / `_TOKEN_LABEL` | pkcs11 only | — | On-prem HSM KEK — needs the `pkcs11`-tagged build (`deploy/docker/Dockerfile.pkcs11`). |
 | `PAM_API_KEY` | ✅ | — | Bootstrap admin key (X-API-Key / SSH password). |
 | `PAM_DATABASE_URL` | ✅ | — | `postgres://…` (use `sslmode=verify-full`) or `memory` for demo. |
 | `PAM_BREAK_GLASS_KEY_HASH` | | (off) | Hex SHA-256 of the sealed emergency key. |
@@ -877,7 +878,7 @@ For a hardware security module, the AES wrapping key lives *inside* the HSM and
 data keys are wrapped/unwrapped there — the KEK never leaves the token. This
 provider needs cgo and the vendor PKCS#11 module, so it is **not** in the default
 static image; build with the tag (`go build -tags pkcs11`) or use
-`Dockerfile.pkcs11`. Example with [SoftHSM2](https://www.opendnssec.org/softhsm/)
+`deploy/docker/Dockerfile.pkcs11`. Example with [SoftHSM2](https://www.opendnssec.org/softhsm/)
 (swap in your vendor module for a real HSM):
 
 ```bash

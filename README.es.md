@@ -57,7 +57,7 @@ confíes secretos reales.
 - **[Guía de administración](docs/ADMIN-GUIDE.md)** — desplegar, configurar, gestionar objetivos / credenciales / usuarios / roles, break-glass, registro y auditoría.
 - **[Arquitectura — alto nivel](docs/ARCHITECTURE-HIGH-LEVEL.md)** y **[bajo nivel](docs/ARCHITECTURE-LOW-LEVEL.md)** (el mapa más completo — léelo primero), más **[diagramas derivados del código](docs/ARCHITECTURE-DIAGRAMS.md)** (grafo de paquetes, modelo de datos, superficie REST — generados desde el código y verificados por CI).
 - **[Matriz de puertos y flujos](docs/PORTS-AND-FLOWS.md)** · **[runbook de copia y restauración](docs/BACKUP-AND-RESTORE.md)** · **[guía de despliegue OT](docs/OT-DEPLOYMENT.md)** · **[pack de cumplimiento NIS2](docs/NIS2-COMPLIANCE.md)**.
-- **[Proyectos PAM de código abierto relacionados](docs/RELATED-PROJECTS.md)** — cómo se sitúa pamv1 entre JumpServer, Teleport, Warpgate, Vault/OpenBao, step-ca, Guacamole y otros (documento en inglés).
+- **[Proyectos PAM relacionados — código abierto y comerciales](docs/RELATED-PROJECTS.md)** — cómo se sitúa pamv1 entre los proyectos de código abierto (JumpServer, Teleport, Warpgate, Vault/OpenBao, step-ca, Guacamole …) y los fabricantes comerciales (CyberArk, BeyondTrust, Delinea, Wallix …), incluyendo cuáles se construyen sobre núcleos de código abierto (documento en inglés).
 
 ## Arquitectura
 
@@ -375,7 +375,10 @@ export PAM_DATABASE_URL=memory
 
 ### docker-compose (con PostgreSQL endurecida)
 
+Los archivos de Docker/compose están en [`deploy/docker/`](deploy/docker/):
+
 ```bash
+cd deploy/docker
 cp .env.example .env      # rellena PAM_MASTER_KEY, PAM_API_KEY, POSTGRES_PASSWORD
 docker compose up --build
 # → http://localhost:8080

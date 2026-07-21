@@ -54,7 +54,7 @@ but don't trust it with real secrets.
 - **[Administrator Guide](docs/ADMIN-GUIDE.md)** — deploy, configure, manage targets / credentials / users / roles, break-glass, logging & audit.
 - **[Architecture — high level](docs/ARCHITECTURE-HIGH-LEVEL.md)** and **[low level](docs/ARCHITECTURE-LOW-LEVEL.md)** (the fullest map — read it first), plus **[code-derived diagrams](docs/ARCHITECTURE-DIAGRAMS.md)** (package graph, data model, REST surface — generated from source and CI-enforced current).
 - **[Ports & network-flow matrix](docs/PORTS-AND-FLOWS.md)** · **[backup & restore runbook](docs/BACKUP-AND-RESTORE.md)** · **[OT deployment guide](docs/OT-DEPLOYMENT.md)** · **[NIS2 compliance pack](docs/NIS2-COMPLIANCE.md)**.
-- **[Related open-source PAM projects](docs/RELATED-PROJECTS.md)** — how pamv1 sits among JumpServer, Teleport, Warpgate, Vault/OpenBao, step-ca, Guacamole and others · **[external-infra gaps](docs/EXTERNAL-INFRA-GAPS.md)** (what needs a real account/host to verify).
+- **[Related PAM projects — open-source & commercial](docs/RELATED-PROJECTS.md)** — how pamv1 sits among the open-source projects (JumpServer, Teleport, Warpgate, Vault/OpenBao, step-ca, Guacamole …) and the commercial vendors (CyberArk, BeyondTrust, Delinea, Wallix …), including which commercial products are built on open-source cores · **[external-infra gaps](docs/EXTERNAL-INFRA-GAPS.md)** (what needs a real account/host to verify).
 
 ## Architecture
 
@@ -369,7 +369,10 @@ export PAM_DATABASE_URL=memory
 
 ### docker-compose (with hardened PostgreSQL)
 
+The Docker/compose files live under [`deploy/docker/`](deploy/docker/):
+
 ```bash
+cd deploy/docker
 cp .env.example .env      # fill PAM_MASTER_KEY, PAM_API_KEY, POSTGRES_PASSWORD
 docker compose up --build
 # → http://localhost:8080

@@ -36,10 +36,11 @@ Generate before first run (see the [Admin Guide](ADMIN-GUIDE.md#31-generate-the-
 
 ## Docker / docker-compose
 
-Minimums: Docker Engine 24+, Compose v2. The bundled `docker-compose.yml` runs a
-hardened PostgreSQL 17 (scram-sha-256) plus pam-server.
+Minimums: Docker Engine 24+, Compose v2. The bundled `deploy/docker/docker-compose.yml`
+runs a hardened PostgreSQL 17 (scram-sha-256) plus pam-server.
 
 ```bash
+cd deploy/docker
 cp .env.example .env      # fill PAM_MASTER_KEY, PAM_API_KEY, POSTGRES_PASSWORD
 docker compose up --build
 ```

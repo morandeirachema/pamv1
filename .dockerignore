@@ -13,4 +13,8 @@ pam-server
 # Docs and deploy manifests are not needed to build the binary.
 docs/
 deploy/
+# …but the build's own Dockerfiles live under deploy/docker/, so keep them in the
+# context (the `-f`/`dockerfile:` reference is read regardless; this is explicit).
+!deploy/docker/Dockerfile
+!deploy/docker/Dockerfile.pkcs11
 README*.md

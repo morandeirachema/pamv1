@@ -5,7 +5,7 @@
 # runtime, so it uses a glibc base (distroless/base). The HSM's PKCS#11 .so must
 # be present in the container (mount it and set PAM_KEK_PKCS11_MODULE to its path).
 #
-#   docker build -f Dockerfile.pkcs11 -t pamv1:pkcs11 .
+#   docker build -f deploy/docker/Dockerfile.pkcs11 -t pamv1:pkcs11 .   # run from the repo root
 #
 # It stays hardened: non-root, and (unlike the default) NOT read-only-root only
 # because the vendor module may need to load — mount just the module read-only.
