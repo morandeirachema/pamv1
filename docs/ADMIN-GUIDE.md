@@ -803,6 +803,10 @@ disabled/unknown app returns 401; every successful retrieval is audited
 or a single grant (`DELETE /v1/apps/{id}/grants/{gid}`); both cascade. This path
 delivers **plaintext** to machines, so run it only over HTTPS and grant narrowly.
 
+In the **portal**, this is menu **15** (*Work with application secrets*): mint or
+revoke applications (the bearer token is shown once), and option **5** on an app
+opens *Work with secret grants* to grant or revoke individual credentials.
+
 ---
 
 ## 8. Break-glass procedure

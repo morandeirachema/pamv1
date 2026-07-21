@@ -72,6 +72,7 @@
   let msg = ssoMsg, msgErr = ssoErr;
   // Per-screen data.
   let targets = [], creds = [], audit = [], sessions = [], requests = [], checkouts = [], users = [], grants = [];
+  let apps = [], appGrants = [], grantsApp = 0, newApp = null;
   let viewCred = null, grantsTarget = 0, newUser = null, mfaInfo = null, mfaEnroll = null, recoveryCodes = [], discovered = null, reconcileReport = null;
   let profiles = [], configItems = [], configNote = "", effCfg = null, iacText = "", iacFormat = "";
   let liveTimer = null;
@@ -136,6 +137,25 @@
     if (can("approve")) { try { requests = await api("GET", "/api/access-requests"); } catch (e) {} }
     if (targets.length === 0) { try { targets = await api("GET", "/api/targets"); } catch (e) {} }
     go("requests");
+  }
+  // Application-secrets console (Phase 24). The routes exist only when the API is
+  // enabled (PAM_APP_SECRETS_ENABLED); a 404 shows a helpful hint instead of an error.
+  async function openApps() {
+    apps = [];
+    try { apps = await api("GET", "/v1/apps"); }
+    catch (e) { if (e.status === 404) say("APPLICATION-SECRETS API IS DISABLED (set PAM_APP_SECRETS_ENABLED)."); }
+    go("apps");
+  }
+  async function openAppGrants(aid) {
+    grantsApp = aid; appGrants = [];
+    try {
+      [creds, appGrants] = await Promise.all([
+        api("GET", "/api/credentials").catch(() => creds),
+        api("GET", `/v1/apps/${aid}/grants`),
+      ]);
+      if (targets.length === 0) { try { targets = await api("GET", "/api/targets"); } catch (e) {} }
+    } catch (e) { appGrants = []; }
+    go("appgrants");
   }
 
   const targetName = (id) => { const t = targets.find((x) => x.id === id); return t ? t.name : id; };
@@ -238,6 +258,7 @@ ${fkeys("")}
           line(12, can("manage_users"), "Work with permission profiles") +
           line(13, can("manage_users"), "System configuration") +
           line(14, can("manage_users"), "Effective config & IaC export") +
+          line(15, can("manage_users"), "Work with application secrets") +
           "90. Sign off\n";
         term.innerHTML = `${head("PAMMAIN", "PAMV1 Main Menu")}
 Select one of the following:
@@ -254,7 +275,7 @@ ${fkeys("F3=Sign off   F5=Refresh")}`;
             "5": openRequests, "6": openReconcile, "7": () => go("discovery"),
             "8": openUsers, "9": openMfa, "10": openAudit, "11": () => go("breakglass"),
             "12": openProfiles, "13": openConfig, "14": openEffective,
-            "90": signoff,
+            "15": openApps, "90": signoff,
           };
           if (routes[c]) { try { await routes[c](); } catch (e) { say("CPF9999: " + e.message, true); render(); } }
           else { say("CPF0001: SELECTION " + c.toUpperCase() + " NOT VALID.", true); render(); }
@@ -599,6 +620,117 @@ Access token  . . . :  <span class="white">${esc(u.token)}</span>
 ${fkeys("F3=Exit   F12=Cancel")}`;
       },
 
+      apps() {
+        back = "main";
+        term.innerHTML = `${head("PAMWRKAPP", "Work with Application Secrets")}
+Non-agent applications that fetch the secrets they are granted with a bearer key.
+Type options, press Enter.  <span class="cyan">4=Revoke   5=Work with secret grants</span>
+
+<form id="f-list"><table>
+<tr><th>Opt</th><th>ID</th><th>Name</th><th>Owner</th><th>Status</th><th>Created</th></tr>
+${apps.map((a) => `<tr><td>${opt(a.id)}</td><td>${esc(a.id)}</td><td>${pad(a.name, 18)}</td><td>${pad(a.owner || "-", 14)}</td><td>${a.disabled ? '<span class="amber">disabled</span>' : "active"}</td><td class="cyan">${fmtTime(a.created_at)}</td></tr>`).join("")}
+</table>${apps.length ? "" : `<div class="cyan indent">(No applications. Press F6 to mint one — the API must be enabled with PAM_APP_SECRETS_ENABLED.)</div>`}
+<input type="submit" hidden></form>
+<div class="cyan">An app fetches: <span class="white">GET /v1/app-secrets/{credential_id}</span> with <span class="white">Authorization: Bearer</span> its token. Default-deny — grant credentials with option 5. Use HTTPS.</div>
+${fkeys("F3=Exit   F5=Refresh   F6=Add application   F12=Cancel")}`;
+        document.getElementById("f-list").onsubmit = async (ev) => {
+          ev.preventDefault();
+          try {
+            for (const a of apps) {
+              const o = optVal(ev.target, a.id);
+              if (o === "4") { await api("DELETE", `/v1/apps/${a.id}`); say(`APPLICATION ${String(a.name).toUpperCase()} REVOKED.`); }
+              else if (o === "5") { return openAppGrants(a.id); }
+              else if (o) { say("CPF0002: OPTION " + o.toUpperCase() + " NOT VALID.", true); }
+            }
+            await openApps();
+          } catch (e) { say("CPF9999: " + e.message, true); render(); }
+        };
+      },
+
+      appadd() {
+        back = "apps";
+        term.innerHTML = `${head("PAMADDAPP", "Add Application (mint token)")}
+A one-time bearer token is generated and shown once. Only its hash is stored.
+
+<form id="f-add" class="indent">
+<label>Name  . . . . . . . :  <input name="name" size="20" required autofocus></label>
+<label>Owner (team)  . . . :  <input name="owner" size="20"></label>
+<input type="submit" hidden>
+</form>
+${fkeys("F3=Exit   F12=Cancel")}`;
+        document.getElementById("f-add").onsubmit = async (ev) => {
+          ev.preventDefault();
+          const f = Object.fromEntries(new FormData(ev.target));
+          try { newApp = await api("POST", "/v1/apps", f); go("appcreated"); }
+          catch (e) { say("CPF9898: " + e.message, true); render(); }
+        };
+      },
+
+      appcreated() {
+        back = "apps";
+        const a = newApp || {};
+        term.innerHTML = `${head("PAMAPPTOK", "Application Bearer Token")}
+<span class="red blink">COPY THIS TOKEN NOW — IT IS SHOWN ONLY ONCE.</span>
+
+<div class="indent">
+Name  . . . . . . . :  <span class="white">${esc(a.name)}</span>
+Owner . . . . . . . :  <span class="white">${esc(a.owner || "-")}</span>
+
+Bearer token  . . . :  <span class="white">${esc(a.token)}</span>
+</div>
+<div class="cyan indent">The app sends it as: Authorization: Bearer &lt;token&gt;
+to GET /v1/app-secrets/{credential_id}. Grant it credentials with option 5. Use HTTPS.</div>
+${fkeys("F3=Exit   F12=Cancel")}`;
+      },
+
+      appgrants() {
+        back = "apps";
+        const app = apps.find((a) => a.id === grantsApp);
+        const credLabel = (id) => { const c = creds.find((x) => x.id === id); return c ? `${targetName(c.target_id)} / ${c.username}` : "credential " + id; };
+        term.innerHTML = `${head("PAMAPPGRT", "Application Secret Grants")}
+Secrets application <span class="white">${esc(app ? app.name : grantsApp)}</span> (id ${esc(grantsApp)}) may retrieve.
+Default-deny: it can fetch only the credentials granted here.
+Type options, press Enter.  <span class="cyan">4=Revoke grant</span>
+
+<form id="f-list"><table>
+<tr><th>Opt</th><th>Grant</th><th>Credential</th><th>Target / user</th><th>Granted</th></tr>
+${appGrants.map((g) => `<tr><td>${opt(g.id)}</td><td>${esc(g.id)}</td><td>${esc(g.credential_id)}</td><td>${pad(credLabel(g.credential_id), 24)}</td><td class="cyan">${fmtTime(g.created_at)}</td></tr>`).join("")}
+</table>${appGrants.length ? "" : `<div class="cyan indent">(No grants — this app can retrieve nothing. Press F6 to grant a credential.)</div>`}
+<input type="submit" hidden></form>
+${fkeys("F3=Exit   F5=Refresh   F6=Grant credential   F12=Cancel")}`;
+        document.getElementById("f-list").onsubmit = async (ev) => {
+          ev.preventDefault();
+          try {
+            for (const g of appGrants) {
+              const o = optVal(ev.target, g.id);
+              if (o === "4") { await api("DELETE", `/v1/apps/${grantsApp}/grants/${g.id}`); say(`GRANT ${g.id} REVOKED.`); }
+              else if (o) { say("CPF0002: OPTION " + o.toUpperCase() + " NOT VALID.", true); }
+            }
+            await openAppGrants(grantsApp);
+          } catch (e) { say("CPF9999: " + e.message, true); render(); }
+        };
+      },
+
+      appgrantadd() {
+        back = "appgrants";
+        const app = apps.find((a) => a.id === grantsApp);
+        const grantable = creds.filter((c) => c.secret_type !== "ssh_ca");
+        term.innerHTML = `${head("PAMGRTAPP", "Grant Credential to Application")}
+Grant application <span class="white">${esc(app ? app.name : grantsApp)}</span> access to one credential's secret.
+
+<form id="f-add" class="indent">
+<label>Credential  . . . . :  <select name="credential_id" required autofocus>${grantable.map((c) => `<option value="${esc(c.id)}">${esc(c.id)} — ${esc(targetName(c.target_id))} / ${esc(c.username)} (${esc(c.secret_type)})</option>`).join("")}</select></label>
+<input type="submit" hidden>
+</form>${grantable.length ? "" : `<div class="cyan indent">(No credentials with a stored secret to grant. ssh_ca credentials have no secret to deliver.)</div>`}
+${fkeys("F3=Exit   F12=Cancel")}`;
+        document.getElementById("f-add").onsubmit = async (ev) => {
+          ev.preventDefault();
+          const f = Object.fromEntries(new FormData(ev.target));
+          try { await api("POST", `/v1/apps/${grantsApp}/grants`, { credential_id: Number(f.credential_id) }); say("SECRET GRANTED."); await openAppGrants(grantsApp); }
+          catch (e) { say("CPF9898: " + e.message, true); render(); }
+        };
+      },
+
       profiles() {
         back = "main";
         term.innerHTML = `${head("PAMWRKPRF", "Work with Permission Profiles")}
@@ -878,13 +1010,14 @@ ${fkeys("F3=Exit   F12=Cancel")}`;
   function go(s) {
     if (s !== "credview") viewCred = null;
     if (s !== "usercreated") newUser = null;
+    if (s !== "appcreated") newApp = null;
     stopLive();
     screen = s; render(); msg = ""; msgErr = false;
   }
   function signoff() { stopLive(); apiKey = ""; me = null; sessionStorage.removeItem("pam_api_key"); say("SIGN OFF COMPLETE."); go("signon"); }
 
-  const refreshers = { targets: openTargets, creds: openCreds, sessions: openSessions, checkouts: openCheckouts, users: openUsers, mfa: openMfa, audit: openAudit, reconcile: openReconcile, requests: openRequests, grants: () => openGrants(grantsTarget), profiles: openProfiles, config: openConfig, effective: openEffective };
-  const adders = { targets: () => go("targetadd"), creds: () => go("credadd"), grants: () => go("grantadd"), users: () => go("useradd"), requests: () => go("requestadd"), profiles: () => go("profileadd"), config: () => go("configset") };
+  const refreshers = { targets: openTargets, creds: openCreds, sessions: openSessions, checkouts: openCheckouts, users: openUsers, mfa: openMfa, audit: openAudit, reconcile: openReconcile, requests: openRequests, grants: () => openGrants(grantsTarget), profiles: openProfiles, config: openConfig, effective: openEffective, apps: openApps, appgrants: () => openAppGrants(grantsApp) };
+  const adders = { targets: () => go("targetadd"), creds: () => go("credadd"), grants: () => go("grantadd"), users: () => go("useradd"), requests: () => go("requestadd"), profiles: () => go("profileadd"), config: () => go("configset"), apps: () => go("appadd"), appgrants: () => go("appgrantadd") };
 
   window.addEventListener("keydown", async (ev) => {
     const k = ev.key;
