@@ -120,9 +120,10 @@ PAM_OT_AIRGAP=true
 | OT concern | pamv1 control |
 |---|---|
 | Zones & conduits (SR 5.1) | pamv1 at L3.5 is the sole IT→OT conduit; per-target grants scope who reaches which cell |
-| Least privilege (SR 1.1–1.2) | Four RBAC roles + per-target grants + approval gate |
+| Least privilege (SR 1.1–1.2) | Four RBAC roles + custom profiles + per-target grants + **safes** (delegated-access containers) + approval gate |
 | Use control / approval (SR 2.1) | 4-eyes access-request workflow, maintenance-window validity |
-| Monitoring (SR 6.1–6.2) | Append-only audit trail + mandatory session recording (hash-chained) |
+| Restricted use / command control (SR 2.1) | **Command control** (`PAM_COMMAND_DENY_FILE`) blocks dangerous commands on exec/WinRM/SQL before they reach a cell; read-only observer sessions |
+| Monitoring (SR 6.1–6.2) | Append-only audit trail + mandatory session recording (hash-chained) + **live session monitoring** (a supervisor watches a session as it happens) |
 | Emergency access | Break-glass (M-of-N quorum, auto-expiring, alerted) |
 | Restricted data flow (SR 5.2) | Air-gap mode: no outbound calls |
 | Least functionality | Disable the SSH proxy (`PAM_SSH_ADDR=off`) or RDP/WinRM you don't need |

@@ -8,7 +8,7 @@ review activity. If you deploy or administer pamv1, see the
 > user-facing behavior changes (portal, connecting, roles). Add a row to the
 > [change log](#8-change-log) with each update.
 >
-> Last updated: 2026-07-20 · Reflects: **Phases 0–11** (through the 5250 management console). See the [ROADMAP](../ROADMAP.md).
+> Last updated: 2026-07-21 · Reflects: **Phases 0–18** — the 5250 console (11), custom permission profiles (12), the database session proxy you connect to with `psql` (15), and supervised sessions (16: a supervisor may watch live, and a command can be blocked by policy). See the [ROADMAP](../ROADMAP.md).
 
 > ⚠️ Educational / pre-production project — see the [README](../README.md).
 
@@ -162,7 +162,26 @@ credential from the vault, decrypts it just for this connection, logs you in to
 the target, and records the session.
 
 > **Your session is recorded.** Everything on screen is captured (asciicast) and a
-> tamper-evident hash is stored. Connect only for authorized work.
+> tamper-evident hash is stored. Connect only for authorized work. A supervisor
+> may also **watch your session live**, and a dangerous command can be **blocked
+> by policy** — if you see `command blocked by policy`, that command was refused
+> before it reached the target (the rest of your session continues).
+
+### Connecting to a database (PostgreSQL)
+
+If your admin enabled the database proxy, you reach `postgres` targets with
+**`psql`** the same way: the **username selects the credential and target**, and
+your **PAM token is the password**.
+
+```bash
+# user "dbuser" on target "appdb", connecting to database "orders"
+psql "host=PAM_HOST port=5433 user=dbuser@appdb dbname=orders"
+# Password: <your PAM token>
+```
+
+You run SQL as the vaulted database account without ever learning its password;
+**every statement you run is audited**. `5433` is the database-proxy port (ask
+your admin; it's off unless enabled).
 
 ### Automating the password prompt
 
@@ -183,6 +202,11 @@ Each entry shows the timestamp, the **actor** (a real username, or `break-glass`
 the **action**, and details. Break-glass entries are highlighted — they mark
 emergency access and always deserve a look.
 
+You can also **watch an in-progress session live**: list the active sessions
+(**Work with Active Sessions**, or `GET /api/sessions`) and stream one as it
+happens — `GET /api/sessions/{id}/stream` (Server-Sent Events). The watch itself
+is audited (`session.monitor`).
+
 ## 7. Troubleshooting
 
 | What you see | What it means / what to do |
@@ -192,6 +216,8 @@ emergency access and always deserve a look.
 | SSH: `your role may not open sessions` | You're an auditor/approver; only `user`/`admin` can connect. |
 | SSH: `unknown target "x"` | The target name in your SSH username doesn't exist — check spelling with your admin. |
 | SSH: `upstream connection failed` | pamv1 reached your token fine, but couldn't reach the target (down, or bad vaulted credential). Tell your admin. |
+| `command blocked by policy` (SSH exec / WinRM / SQL) | That specific command matched a command-control deny rule and was refused before reaching the target. The session continues; run something else or ask your admin. |
+| `psql`: `pamv1: authentication failed` | Your PAM token (the psql password) is wrong or deleted — check it, or ask for a new one. |
 | Portal panels are empty | Normal — your role can't read those panels. |
 
 ---
@@ -200,6 +226,7 @@ emergency access and always deserve a look.
 
 | Date | Change |
 |---|---|
+| 2026-07-21 | Phases 15–16: connect to **`postgres` targets with `psql`** through the proxy (`:5433`; every SQL statement audited); sessions can be **watched live** by a supervisor and a command can be **blocked by policy** (`command blocked by policy`). Custom permission profiles (Phase 12) can be assigned in place of the four built-in roles |
 | 2026-07-20 | Phase 11: the portal is now a full role-aware management console — menu options for sessions, check-out, access requests, users, MFA, discovery, reconciliation, audit export and break-glass, in the same 5250 style |
 | 2026-07-18 | Phase 3b: OIDC single sign-on option on Sign On |
 | 2026-07-18 | Phase 3b: recovery codes + enforce-MFA (enrollment-only first sign-in) |

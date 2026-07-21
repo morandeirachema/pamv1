@@ -11,7 +11,7 @@
 | Build toolchain | Go **1.26+** (only to build from source) |
 | Container image | `gcr.io/distroless/static-debian12:nonroot` — runs as non-root UID **65532**, read-only root FS, no shell. (HSM/PKCS#11 KEK uses `Dockerfile.pkcs11`: cgo + glibc `distroless/base`, still non-root.) |
 | Database | **PostgreSQL 14+** (compose ships **17**); TLS strongly recommended (`sslmode=verify-full`) |
-| Ports | **8080** portal + REST API (HTTP or native HTTPS) · **2222** SSH session proxy |
+| Ports | **8080** portal + REST API (HTTP or native HTTPS) · **2222** SSH session proxy · **5433** PostgreSQL session proxy (off by default) |
 | Docker | Engine **24+**, Compose **v2** |
 | Kubernetes | **1.25+** (restricted Pod Security Standard); optional Prometheus Operator for the ServiceMonitor |
 | Architectures | linux/amd64, linux/arm64 |
@@ -22,7 +22,8 @@
 |---|---|---|
 | 8080/tcp | Portal + REST API | HTTP, or TLS 1.2+ when `PAM_TLS_CERT`/`PAM_TLS_KEY` are set. Front with an HTTPS ingress otherwise. `/metrics`, `/healthz`, `/readyz` live here. |
 | 2222/tcp | SSH session proxy | Operators `ssh -p 2222 <cred>@<target>@host`. Set `PAM_SSH_ADDR=off` to disable. |
-| 636/5986/3389 | Outbound to targets/IdP | LDAPS to AD, WinRM-HTTPS, RDP-via-guacd — **egress** from pamv1, not listeners. See [PORTS-AND-FLOWS.md](PORTS-AND-FLOWS.md). |
+| 5433/tcp | PostgreSQL session proxy | Operators `psql "host=... port=5433 user=<cred>@<target> dbname=..."`. Enable with `PAM_DB_ADDR` (off by default). |
+| 636/5986/3389/5432 | Outbound to targets/IdP | LDAPS to AD, WinRM-HTTPS, RDP-via-guacd, PostgreSQL to `postgres` targets — **egress** from pamv1, not listeners. See [PORTS-AND-FLOWS.md](PORTS-AND-FLOWS.md). |
 
 ## Prerequisites (secrets)
 

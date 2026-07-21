@@ -28,6 +28,15 @@ Privileged access is where many of those measures are enforced.
 
 Legend: ✅ implemented · 🟡 partially implemented / documented.
 
+Later phases strengthen several of these measures: **supervised sessions**
+(Phase 16 — a supervisor can watch a session live, and **command control** blocks
+dangerous commands before they reach a target) reinforce (b)/(f)/(i);
+**per-statement database audit** through the PostgreSQL session proxy (Phase 15)
+extends the audit trail under (b); **safes** (Phase 17 — delegated-access
+containers) sharpen least-privilege access control under (i); and optional
+**CyberArk Conjur** secret sourcing (Phase 18) adds machine-identity auth and
+central rotation of pamv1's own bootstrap secrets under (h)/(i).
+
 ## 2. Incident reporting (Art. 23)
 
 Art. 23 imposes a staged timeline. pamv1 supplies the **privileged-access evidence**

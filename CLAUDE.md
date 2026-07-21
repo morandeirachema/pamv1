@@ -45,9 +45,10 @@ Single binary `cmd/pam-server` wires everything; packages under `internal/`:
 - **`vault`** — at-rest secret crypto. `Encrypt(ctx, plaintext, aad)` → `"v2:"+base64(...)` envelope: a per-secret AES-256-GCM data key (random nonce per call) wrapped by a pluggable KEK (`local`/Vault-Transit/AWS-KMS/PKCS#11). The `"v2:"` prefix is a **versioned token format** for key rotation — preserve it.
 - **`store`** — `Store` interface + domain types (`Target`, `Credential`, `AuditEvent`, …). Two implementations: `memstore` (tests/demo) and `pgstore` (Postgres via pgx, with embedded versioned migrations in `pgstore/migrations/` applied on startup). Sentinel errors `ErrNotFound`/`ErrConflict` map to HTTP/SSH errors upstream.
 - **`api`** — REST (`http.ServeMux` method patterns) + the `auth` middleware, which accepts the `X-API-Key` **or** the break-glass key and sets an actor for audit.
-- **`proxy`** — the SSH gateway and the heart of the system (Phase 2). Operator runs `ssh -p 2222 <creduser>@<target>@pam-host` with the PAM API key as the SSH password. The proxy authenticates, resolves the target's credential, **decrypts the secret just-in-time**, dials the real target injecting that secret, records the session (asciicast v2, SHA-256 into audit), and brokers I/O. The operator never sees the credential.
+- **`proxy`** — the session gateway and the heart of the system (Phase 2). Operator runs `ssh -p 2222 <creduser>@<target>@pam-host` with the PAM API key as the SSH password. The proxy authenticates, resolves the target's credential, **decrypts the secret just-in-time**, dials the real target injecting that secret, records the session (asciicast v2, SHA-256 into audit), and brokers I/O. The operator never sees the credential. The same package also brokers **PostgreSQL** (`dbproxy.go`, `:5433`, JIT injection + per-statement query audit, Phase 15) and enforces **live monitoring + command control** (`cmdguard.go`, Phase 16).
 - **`web`** — the 5250-style portal, a single `//go:embed`ed `static/index.html` calling the REST API.
 - **`config`** — all runtime config comes from `PAM_*` env vars (table in `docs/ARCHITECTURE-LOW-LEVEL.md`).
+- **Later subsystems** (full map in the low-level doc): `broker`/`policy`/`agentid`/`auditchain`/`mcp` are the opt-in **AI-agent access broker** (Phase 13 — policy over tool + args, JIT server-side execution, keyed-HMAC verifiable audit, MCP transport, SPIFFE SVID); `conjur` optionally **sources bootstrap secrets** from CyberArk Conjur at startup (Phase 18, alongside SOPS); `session` holds the live-session registry + monitoring hub; `rotate`/`discovery`/`maint`, `winrm`/`guacd`, `oidc`/`mfa`/`shamir`, `alert`, `metrics`/`logging` round out the rest.
 
 The two most load-bearing cross-package couplings:
 
@@ -68,6 +69,8 @@ The two most load-bearing cross-package couplings:
 - **admin** — full management + reveal + connect + audit + users.
 - **user** — connect through the proxy, read inventory.
 - **auditor** — read inventory + audit.
-- **approver** — read inventory + audit + `CapApprove` (approval endpoints land with the OT/approval phase).
+- **approver** — read inventory + audit + `CapApprove` (access-request approval, shipped Phase 8).
 
-The API `authz(cap, handler)` middleware and the proxy's post-handshake `CapConnect` check both go through `auth`. Admins mint user tokens via `POST /api/users` (token returned once; only its hash is stored). The AD/LDAP login backend (group→role mapping, MFA) is Phase 3b — see `ROADMAP.md`.
+Beyond the four built-in roles: **custom permission profiles** (Phase 12) are named capability sets assignable to users (`Principal.Caps`); a non-human **`RoleAgent`** (Phase 13) can only call broker tools; and a directory user in several mapped groups carries **all** of them (`Principal.Roles`) and gets the **union** of their capabilities — so check `principal.Can(cap)`, never a role string.
+
+The API `authz(cap, handler)` middleware and the proxy's post-handshake `CapConnect` check both go through `auth`. **Safe membership** (Phase 17) is an additional connect-authorization path — the connect gates call `store.EffectiveTargetGrants` (direct grants ∪ safe members). Admins mint user tokens via `POST /api/users` (token returned once; only its hash is stored). AD/LDAP + Entra + OIDC login (group→role mapping, MFA) shipped in Phase 3b — see `ROADMAP.md`.

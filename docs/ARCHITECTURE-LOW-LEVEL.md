@@ -5,7 +5,7 @@
 > the codebase; the conceptual view lives in
 > [ARCHITECTURE-HIGH-LEVEL.md](ARCHITECTURE-HIGH-LEVEL.md).
 >
-> Last updated: 2026-07-20 · Reflects: **Phases 0–11 shipped** (through the 5250 management console), the security/correctness hardening pass, and code-generated diagrams; **Phase 12** (configuration subsystem + custom-profile RBAC + hot-swap + console/IaC) and **Phase 13** (AI-agent access broker: policy, JIT tools, verifiable audit, approval/resume, MCP, SPIFFE SVID) shipped. See the [ROADMAP](../ROADMAP.md) for authoritative per-phase status. Commit the doc update with the code change.
+> Last updated: 2026-07-21 · Reflects: **Phases 0–18 shipped** — through the 5250 management console (11), the configuration subsystem + custom-profile RBAC + hot-swap (12), the AI-agent access broker (13), SOPS-encrypted secrets (14), the PostgreSQL database session proxy (15), live session monitoring + command control (16), safes + dependent-account propagation (17), and optional CyberArk Conjur secret sourcing (18) — plus the security/correctness hardening passes and code-generated diagrams. See the [ROADMAP](../ROADMAP.md) for authoritative per-phase status. Commit the doc update with the code change.
 
 ## 1. Language, layout, dependencies
 

@@ -8,7 +8,7 @@ procedure, and read the logs and audit trail.
 > admin-facing behavior changes (config, deployment, management, logging). Add a
 > row to the [change log](#12-change-log) with each update.
 >
-> Last updated: 2026-07-20 · Reflects: **Phases 0–14** — configuration console + custom-profile RBAC + hot-swap (12), the AI-agent access broker (13), and SOPS-encrypted Kubernetes secrets (14). See the [ROADMAP](../ROADMAP.md).
+> Last updated: 2026-07-21 · Reflects: **Phases 0–18** — configuration console + custom-profile RBAC + hot-swap (12), the AI-agent access broker (13), SOPS-encrypted secrets (14), the PostgreSQL database session proxy (15), live monitoring + command control (16), safes + dependent-account propagation (17), and optional CyberArk Conjur secret sourcing (18). See the [ROADMAP](../ROADMAP.md).
 
 > ⚠️ **Educational / pre-production.** pamv1 is a learning project and is
 > currently intended for **pre-production** use. It has not been security-audited.

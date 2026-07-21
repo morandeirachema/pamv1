@@ -4,7 +4,7 @@
 > deployment flow changes. This is the reference for firewall rules, security
 > groups, NetworkPolicies and OT segmentation.
 >
-> Last updated: 2026-07-18 · Reflects: **Phase 3a**. Ports marked *planned* have
+> Last updated: 2026-07-21 · Reflects: **Phases 0–18**. Ports marked *planned* have
 > no listener/dialer yet — do not open them until the phase lands.
 
 Legend: ✅ implemented · 🔷 planned (roadmap phase noted). All ports are TCP
@@ -17,14 +17,18 @@ SSH proxy; `db` is PostgreSQL.
 |-----:|-------|---------|---------|---------------|--------|
 | 8080 | HTTP¹ | Portal + REST API | `PAM_LISTEN_ADDR` | Behind TLS in prod; expose to operators only | ✅ |
 | 2222 | SSH | Session proxy (JIT injection) | `PAM_SSH_ADDR` (`off` disables) | Expose to operators/users only | ✅ |
+| 5433 | PostgreSQL | Database session proxy (JIT injection) | `PAM_DB_ADDR` (`off` by default) | Expose to operators only; TLS via `PAM_TLS_CERT/KEY` or ingress | ✅ P15 |
 
 ¹ **Secure protocols only.** Operators must reach the portal/API over **HTTPS** —
-terminate TLS at an ingress/load balancer (native HTTPS is Phase 5); the container
-listens on plain HTTP internally, so never expose 8080 directly off-host. Likewise
-prefer **LDAPS (636)** over LDAP and **TLS** to PostgreSQL. Plain-text variants are
-for isolated local dev only.
+either native (`PAM_TLS_CERT`/`PAM_TLS_KEY`, Phase 5) or terminated at an
+ingress/load balancer; the container otherwise listens on plain HTTP internally,
+so never expose 8080 directly off-host. The database proxy's operator leg is
+likewise TLS when `PAM_TLS_CERT/KEY` are set (else it warns and runs plaintext —
+terminate TLS at the ingress). Prefer **LDAPS (636)** over LDAP and **TLS** to
+PostgreSQL. Plain-text variants are for isolated local dev only.
 
-Kubernetes Service (`deploy/k8s/service.yaml`) maps `80 → 8080` and `2222 → 2222`.
+Kubernetes Service (`deploy/k8s/service.yaml`) maps `80 → 8080` and `2222 → 2222`;
+add `5433 → 5433` when the database proxy is enabled.
 
 ## 2. Ingress — who connects **to** pamv1
 
@@ -32,8 +36,9 @@ Kubernetes Service (`deploy/k8s/service.yaml`) maps `80 → 8080` and `2222 → 
 |---|---------------|---------------|-----:|-------|---------|--------|
 | I1 | Admin (operator zone) | pam-server | 8080/443 | HTTPS | Portal + management API (X-API-Key / token) | ✅ |
 | I2 | User (operator zone) | pam-server | 2222 | SSH | Brokered session to a target (role `user`) | ✅ |
-| I3 | Auditor / Approver | pam-server | 8080/443 | HTTPS | Read audit trail / (approve requests) | ✅ |
-| I4 | Prometheus (mgmt) | pam-server | 8080 | HTTP | Scrape `/metrics` | 🔷 P10 |
+| I3 | Auditor / Approver | pam-server | 8080/443 | HTTPS | Read audit trail, live session stream (SSE), approve requests | ✅ |
+| I4 | Prometheus (mgmt) | pam-server | 8080 | HTTP | Scrape `/metrics` | ✅ P10 |
+| I5 | User (operator zone) | pam-server | 5433 | PostgreSQL | Brokered `psql` session to a `postgres` target | ✅ P15 |
 
 ## 3. Egress — what pamv1 connects **to**
 
@@ -44,11 +49,14 @@ Kubernetes Service (`deploy/k8s/service.yaml`) maps `80 → 8080` and `2222 → 
 | E3 | pam-server | Windows target | 5985 / **5986** | WinRM / WinRM-TLS | JIT command execution (`/api/targets/{id}/winrm`) | ✅ |
 | E4a | pam-server | guacd (control plane) | 4822 | Guacamole | RDP broker handshake (JIT credential) | ✅ |
 | E4b | guacd | Windows target | 3389 | RDP | Rendered RDP session | ✅ |
-| E5 | pam-server | Active Directory (identity zone) | **636** (389 dev only) | **LDAPS** / LDAP | Authn + group→role mapping | ✅ |
+| E5 | pam-server | Active Directory / Entra / OIDC (identity zone) | **636** / 443 | **LDAPS** / HTTPS | Authn + group→role mapping (LDAPS, Entra ROPC, OIDC) | ✅ |
 | E6 | pam-server | Active Directory (identity zone) | 88 | Kerberos | Optional Kerberos auth | 🔷 P3b |
-| E7 | pam-server | AD / target | 636 / 5986 | LDAPS / WinRM | Credential rotation (password change) | 🔷 P7 |
-| E8 | pam-server | SIEM / syslog (mgmt zone) | 514 / 6514 | Syslog / TLS | Forward audit for NIS2 retention | 🔷 P9 |
-| E9 | pam-server | SMTP / webhook (mgmt zone) | 587 / 443 | SMTP / HTTPS | Break-glass & approval alerts | 🔷 P6 |
+| E7 | pam-server | AD / target | 636 / 22 / 5986 | LDAPS / SSH / WinRM | Credential rotation (password change), reconciliation | ✅ P7 |
+| E8 | pam-server | SIEM / syslog (mgmt zone) | 514 / 6514 | Syslog / TLS | Forward audit for NIS2 retention | ✅ P9 |
+| E9 | pam-server | SMTP / webhook (mgmt zone) | 587 / 443 | SMTP / HTTPS | Break-glass & approval alerts | ✅ P6 |
+| E10 | pam-server (DB proxy) | PostgreSQL target (target zone) | 5432 | PostgreSQL/TLS | JIT-injected brokered database session (`:5433` ingress) | ✅ P15 |
+| E11 | pam-server | CyberArk Conjur (identity/secrets zone) | 443 | HTTPS | Source bootstrap secrets at startup (optional) | ✅ P18 |
+| E12 | pam-server | KMS / HSM (Vault-Transit / AWS-KMS / PKCS#11) | 443 / — | HTTPS / PKCS#11 | Envelope-encryption KEK (wrap/unwrap), when not `local` | ✅ P5 |
 
 ## 4. Internal / data-plane
 
@@ -67,26 +75,31 @@ flowchart LR
         R["Auditor / Approver"]
     end
     subgraph PAM["pamv1 control plane"]
-        S["pam-server<br/>:8080 portal/API<br/>:2222 ssh proxy"]
+        S["pam-server<br/>:8080 portal/API<br/>:2222 ssh proxy<br/>:5433 db proxy"]
     end
     subgraph DATA["Data zone"]
-        DB[("PostgreSQL<br/>:5432")]
+        DB[("PostgreSQL store<br/>:5432")]
     end
     subgraph TGT["Target zone (IT / OT)"]
         L["Linux<br/>:22"]
         W["Windows<br/>:5986 winrm"]
+        PG[("PostgreSQL target<br/>:5432")]
     end
-    ID["Active Directory<br/>:389 / :636 / :88"]
+    ID["AD / Entra / OIDC<br/>:636 / :443 / :88"]
+    CJ["CyberArk Conjur<br/>:443 (optional)"]
 
     A -->|"I1 443"| S
     U -->|"I2 2222 ssh"| S
+    U -->|"I5 5433 psql"| S
     R -->|"I3 443"| S
     S -->|"E1 5432"| DB
     S -->|"E2 22"| L
     S -->|"E3 5986 winrm"| W
     S -->|"E4a 4822 guacd"| G["guacd"]
     G -->|"E4b 3389 rdp"| W
-    S -->|"E5 636 ldaps"| ID
+    S -->|"E10 5432"| PG
+    S -->|"E5 636/443"| ID
+    S -->|"E11 443"| CJ
 ```
 
 Solid = implemented · dashed = planned.
@@ -99,13 +112,19 @@ Least-privilege intent (replace `<cidr>` with real ranges):
 # Ingress to pam-server
 allow  <operator-cidr>      -> pam-server:8080   (or :443 at ingress)   # portal/API
 allow  <operator-cidr>      -> pam-server:2222   tcp                    # ssh proxy
+allow  <operator-cidr>      -> pam-server:5433   tcp                    # db proxy (if enabled)
 deny   any                  -> pam-server:*                             # default deny
 
 # Egress from pam-server
-allow  pam-server -> db:5432          tcp        # database
-allow  pam-server -> <target-cidr>:22 tcp        # linux targets (SSH)
-# (phase-gated) 5985/5986, 3389, 389/636/88, 514/6514, 587/443
-deny   pam-server -> any                          # default deny
+allow  pam-server -> db:5432                   tcp   # own store
+allow  pam-server -> <target-cidr>:22          tcp   # linux targets (SSH)
+allow  pam-server -> <target-cidr>:5985,5986   tcp   # windows targets (WinRM)
+allow  pam-server -> <target-cidr>:5432        tcp   # postgres targets (db proxy)
+allow  pam-server -> guacd:4822                tcp   # rdp broker
+allow  pam-server -> <idp-cidr>:636,443,88     tcp   # AD/Entra/OIDC (+ Conjur:443, if enabled)
+allow  pam-server -> <siem>:514,6514           tcp   # syslog (if enabled)
+allow  pam-server -> <smtp/webhook>:587,443    tcp   # alerts (if enabled)
+deny   pam-server -> any                              # default deny
 
 # Database is never reachable from operator or target zones
 deny   <operator-cidr>,<target-cidr> -> db:5432
@@ -130,4 +149,5 @@ else across the 3.5 boundary.
 
 | Date | Change |
 |---|---|
+| 2026-07-21 | Refreshed for Phases 0–18: added the **`:5433` database-proxy listener** (I5) and its egress to postgres targets (E10, `:5432`); marked the now-shipped flows implemented — Prometheus scrape (I4), rotation/reconciliation (E7), syslog (E8), alerts (E9); added **CyberArk Conjur** (E11, `:443`, optional) and the **KMS/HSM KEK** egress (E12); folded Entra/OIDC into the identity egress; noted native HTTPS + the db-proxy operator-leg TLS. Diagram and firewall summary updated |
 | 2026-07-18 | Initial ports & flow matrix (Phase 3a): 8080/2222 listeners, 5432 egress, 22 target SSH; planned WinRM/RDP/LDAP/syslog/alerting flows |
