@@ -477,6 +477,52 @@ curl -H "X-API-Key: $PAM_API_KEY" -X POST http://localhost:8080/api/users \
   -d '{"username":"dana","role":"ops-readonly"}'
 ```
 
+### Safes: delegated-access containers (Phase 17)
+
+A **safe** groups targets and delegates who may reach them — the container model
+CyberArk builds its authorization around. A member of a safe may connect to
+**every target in the safe**, an authorization path alongside per-target grants;
+a `can_manage` member is a **delegated safe administrator** who can add/remove
+members of that safe without being a global target manager.
+
+```bash
+# create a safe, add a role member, and place a target in it
+curl -H "X-API-Key: $PAM_API_KEY" -X POST http://localhost:8080/api/safes \
+  -d '{"name":"prod-linux","description":"production Linux estate"}'      # → {"id":1,...}
+curl -H "X-API-Key: $PAM_API_KEY" -X POST http://localhost:8080/api/safes/1/members \
+  -d '{"subject_type":"role","subject":"user","can_manage":false}'
+curl -H "X-API-Key: $PAM_API_KEY" -X PUT http://localhost:8080/api/targets/7/safe \
+  -d '{"safe_id":1}'      # target 7 is now reachable only by safe members
+```
+
+Placing a target in a safe **restricts** it to the safe's members (plus any
+direct grants) — an empty safe leaves its targets open. Clear a target's safe
+with `{"safe_id":null}`. Delegate ownership by adding a `can_manage` member; they
+can then manage that safe's membership (`POST`/`DELETE /api/safes/{id}/members`)
+even as a non-admin.
+
+### Dependent accounts: safe service-account rotation (Phase 17)
+
+When a service account's password rotates, the **Windows Services, Scheduled
+Tasks and IIS App Pools** that log on with it must be updated too — otherwise
+rotation breaks production. Declare those consumers and pamv1 updates each over
+WinRM after the rotation:
+
+```bash
+curl -H "X-API-Key: $PAM_API_KEY" -X POST http://localhost:8080/api/credentials/3/dependencies \
+  -d '{"kind":"windows_service","host":"app-01","name":"MyAppSvc"}'
+# kinds: windows_service | scheduled_task | iis_apppool ; port defaults to 5985 (WinRM)
+```
+
+On the next rotation of credential 3, pamv1 sets the new password on the target,
+re-vaults it, then runs the appropriate WinRM command on each consumer's host
+(`sc.exe config` / `schtasks /Change /RP` / `appcmd …processModel.password`) with
+the new secret. A propagation failure is audited (`credential.dependency_failed`)
+but does **not** fail the rotation — the new secret is already vaulted, so the
+fix is to update the stale consumer, not to roll back. *(The propagation
+currently connects as the rotated account; a per-consumer management credential
+is a documented follow-on.)*
+
 ### Active Directory login (optional)
 
 Instead of (or alongside) local tokens, users can sign in with their **AD
@@ -912,6 +958,7 @@ shell access where you need that guarantee.
 
 | Date | Change |
 |---|---|
+| 2026-07-21 | Phase 17: **safes + dependent-account propagation** — group targets into delegated-access safes (`/api/safes`, a member reaches every target in the safe; `can_manage` delegated administration) and declare a credential's consumers (`/api/credentials/{id}/dependencies`) so rotation updates the Windows Services / Scheduled Tasks / IIS App Pools that use it. See §7 → *Safes* and *Dependent accounts* |
 | 2026-07-21 | Phase 16: **live session monitoring + command control** — watch an SSH/PostgreSQL session live over `GET /api/sessions/{id}/stream` (SSE, `CapReadAudit`); block dangerous commands on exec/WinRM/SQL via a regex denylist (`PAM_COMMAND_DENY_FILE`, audited `command.blocked`). See §9.4 |
 | 2026-07-20 | Phase 15: **PostgreSQL database session proxy** (`PAM_DB_ADDR`) — brokers `postgres` targets with JIT credential injection and **per-statement query audit** (`db.query`); operators use `psql user=<dbcred>@<target>` with their PAM key. Same authorization gates as the SSH proxy; upstream auth via SCRAM-SHA-256/MD5/cleartext. See §5 → *Database targets (PostgreSQL)* |
 | 2026-07-20 | Post-review hardening: directory logins grant the **union** of every mapped group's role (not the single highest); a parked agent approval is **re-validated at decision time** (revoked key / expired SVID refused); broker-audit append serializes under a Postgres advisory lock so a rolling-deploy/HA overlap can't fork the hash chain; numeric policy arguments match in plain decimal |

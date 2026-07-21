@@ -241,5 +241,7 @@ The last two [Tier-1 competitive-coverage gaps](README.md#coverage-vs-commercial
 
 **Dependent-account propagation (safe service-account rotation):**
 
-- [ ] *(next increment)* declare a rotated credential's consumers (Windows Services / Scheduled Tasks / IIS App Pools) and update each over WinRM after the target password change, so auto-rotation doesn't break production
-- Deferred (documented): a Safe-scoped policy/workflow layer (per-safe approval, dual control) and an in-portal 5250 safe-management screen
+- [x] **Declared consumers** (migration `0013`: `credential_dependencies`): a credential lists the **Windows Services / Scheduled Tasks / IIS App Pools** that log on with it (`POST/GET /api/credentials/{id}/dependencies`, `DELETE …/{did}`)
+- [x] **Propagation on rotation**: after `rotateCredential` sets and re-vaults the new secret, `propagateDependencies` updates each consumer over WinRM (`sc.exe config` / `schtasks /Change /RP` / `appcmd set apppool …password`) with the new secret — so auto-rotating a service account no longer breaks the services that use it. A propagation failure never fails the (already-persisted) rotation; each consumer is audited `credential.dependency_updated`/`credential.dependency_failed` (the secret is injected into the WinRM command but never audited or recorded)
+- [x] **Tests**: store contract (CRUD, default WinRM port, missing-credential `ErrNotFound`, cascade on credential delete) and an end-to-end rotation test (the fake WinRM receives the `sc.exe config` for the service with the new secret; the audit carries the update without the secret)
+- Deferred (documented): a per-consumer management/reconcile credential (propagation currently connects as the rotated account), a Safe-scoped policy/workflow layer (per-safe approval, dual control), and an in-portal 5250 safe-management screen

@@ -195,6 +195,14 @@ erDiagram
     time_Time CreatedAt
     ptr_time_Time RotatedAt
   }
+  CredentialDependency {
+    int64 ID
+    int64 CredentialID
+    string Kind
+    string Host
+    int Port
+    string Name
+  }
   MFAEnrollment {
     string Username
     bool Confirmed
@@ -258,6 +266,7 @@ erDiagram
     time_Time CreatedAt
   }
   Credential ||--o{ Checkout : "has"
+  Credential ||--o{ CredentialDependency : "has"
   Safe ||--o{ SafeMember : "has"
   Safe ||--o{ Target : "has"
   Target ||--o{ AccessRequest : "has"
@@ -268,7 +277,7 @@ erDiagram
 
 ## 3. REST API surface
 
-The 75 routes registered on the API mux, with the capability or guard each enforces (see `internal/auth` for the role → capability matrix).
+The 78 routes registered on the API mux, with the capability or guard each enforces (see `internal/auth` for the role → capability matrix).
 
 | Method | Path | Guard |
 |---|---|---|
@@ -292,6 +301,9 @@ The 75 routes registered on the API mux, with the capability or guard each enfor
 | DELETE | `/api/credentials/{id}` | CapManageCredentials |
 | POST | `/api/credentials/{id}/checkin` | CapRevealSecret |
 | POST | `/api/credentials/{id}/checkout` | CapRevealSecret |
+| GET | `/api/credentials/{id}/dependencies` | CapReadInventory |
+| POST | `/api/credentials/{id}/dependencies` | CapManageCredentials |
+| DELETE | `/api/credentials/{id}/dependencies/{did}` | CapManageCredentials |
 | POST | `/api/credentials/{id}/reconcile` | CapManageCredentials |
 | POST | `/api/credentials/{id}/reveal` | CapRevealSecret |
 | POST | `/api/credentials/{id}/rotate` | CapManageCredentials |

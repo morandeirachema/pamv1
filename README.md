@@ -25,14 +25,16 @@ unapologetically **AS/400 / IBM 5250 green-screen console**, because touching a 
 
 Built phase by phase with a single rule: **every phase is functional end to end** — it
 runs, passes tests, and deploys as Infrastructure-as-Code. The **[roadmap](ROADMAP.md)** runs
-0–16 and **all seventeen phases have shipped** — from the JIT SSH proxy and RBAC, through
+0–17 and **all eighteen phases have shipped** — from the JIT SSH proxy and RBAC, through
 AD/Entra/OIDC login, Windows targets, break-glass quorum, OT/industrial adaptation, NIS2
 tooling, scale/HA and the full 5250 console, to a hot-swappable configuration subsystem with
 custom-profile RBAC, an **AI-agent access broker** (policy engine, JIT tool execution,
 verifiable audit, MCP transport and SPIFFE identity), **SOPS-encrypted Kubernetes secrets**,
-a **PostgreSQL database session proxy** (JIT injection + per-statement query audit), and
-**supervised sessions** (live monitoring + command control). It remains an **alpha,
-educational** codebase — read it, run it, learn from it, but don't trust it with real secrets.
+a **PostgreSQL database session proxy** (JIT injection + per-statement query audit),
+**supervised sessions** (live monitoring + command control), and **safes + dependent-account
+propagation** — which closes all four Tier-1 gaps against the commercial leaders. It remains
+an **alpha, educational** codebase — read it, run it, learn from it, but don't trust it with
+real secrets.
 
 🔎 **Live overview:** [interactive project page](https://claude.ai/code/artifact/a1b34e5b-cd84-4fc7-8389-ebb1897495f7) — what works, architecture and roadmap at a glance &nbsp;·&nbsp; 📖 **[Léelo en español →](README.es.md)**
 
@@ -128,6 +130,7 @@ Phases 0–14, grouped by area. Every capability is exercised by tests and deplo
 - **Role-based access control + custom profiles** — four built-in roles (`admin`, `user`, `auditor`, `approver`) plus **custom permission profiles**: name any capability set (`read_inventory`, `manage_credentials`, `connect`, `reveal_secret`, `read_audit`, `approve`, …) and assign it to a user like a role. A single role/profile→capability matrix is enforced by *both* the REST API and the SSH proxy; admins mint per-user access tokens (stored only as SHA-256); every denial is audited under the real username.
 - **AD, Entra ID & OIDC single sign-on** — sign in with an AD username + password over **LDAPS**, with **Microsoft Entra ID**, or via **OIDC Authorization Code + PKCE SSO** (the IdP does the login and its MFA; pamv1 validates the ID token's RS256 signature against the IdP's [JWKS](https://datatracker.ietf.org/doc/html/rfc7517)). Directory groups / app roles map to the roles, and login issues a short-lived session token that works in the portal and the proxy. Sources compose; local tokens and break-glass remain the emergency path.
 - **TOTP multi-factor auth** — self-service enrollment ([RFC 6238](https://datatracker.ietf.org/doc/html/rfc6238), any authenticator app); the secret is stored vault-encrypted and login requires the 6-digit code once enrolled. Single-use **recovery codes** and an optional **require-MFA-for-all** policy (with enrollment-only first sign-in).
+- **Safes (delegated-access containers)** — group targets into a named **safe** with its own members; a member may connect to **every target in the safe** (an authorization path alongside per-target grants), and a `can_manage` member is a **delegated safe administrator**. Placing a target in a safe restricts it to the safe's members. `POST /api/safes`, `/api/safes/{id}/members`, `PUT /api/targets/{id}/safe`.
 
 ### Sessions & the JIT proxy
 
@@ -141,7 +144,7 @@ Phases 0–14, grouped by area. Every capability is exercised by tests and deplo
 
 - **Hardened vault (envelope encryption)** — each secret is sealed with a per-secret [AES-256-GCM](https://pkg.go.dev/crypto/cipher) data key that is wrapped by a **pluggable Key Encryption Key (KEK)**: a `local` key for dev/test, or in production **[HashiCorp Vault Transit](https://developer.hashicorp.com/vault/docs/secrets/transit)**, **[AWS KMS](https://aws.amazon.com/kms/)**, or an on-prem **HSM via [PKCS#11](https://en.wikipedia.org/wiki/PKCS_11)** (`pkcs11`-tagged build) — the root key never leaves the KMS/HSM. Additional Authenticated Data binds each ciphertext to its owning target (a copied token fails to decrypt); versioned `v2:` tokens enable online KEK rotation.
 - **Target inventory & credentials API** — Linux/Windows machines with ssh/winrm/rdp endpoints; credentials are vaulted, listed (never returning secret material), revealed on demand (audited), and deleted. The JSON model *cannot* serialize the ciphertext (`json:"-"`).
-- **Credential lifecycle (rotation · reconciliation · checkout · discovery)** — `POST /api/credentials/{id}/rotate` generates a strong secret, sets it **on the target** (SSH `chpasswd` / WinRM `net user` / fresh `ssh_key`), and re-vaults it — the new password is never shown. `/reconcile` verifies the vaulted secret still authenticates and flags **out-of-sync drift** (`?remediate=true` heals it). **Checkout/check-in** grants an exclusive time-boxed lease and rotates the secret on return. **Discovery** (`/api/discovery/scan`) probes hosts for SSH/WinRM/RDP ports and can auto-onboard targets. A background worker rotates aged secrets and reconciles on a schedule; secrets can be rotated the moment a proxied session ends.
+- **Credential lifecycle (rotation · reconciliation · checkout · discovery)** — `POST /api/credentials/{id}/rotate` generates a strong secret, sets it **on the target** (SSH `chpasswd` / WinRM `net user` / fresh `ssh_key`), and re-vaults it — the new password is never shown. `/reconcile` verifies the vaulted secret still authenticates and flags **out-of-sync drift** (`?remediate=true` heals it). **Checkout/check-in** grants an exclusive time-boxed lease and rotates the secret on return. **Discovery** (`/api/discovery/scan`) probes hosts for SSH/WinRM/RDP ports and can auto-onboard targets. A background worker rotates aged secrets and reconciles on a schedule; secrets can be rotated the moment a proxied session ends. **Dependent accounts** — declare a credential's consumers (Windows Services / Scheduled Tasks / IIS App Pools) and rotation updates each over WinRM, so rotating a service account doesn't break production.
 
 ### Audit, break-glass & alerting
 
@@ -221,7 +224,7 @@ disable the proxy with `PAM_SSH_ADDR=off`.
 
 ## Roadmap
 
-All seventeen phases have shipped — full per-phase detail in **[ROADMAP.md](ROADMAP.md)**:
+All eighteen phases have shipped — full per-phase detail in **[ROADMAP.md](ROADMAP.md)**:
 
 | Phase | Theme | Status |
 |---|---|---|
@@ -242,6 +245,7 @@ All seventeen phases have shipped — full per-phase detail in **[ROADMAP.md](RO
 | 14 | SOPS-encrypted Kubernetes secrets (age; Flux/Argo/helm-secrets) | ✅ shipped |
 | 15 | PostgreSQL database session proxy (JIT injection + query audit) | ✅ shipped |
 | 16 | Live session monitoring (SSE) + command control | ✅ shipped |
+| 17 | Safes (delegated-access containers) + dependent-account propagation | ✅ shipped |
 
 ## Coverage vs. commercial PAM (CyberArk, Wallix, …)
 
@@ -264,10 +268,10 @@ existing chokepoint architecture, and they map to candidate future phases.
 
 | Gap | What the leaders do | pamv1 today | Fit |
 |---|---|---|---|
-| **Safe / vault containers** with delegated ownership | CyberArk's whole authorization model is [Safes](https://docs.cyberark.com/pam-self-hosted/latest/en/content/pasref/safes-and-safe-members.htm) — credential containers with their own members, workflows & delegated admin; Wallix uses target domains | per-target grants + global RBAC — no container to group credentials, delegate team ownership, or scope policy/approval to a collection | extends the grant model; the biggest structural delta and the key to multi-team / multi-tenant use |
+| ~~**Safe / vault containers** with delegated ownership~~ **✅ shipped (Phase 17)** | CyberArk's whole authorization model is [Safes](https://docs.cyberark.com/pam-self-hosted/latest/en/content/pasref/safes-and-safe-members.htm) — credential containers with their own members, workflows & delegated admin; Wallix uses target domains | **safes** group targets with delegated `can_manage` members; a member reaches every target in the safe (`EffectiveTargetGrants`) | done — per-safe approval workflows are a follow-on |
 | ~~**Database session proxy** with query-level audit~~ **✅ shipped (Phase 15, PostgreSQL)** | [Teleport](https://goteleport.com/docs/enroll-resources/database-access/), [StrongDM](https://www.strongdm.com/), CyberArk & Wallix broker native Postgres/MySQL/MSSQL/Oracle with per-query audit + JIT injection | **PostgreSQL brokered** (`PAM_DB_ADDR`): JIT injection, SCRAM/MD5/cleartext upstream auth, `db.query` audit per statement. MySQL/MSSQL/Oracle still to come | done for Postgres — the same listener pattern generalizes to the other wire protocols |
 | ~~**Live monitoring + command control**~~ **✅ shipped (Phase 16)** | [CyberArk PSM](https://www.cyberark.com/products/privileged-session-manager/) & Wallix let a supervisor watch a live session, block a dangerous command mid-stream (`rm -rf /`, `DROP TABLE`) and terminate it interactively | **live SSE stream** (`GET /api/sessions/{id}/stream`) + **command control** (regex denylist blocks exec/WinRM/SQL, `command.blocked`); interactive kill already existed | done — interactive-shell filtering + in-portal viewer are follow-ons |
-| **Dependent-account propagation** on rotation | CyberArk CPM updates every [consumer](https://docs.cyberark.com/pam-self-hosted/latest/en/content/pasimp/managing-service-accounts-service.htm) of a rotated service account (Windows Services, Scheduled Tasks, IIS App Pools, COM+) | rotates the credential on the target; no notion of consumers | makes **auto-rotating service accounts safe** in a real Windows estate — today a genuine adoption blocker |
+| ~~**Dependent-account propagation** on rotation~~ **✅ shipped (Phase 17)** | CyberArk CPM updates every [consumer](https://docs.cyberark.com/pam-self-hosted/latest/en/content/pasimp/managing-service-accounts-service.htm) of a rotated service account (Windows Services, Scheduled Tasks, IIS App Pools, COM+) | rotation now updates declared **Windows Services / Scheduled Tasks / IIS App Pools** over WinRM with the new secret | done — COM+ and a per-consumer management credential are follow-ons |
 
 ### Tier 2 — access-governance depth
 
@@ -305,7 +309,9 @@ vault + proxy chokepoint, and is **out of scope** by design.
 
 1. ~~**Phase 15 — Database session proxy**~~ ✅ **shipped** (PostgreSQL; MySQL/MSSQL/Oracle are follow-on connectors on the same pattern).
 2. ~~**Phase 16 — Live monitoring + command control**~~ ✅ **shipped** (SSE live stream + regex command control on exec/WinRM/SQL).
-3. **Phase 17 — Safes / containers + dependent-account propagation**: the authorization upgrade for multi-team use and *safe* service-account rotation.
+3. ~~**Phase 17 — Safes / containers + dependent-account propagation**~~ ✅ **shipped** — the authorization upgrade for multi-team use and *safe* service-account rotation.
+
+**All four Tier-1 gaps are now closed.** The remaining tiers (governance depth, ZSP, connector breadth, cloud, analytics, web proxying) are the next frontier.
 
 ## Quickstart
 

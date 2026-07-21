@@ -351,6 +351,40 @@ func (s *PGStore) AssignTargetSafe(ctx context.Context, targetID int64, safeID *
 	return execExpectingRow(ctx, s.pool, `UPDATE targets SET safe_id = $2 WHERE id = $1`, targetID, safeID)
 }
 
+// CreateCredentialDependency declares a consumer of a credential.
+func (s *PGStore) CreateCredentialDependency(ctx context.Context, d *store.CredentialDependency) error {
+	if d.Port == 0 {
+		d.Port = 5985
+	}
+	err := s.pool.QueryRow(ctx,
+		`INSERT INTO credential_dependencies (credential_id, kind, host, port, name) VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+		d.CredentialID, d.Kind, d.Host, d.Port, d.Name,
+	).Scan(&d.ID)
+	if pgCode(err) == pgForeignKeyViolation {
+		return store.ErrNotFound
+	}
+	return err
+}
+
+// ListCredentialDependencies returns a credential's declared consumers.
+func (s *PGStore) ListCredentialDependencies(ctx context.Context, credentialID int64) ([]store.CredentialDependency, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT id, credential_id, kind, host, port, name FROM credential_dependencies WHERE credential_id = $1 ORDER BY id`, credentialID)
+	if err != nil {
+		return nil, err
+	}
+	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (store.CredentialDependency, error) {
+		var d store.CredentialDependency
+		err := row.Scan(&d.ID, &d.CredentialID, &d.Kind, &d.Host, &d.Port, &d.Name)
+		return d, err
+	})
+}
+
+// DeleteCredentialDependency removes a dependency by ID, or ErrNotFound.
+func (s *PGStore) DeleteCredentialDependency(ctx context.Context, id int64) error {
+	return execExpectingRow(ctx, s.pool, `DELETE FROM credential_dependencies WHERE id = $1`, id)
+}
+
 // scanSafe scans one safe row.
 func scanSafe(row pgx.CollectableRow) (store.Safe, error) {
 	var sf store.Safe

@@ -55,6 +55,19 @@ type Target struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
+// CredentialDependency declares a consumer of a credential — a Windows Service,
+// Scheduled Task or IIS App Pool that logs on with the account — so that when
+// the credential is rotated, pamv1 also updates the consumer over WinRM and the
+// rotation does not break production (Phase 17).
+type CredentialDependency struct {
+	ID           int64  `json:"id"`
+	CredentialID int64  `json:"credential_id"`
+	Kind         string `json:"kind"` // windows_service | scheduled_task | iis_apppool
+	Host         string `json:"host"` // WinRM-reachable host running the consumer
+	Port         int    `json:"port"` // WinRM port (0 → 5985)
+	Name         string `json:"name"` // service / task / app-pool name
+}
+
 // Safe is a named container that groups targets and delegates who may access
 // them (Phase 17). Membership is an additional grant path alongside per-target
 // grants: a member of a target's safe may connect to it.
@@ -294,6 +307,14 @@ type Store interface {
 	DeleteSafeMember(ctx context.Context, id int64) error
 	// AssignTargetSafe sets (or clears, when safeID is nil) a target's safe.
 	AssignTargetSafe(ctx context.Context, targetID int64, safeID *int64) error
+
+	// CreateCredentialDependency declares a consumer of a credential (ErrNotFound
+	// if the credential does not exist).
+	CreateCredentialDependency(ctx context.Context, d *CredentialDependency) error
+	// ListCredentialDependencies returns a credential's declared consumers.
+	ListCredentialDependencies(ctx context.Context, credentialID int64) ([]CredentialDependency, error)
+	// DeleteCredentialDependency removes a dependency by ID, or ErrNotFound.
+	DeleteCredentialDependency(ctx context.Context, id int64) error
 
 	// Access requests (4-eyes approval workflow).
 	CreateAccessRequest(ctx context.Context, ar *AccessRequest) error

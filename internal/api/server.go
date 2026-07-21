@@ -517,6 +517,12 @@ func (s *Server) routes() {
 	s.mux.Handle("POST /api/discovery/scan", s.authz(auth.CapManageTargets, s.discoveryScan))
 	s.mux.Handle("DELETE /api/credentials/{id}", s.authz(auth.CapManageCredentials, s.deleteCredential))
 
+	// Dependent accounts (Phase 17): a credential's consumers, updated over WinRM
+	// on rotation so it does not break production.
+	s.mux.Handle("POST /api/credentials/{id}/dependencies", s.authz(auth.CapManageCredentials, s.createDependency))
+	s.mux.Handle("GET /api/credentials/{id}/dependencies", s.authz(auth.CapReadInventory, s.listDependencies))
+	s.mux.Handle("DELETE /api/credentials/{id}/dependencies/{did}", s.authz(auth.CapManageCredentials, s.deleteDependency))
+
 	// Access-request approval workflow (4-eyes). A connect-capable user files a
 	// request; an approver (a *different* principal) approves or denies it.
 	s.mux.Handle("POST /api/access-requests", s.authz(auth.CapConnect, s.createAccessRequest))

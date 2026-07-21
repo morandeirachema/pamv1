@@ -26,15 +26,17 @@ de fósforo verde** sin concesiones, porque tocar un PAM debe *sentirse* serio.
 
 Construido fase a fase con una regla: **cada fase es funcional de principio a fin** — arranca,
 pasa los tests y se despliega como Infraestructura-como-Código. El **[roadmap](ROADMAP.md)**
-abarca de la 0 a la 16 y **se han entregado las diecisiete fases** — desde el proxy SSH JIT y el
+abarca de la 0 a la 17 y **se han entregado las dieciocho fases** — desde el proxy SSH JIT y el
 RBAC, pasando por el login AD/Entra/OIDC, los objetivos Windows, el quórum de break-glass, la
 adaptación OT/industrial, las herramientas NIS2, escala/HA y la consola 5250 completa, hasta un
 subsistema de configuración con hot-swap y RBAC de perfiles personalizados, un **bróker de
 acceso para agentes de IA** (motor de políticas, ejecución JIT de herramientas, auditoría
 verificable, transporte MCP e identidad SPIFFE), **secretos de Kubernetes cifrados con SOPS**,
-un **proxy de sesión de base de datos PostgreSQL** (inyección JIT + auditoría por sentencia SQL)
-y **sesiones supervisadas** (monitorización en vivo + control de comandos). Sigue siendo un
-proyecto **alpha y educativo** — léelo, ejecútalo, aprende de él, pero no le confíes secretos reales.
+un **proxy de sesión de base de datos PostgreSQL** (inyección JIT + auditoría por sentencia SQL),
+**sesiones supervisadas** (monitorización en vivo + control de comandos) y **safes + propagación
+a cuentas dependientes** — lo que cierra las cuatro brechas de Nivel 1 frente a los líderes
+comerciales. Sigue siendo un proyecto **alpha y educativo** — léelo, ejecútalo, aprende de él,
+pero no le confíes secretos reales.
 
 🔎 **Resumen interactivo:** [página del proyecto](https://claude.ai/code/artifact/b9f19443-5ad1-42d2-955f-e43ca17ac542) — qué funciona, arquitectura y hoja de ruta de un vistazo &nbsp;·&nbsp; 📖 **[Read it in English →](README.md)**
 
@@ -131,6 +133,7 @@ Fases 0–14, agrupadas por área. Cada capacidad está cubierta por tests y se 
 - **Control de acceso por roles + perfiles personalizados** — cuatro roles integrados (`admin`, `user`, `auditor`, `approver`) más **perfiles de permisos personalizados**: nombra cualquier conjunto de capacidades (`read_inventory`, `manage_credentials`, `connect`, `reveal_secret`, `read_audit`, `approve`, …) y asígnalo a un usuario como un rol. Una única matriz rol/perfil→capacidad aplicada por la API **y** el proxy; los admins emiten tokens por usuario (guardados como SHA-256); cada denegación se audita con el usuario real.
 - **SSO con AD, Entra ID y OIDC** — autentícate con un usuario+contraseña de AD por **LDAPS**, con **Microsoft Entra ID** o por **SSO OIDC Authorization Code + PKCE** (el IdP hace el login y su MFA; pamv1 valida la firma RS256 del ID token contra el [JWKS](https://datatracker.ietf.org/doc/html/rfc7517) del IdP). Los grupos / app roles se mapean a los roles, y el login emite un token de sesión de corta duración que sirve en el portal y el proxy. Las fuentes se combinan; los tokens locales y el break-glass quedan como vía de emergencia.
 - **Doble factor TOTP** — alta autoservicio ([RFC 6238](https://datatracker.ietf.org/doc/html/rfc6238), cualquier app de autenticación); el secreto se guarda cifrado en el vault y el login exige el código de 6 dígitos una vez dado de alta. Códigos de recuperación de un solo uso y una política opcional de MFA obligatoria (con primer inicio solo para alta).
+- **Safes (contenedores de acceso delegado)** — agrupa objetivos en un **safe** con sus propios miembros; un miembro puede conectar a **todos los objetivos del safe** (una vía de autorización junto a las concesiones por objetivo), y un miembro `can_manage` es un **administrador delegado del safe**. Poner un objetivo en un safe lo restringe a sus miembros. `POST /api/safes`, `/api/safes/{id}/members`, `PUT /api/targets/{id}/safe`.
 
 ### Sesiones y el proxy JIT
 
@@ -144,7 +147,7 @@ Fases 0–14, agrupadas por área. Cada capacidad está cubierta por tests y se 
 
 - **Vault endurecido (cifrado en sobre)** — cada secreto se sella con una clave de datos [AES-256-GCM](https://pkg.go.dev/crypto/cipher) por secreto, envuelta por una **KEK intercambiable**: una clave local para desarrollo, o en producción **[HashiCorp Vault Transit](https://developer.hashicorp.com/vault/docs/secrets/transit)**, **[AWS KMS](https://aws.amazon.com/kms/)** o un **HSM por [PKCS#11](https://en.wikipedia.org/wiki/PKCS_11)** (build con tag `pkcs11`) — la clave raíz nunca sale del KMS/HSM. El AAD liga cada texto cifrado a su objetivo (un token copiado no descifra); los tokens versionados `v2:` permiten rotar la KEK en caliente.
 - **Inventario de objetivos y API de credenciales** — máquinas Linux/Windows con endpoints ssh/winrm/rdp; las credenciales se guardan en el vault, se listan (sin devolver material secreto), se revelan bajo demanda (auditado) y se borran. El modelo JSON *no puede* serializar el texto cifrado (`json:"-"`).
-- **Ciclo de vida (rotación · reconciliación · préstamo · descubrimiento)** — `POST /api/credentials/{id}/rotate` genera un secreto fuerte, lo fija **en el objetivo** (SSH `chpasswd` / WinRM `net user` / nueva `ssh_key`) y lo re-cifra — la nueva contraseña nunca se muestra. `/reconcile` verifica que el secreto del vault sigue autenticando y detecta **desincronización** (`?remediate=true` la corrige). El **préstamo (checkout)** concede una reserva exclusiva y temporal y rota el secreto al devolverlo. El **descubrimiento** (`/api/discovery/scan`) sondea hosts en busca de puertos SSH/WinRM/RDP y puede dar de alta objetivos. Un worker en segundo plano rota secretos antiguos y reconcilia según un calendario; los secretos pueden rotarse en cuanto termina una sesión proxied.
+- **Ciclo de vida (rotación · reconciliación · préstamo · descubrimiento)** — `POST /api/credentials/{id}/rotate` genera un secreto fuerte, lo fija **en el objetivo** (SSH `chpasswd` / WinRM `net user` / nueva `ssh_key`) y lo re-cifra — la nueva contraseña nunca se muestra. `/reconcile` verifica que el secreto del vault sigue autenticando y detecta **desincronización** (`?remediate=true` la corrige). El **préstamo (checkout)** concede una reserva exclusiva y temporal y rota el secreto al devolverlo. El **descubrimiento** (`/api/discovery/scan`) sondea hosts en busca de puertos SSH/WinRM/RDP y puede dar de alta objetivos. Un worker en segundo plano rota secretos antiguos y reconcilia según un calendario; los secretos pueden rotarse en cuanto termina una sesión proxied. **Cuentas dependientes** — declara los consumidores de una credencial (Servicios de Windows / Tareas programadas / App Pools de IIS) y la rotación actualiza cada uno por WinRM, para que rotar una cuenta de servicio no rompa producción.
 
 ### Auditoría, break-glass y alertas
 
@@ -224,7 +227,7 @@ ves la credencial. Las grabaciones van a `PAM_RECORDING_DIR`; desactiva el proxy
 
 ## Hoja de ruta
 
-Se han entregado las diecisiete fases — detalle por fase en **[ROADMAP.md](ROADMAP.md)**:
+Se han entregado las dieciocho fases — detalle por fase en **[ROADMAP.md](ROADMAP.md)**:
 
 | Fase | Tema | Estado |
 |---|---|---|
@@ -245,6 +248,7 @@ Se han entregado las diecisiete fases — detalle por fase en **[ROADMAP.md](ROA
 | 14 | Secretos de Kubernetes cifrados con SOPS (age; Flux/Argo/helm-secrets) | ✅ entregada |
 | 15 | Proxy de sesión de base de datos PostgreSQL (inyección JIT + auditoría de consultas) | ✅ entregada |
 | 16 | Monitorización de sesiones en vivo (SSE) + control de comandos | ✅ entregada |
+| 17 | Safes (contenedores de acceso delegado) + propagación a cuentas dependientes | ✅ entregada |
 
 ## Cobertura frente al PAM comercial (CyberArk, Wallix, …)
 
@@ -269,10 +273,10 @@ posibles fases futuras.
 
 | Brecha | Qué hacen los líderes | pamv1 hoy | Encaje |
 |---|---|---|---|
-| **Cajas fuertes (safes) / contenedores** con propiedad delegada | Todo el modelo de autorización de CyberArk son las [safes](https://docs.cyberark.com/pam-self-hosted/latest/en/content/pasref/safes-and-safe-members.htm) — contenedores de credenciales con sus propios miembros, flujos y administración delegada; Wallix usa dominios de objetivos | concesiones por objetivo + RBAC global — sin contenedor para agrupar credenciales, delegar la propiedad a un equipo o acotar política/aprobación a una colección | amplía el modelo de concesiones; el mayor salto estructural y la clave para el uso multiequipo / multiinquilino |
+| ~~**Cajas fuertes (safes) / contenedores** con propiedad delegada~~ **✅ entregado (Fase 17)** | Todo el modelo de autorización de CyberArk son las [safes](https://docs.cyberark.com/pam-self-hosted/latest/en/content/pasref/safes-and-safe-members.htm) — contenedores de credenciales con sus propios miembros, flujos y administración delegada; Wallix usa dominios de objetivos | los **safes** agrupan objetivos con miembros `can_manage` delegados; un miembro alcanza todos los objetivos del safe (`EffectiveTargetGrants`) | hecho — los flujos de aprobación por safe son posteriores |
 | ~~**Proxy de sesión de base de datos** con auditoría por consulta~~ **✅ entregado (Fase 15, PostgreSQL)** | [Teleport](https://goteleport.com/docs/enroll-resources/database-access/), [StrongDM](https://www.strongdm.com/), CyberArk y Wallix intermedian Postgres/MySQL/MSSQL/Oracle nativos con auditoría por consulta + inyección JIT | **PostgreSQL intermediado** (`PAM_DB_ADDR`): inyección JIT, auth upstream SCRAM/MD5/cleartext, auditoría `db.query` por sentencia. MySQL/MSSQL/Oracle aún por llegar | hecho para Postgres — el mismo patrón de listener se generaliza a los demás protocolos |
 | ~~**Monitorización en vivo + control de comandos**~~ **✅ entregado (Fase 16)** | [CyberArk PSM](https://www.cyberark.com/products/privileged-session-manager/) y Wallix permiten a un supervisor ver una sesión en vivo, bloquear un comando peligroso a mitad de flujo (`rm -rf /`, `DROP TABLE`) y terminarla de forma interactiva | **stream SSE en vivo** (`GET /api/sessions/{id}/stream`) + **control de comandos** (lista de denegación regex en exec/WinRM/SQL, `command.blocked`); el corte interactivo ya existía | hecho — el filtrado de shell interactiva y el visor en el portal son posteriores |
-| **Propagación a cuentas dependientes** al rotar | El CPM de CyberArk actualiza cada [consumidor](https://docs.cyberark.com/pam-self-hosted/latest/en/content/pasimp/managing-service-accounts-service.htm) de una cuenta de servicio rotada (Servicios de Windows, Tareas programadas, App Pools de IIS, COM+) | rota la credencial en el objetivo; sin noción de consumidores | hace **segura la rotación automática de cuentas de servicio** en un parque Windows real — hoy un bloqueante de adopción real |
+| ~~**Propagación a cuentas dependientes** al rotar~~ **✅ entregado (Fase 17)** | El CPM de CyberArk actualiza cada [consumidor](https://docs.cyberark.com/pam-self-hosted/latest/en/content/pasimp/managing-service-accounts-service.htm) de una cuenta de servicio rotada (Servicios de Windows, Tareas programadas, App Pools de IIS, COM+) | la rotación ahora actualiza **Servicios de Windows / Tareas programadas / App Pools de IIS** declarados por WinRM con el nuevo secreto | hecho — COM+ y una credencial de gestión por consumidor son posteriores |
 
 ### Nivel 2 — profundidad de gobierno de accesos
 
@@ -313,7 +317,9 @@ por diseño.
 
 1. ~~**Fase 15 — Proxy de sesión de base de datos**~~ ✅ **entregada** (PostgreSQL; MySQL/MSSQL/Oracle son conectores posteriores sobre el mismo patrón).
 2. ~~**Fase 16 — Monitorización en vivo + control de comandos**~~ ✅ **entregada** (stream SSE en vivo + control de comandos regex en exec/WinRM/SQL).
-3. **Fase 17 — Safes / contenedores + propagación a cuentas dependientes**: la mejora de autorización para el uso multiequipo y la rotación *segura* de cuentas de servicio.
+3. ~~**Fase 17 — Safes / contenedores + propagación a cuentas dependientes**~~ ✅ **entregada** — la mejora de autorización para el uso multiequipo y la rotación *segura* de cuentas de servicio.
+
+**Las cuatro brechas de Nivel 1 están cerradas.** Los niveles restantes (profundidad de gobierno, ZSP, amplitud de conectores, nube, analítica, proxy web) son la siguiente frontera.
 
 ## Inicio rápido
 

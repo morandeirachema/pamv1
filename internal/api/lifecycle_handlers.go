@@ -118,7 +118,60 @@ func (s *Server) rotateCredential(ctx context.Context, cred *store.Credential, t
 		orphan("persist-failed", err)
 		return time.Time{}, fmt.Errorf("persist rotated secret failed: %w", err)
 	}
+	// Propagate the new secret to declared consumers (Windows Services / Scheduled
+	// Tasks / IIS App Pools) so the rotation does not break production (Phase 17).
+	// A propagation failure does not fail the (already-persisted) rotation; each
+	// consumer is audited so a stale consumer is visible and actionable.
+	s.propagateDependencies(pctx, cred, newSecret)
 	return now, nil
+}
+
+// propagateDependencies updates each of a credential's declared consumers with
+// the new secret over WinRM. It never fails the rotation; failures are audited.
+func (s *Server) propagateDependencies(ctx context.Context, cred *store.Credential, newSecret string) {
+	deps, err := s.store.ListCredentialDependencies(ctx, cred.ID)
+	if err != nil || len(deps) == 0 {
+		return
+	}
+	if s.winrm == nil {
+		s.audit(ctx, "credential.dependency_failed",
+			fmt.Sprintf("credential:%d reason:winrm-not-configured deps:%d", cred.ID, len(deps)))
+		return
+	}
+	for _, d := range deps {
+		cmd, ok := dependencyCommand(d, newSecret)
+		if !ok {
+			s.audit(ctx, "credential.dependency_failed",
+				fmt.Sprintf("credential:%d %s:%s@%s reason:unknown-kind", cred.ID, d.Kind, d.Name, d.Host))
+			continue
+		}
+		port := d.Port
+		if port == 0 {
+			port = 5985
+		}
+		if _, err := s.winrm.Run(ctx, d.Host, port, cred.Username, newSecret, cmd); err != nil {
+			s.audit(ctx, "credential.dependency_failed",
+				fmt.Sprintf("credential:%d %s:%s@%s error:%v", cred.ID, d.Kind, d.Name, d.Host, err))
+			continue
+		}
+		s.audit(ctx, "credential.dependency_updated",
+			fmt.Sprintf("credential:%d %s:%s@%s", cred.ID, d.Kind, d.Name, d.Host))
+	}
+}
+
+// dependencyCommand builds the WinRM command that updates a consumer's stored
+// password. The new secret is injected into the command (never audited or
+// recorded), consistent with how rotation sets the account password itself.
+func dependencyCommand(d store.CredentialDependency, newSecret string) (string, bool) {
+	switch d.Kind {
+	case "windows_service":
+		return fmt.Sprintf(`sc.exe config "%s" password= "%s"`, d.Name, newSecret), true
+	case "scheduled_task":
+		return fmt.Sprintf(`schtasks /Change /TN "%s" /RP "%s"`, d.Name, newSecret), true
+	case "iis_apppool":
+		return fmt.Sprintf(`%%windir%%\system32\inetsrv\appcmd.exe set apppool "%s" -processModel.password:"%s"`, d.Name, newSecret), true
+	}
+	return "", false
 }
 
 // --- credential checkout / check-in (exclusive time-boxed lease) ---

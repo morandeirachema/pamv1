@@ -138,6 +138,27 @@ func RunStoreContract(t *testing.T, st store.Store) {
 		t.Fatalf("target should survive safe deletion with a nil safe_id: %+v", tt)
 	}
 
+	// --- dependent accounts (Phase 17): a credential's consumers ---
+	dep := &store.CredentialDependency{CredentialID: cred.ID, Kind: "windows_service", Host: "app-01", Name: "MyService"}
+	if err := st.CreateCredentialDependency(ctx, dep); err != nil {
+		t.Fatalf("CreateCredentialDependency: %v", err)
+	}
+	if dep.Port != 5985 {
+		t.Fatalf("dependency port default = %d, want 5985", dep.Port)
+	}
+	if err := st.CreateCredentialDependency(ctx, &store.CredentialDependency{CredentialID: 999999, Kind: "iis_apppool", Host: "h", Name: "n"}); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("dependency on missing credential: want ErrNotFound, got %v", err)
+	}
+	if ds, err := st.ListCredentialDependencies(ctx, cred.ID); err != nil || len(ds) != 1 || ds[0].Name != "MyService" {
+		t.Fatalf("ListCredentialDependencies: %+v err %v", ds, err)
+	}
+	if err := st.DeleteCredentialDependency(ctx, dep.ID); err != nil {
+		t.Fatalf("DeleteCredentialDependency: %v", err)
+	}
+	if _, err := st.ListCredentialDependencies(ctx, cred.ID); err != nil {
+		t.Fatalf("ListCredentialDependencies(empty): %v", err)
+	}
+
 	// --- access requests (4-eyes) ---
 	ar := &store.AccessRequest{Requester: "alice", TargetID: tgt.ID, Reason: "patch", Status: "pending", ExpiresAt: future}
 	if err := st.CreateAccessRequest(ctx, ar); err != nil {

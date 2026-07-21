@@ -32,6 +32,7 @@ type Memstore struct {
 	profiles    map[int64]store.Profile
 	safes       map[int64]store.Safe
 	safeMembers map[int64]store.SafeMember
+	credDeps    map[int64]store.CredentialDependency
 }
 
 // New returns an empty in-memory store ready for use.
@@ -52,6 +53,7 @@ func New() *Memstore {
 		profiles:    make(map[int64]store.Profile),
 		safes:       make(map[int64]store.Safe),
 		safeMembers: make(map[int64]store.SafeMember),
+		credDeps:    make(map[int64]store.CredentialDependency),
 	}
 }
 
@@ -324,6 +326,46 @@ func (m *Memstore) AssignTargetSafe(_ context.Context, targetID int64, safeID *i
 	return nil
 }
 
+// CreateCredentialDependency declares a consumer of a credential.
+func (m *Memstore) CreateCredentialDependency(_ context.Context, d *store.CredentialDependency) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.creds[d.CredentialID]; !ok {
+		return store.ErrNotFound
+	}
+	if d.Port == 0 {
+		d.Port = 5985
+	}
+	d.ID = m.id()
+	m.credDeps[d.ID] = *d
+	return nil
+}
+
+// ListCredentialDependencies returns a credential's declared consumers.
+func (m *Memstore) ListCredentialDependencies(_ context.Context, credentialID int64) ([]store.CredentialDependency, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]store.CredentialDependency, 0)
+	for _, d := range m.credDeps {
+		if d.CredentialID == credentialID {
+			out = append(out, d)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out, nil
+}
+
+// DeleteCredentialDependency removes a dependency by ID, or ErrNotFound.
+func (m *Memstore) DeleteCredentialDependency(_ context.Context, id int64) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.credDeps[id]; !ok {
+		return store.ErrNotFound
+	}
+	delete(m.credDeps, id)
+	return nil
+}
+
 // CreateAccessRequest records a new request (defaulting status to pending) for
 // an existing target; ErrNotFound if the target is missing.
 func (m *Memstore) CreateAccessRequest(_ context.Context, ar *store.AccessRequest) error {
@@ -571,10 +613,15 @@ func (m *Memstore) DeleteCredential(_ context.Context, id int64) error {
 		return store.ErrNotFound
 	}
 	delete(m.creds, id)
-	// pgstore FKs cascade checkouts on credential delete — match it.
+	// pgstore FKs cascade checkouts and dependencies on credential delete — match it.
 	for coid, co := range m.checkouts {
 		if co.CredentialID == id {
 			delete(m.checkouts, coid)
+		}
+	}
+	for did, d := range m.credDeps {
+		if d.CredentialID == id {
+			delete(m.credDeps, did)
 		}
 	}
 	return nil

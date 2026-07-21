@@ -9,7 +9,7 @@
 > [ARCHITECTURE-DIAGRAMS.md](ARCHITECTURE-DIAGRAMS.md). This file holds the
 > hand-authored conceptual diagrams below.
 >
-> Last updated: 2026-07-21 · Reflects: **Phases 0–16 shipped** — through the configuration subsystem + custom-profile RBAC (12), the AI-agent access broker (13), SOPS-encrypted Kubernetes secrets (14), the PostgreSQL database session proxy (15), and live session monitoring + command control (16). See the [ROADMAP](../ROADMAP.md) for the authoritative per-phase status.
+> Last updated: 2026-07-21 · Reflects: **Phases 0–17 shipped** — through the AI-agent access broker (13), SOPS-encrypted Kubernetes secrets (14), the PostgreSQL database session proxy (15), live session monitoring + command control (16), and safes + dependent-account propagation (17). All four Tier-1 competitive-coverage gaps are now closed. See the [ROADMAP](../ROADMAP.md) for the authoritative per-phase status.
 
 ## 1. Purpose
 
@@ -74,6 +74,7 @@ flowchart TB
 | **Session Proxy** | Broker SSH; **JIT credential injection**; record sessions | ✅ Phase 2 |
 | **Database Proxy** | Broker PostgreSQL; JIT injection; **per-statement query audit** | ✅ Phase 15 |
 | **Supervised sessions** | Live watch (SSE) + **command control** (block on exec/WinRM/SQL) | ✅ Phase 16 |
+| **Safes & dependent accounts** | Delegated-access containers; rotation updates service/task/app-pool consumers | ✅ Phase 17 |
 | **RBAC** | Four profiles (admin/user/auditor/approver), per-user tokens | ✅ Phase 3a |
 | **AD / Entra / OIDC login** | LDAPS + Entra ID (ROPC) + OIDC auth-code SSO, groups/app-roles → roles, session tokens | ✅ Phase 3b |
 | **MFA** | TOTP (RFC 6238), recovery codes, enforce-MFA policy | ✅ Phase 3b |
@@ -169,6 +170,7 @@ flowchart LR
 
 | Date | Change |
 |---|---|
+| 2026-07-21 | Phase 17: **safes + dependent-account propagation** — named containers group targets and delegate who may connect (a safe member reaches every target in the safe; delegated `can_manage` administration), and rotating a credential now updates its declared consumers (Windows Services / Scheduled Tasks / IIS App Pools) over WinRM so auto-rotation doesn't break production. Closes the last two Tier-1 competitive-coverage gaps |
 | 2026-07-21 | Phase 16: **supervised sessions** — a supervisor can watch an in-progress SSH or PostgreSQL session live over `GET /api/sessions/{id}/stream` (Server-Sent Events, `CapReadAudit`), and **command control** blocks a dangerous command before it reaches the target on the exec, WinRM and SQL paths (regex denylist, `PAM_COMMAND_DENY_FILE`, audited `command.blocked`). Third Tier-1 competitive-coverage gap |
 | 2026-07-20 | Phase 15: **database session proxy** — a second listener (`PAM_DB_ADDR`) brokers PostgreSQL with the same JIT chokepoint as SSH. An operator points `psql` at pamv1 with their PAM key; the proxy runs every authorization gate, injects the vaulted DB credential just-in-time, authenticates upstream (cleartext/MD5/**SCRAM-SHA-256**), and audits **every SQL statement** (`db.query`) — the operator never sees the database password. First of the Tier-1 competitive-coverage gaps (database access management) |
 | 2026-07-20 | Post-review hardening: a directory user now gets the **union** of every mapped group's role (not the single highest); a parked agent approval is **re-validated at decision time** (revoked key / expired SVID refused); broker-audit append serializes across processes under a **Postgres advisory lock** so a rolling-deploy/HA overlap can't fork the hash chain; numeric policy args match in plain decimal |
