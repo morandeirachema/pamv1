@@ -26,6 +26,13 @@ type Config struct {
 	DBAddr string
 	// SSHHostKeyPath persists the proxy host key; empty = ephemeral key.
 	SSHHostKeyPath string
+	// SSHCAKeyPath persists the Zero Standing Privilege SSH certificate-authority
+	// key (Phase 22). When set, "ssh_ca" credentials are served by minting a
+	// short-lived user certificate just-in-time instead of injecting a stored
+	// secret. Empty = ZSP disabled. SSHCertTTL is the minted certificate's
+	// validity (a small window, since it is minted fresh per session).
+	SSHCAKeyPath string
+	SSHCertTTL   time.Duration
 	// SSHKnownHosts pins upstream target host keys (an OpenSSH known_hosts file).
 	// Empty = trust any upstream key (insecure; logged loudly).
 	SSHKnownHosts string
@@ -110,6 +117,18 @@ type Config struct {
 	// comments) that block matching commands on the exec/WinRM/SQL paths
 	// (Phase 16 command control). Empty disables command control.
 	CommandDenyFile string
+
+	// Privileged threat analytics (Phase 23). AnalyticsInterval enables the
+	// background risk-scoring worker (0 disables it; the read-only risk endpoint
+	// stays available). AnalyticsWindow is how far back each scoring pass looks.
+	// AnalyticsAutoKill terminates a critical-risk actor's live sessions.
+	// AnalyticsBusinessStart/End bound business hours (local) for the off-hours
+	// signal.
+	AnalyticsInterval      time.Duration
+	AnalyticsWindow        time.Duration
+	AnalyticsAutoKill      bool
+	AnalyticsBusinessStart int
+	AnalyticsBusinessEnd   int
 
 	// Broker (Phase 13, AI-agent access broker). Setting BrokerPolicyFile enables
 	// the broker; the audit key + seed are then required (fail-loud).
@@ -241,6 +260,8 @@ func Load() (*Config, error) {
 		SSHAddr:             getenv("PAM_SSH_ADDR", ":2222"),
 		DBAddr:              getenv("PAM_DB_ADDR", "off"),
 		SSHHostKeyPath:      os.Getenv("PAM_SSH_HOST_KEY"),
+		SSHCAKeyPath:        os.Getenv("PAM_SSH_CA_KEY"),
+		SSHCertTTL:          time.Duration(integer("PAM_SSH_CERT_TTL_MIN", 2)) * time.Minute,
 		SSHKnownHosts:       os.Getenv("PAM_SSH_KNOWN_HOSTS"),
 		SSHJumpHost:         os.Getenv("PAM_SSH_JUMP_HOST"),
 		SSHJumpUser:         os.Getenv("PAM_SSH_JUMP_USER"),
@@ -278,12 +299,18 @@ func Load() (*Config, error) {
 		CheckoutTTL:         time.Duration(integer("PAM_CHECKOUT_TTL_MIN", 30)) * time.Minute,
 		AllowedProtocols:    os.Getenv("PAM_ALLOWED_PROTOCOLS"),
 		CommandDenyFile:     os.Getenv("PAM_COMMAND_DENY_FILE"),
-		BrokerPolicyFile:    os.Getenv("PAM_BROKER_POLICY_FILE"),
-		BrokerAuditKey:      os.Getenv("PAM_BROKER_AUDIT_KEY"),
-		BrokerAuditSignSeed: os.Getenv("PAM_BROKER_AUDIT_SIGN_SEED"),
-		BrokerTokenTTL:      time.Duration(integer("PAM_BROKER_TOKEN_TTL_MIN", 15)) * time.Minute,
-		BrokerMaxArgBytes:   integer("PAM_BROKER_MAX_ARG_BYTES", 16384),
-		BrokerRatePerMin:    integer("PAM_BROKER_RATE_PER_MIN", 0),
+
+		AnalyticsInterval:      time.Duration(integer("PAM_ANALYTICS_INTERVAL_MIN", 0)) * time.Minute,
+		AnalyticsWindow:        time.Duration(integer("PAM_ANALYTICS_WINDOW_MIN", 60)) * time.Minute,
+		AnalyticsAutoKill:      boolean("PAM_ANALYTICS_AUTO_KILL", false),
+		AnalyticsBusinessStart: integer("PAM_ANALYTICS_BUSINESS_START", 7),
+		AnalyticsBusinessEnd:   integer("PAM_ANALYTICS_BUSINESS_END", 20),
+		BrokerPolicyFile:       os.Getenv("PAM_BROKER_POLICY_FILE"),
+		BrokerAuditKey:         os.Getenv("PAM_BROKER_AUDIT_KEY"),
+		BrokerAuditSignSeed:    os.Getenv("PAM_BROKER_AUDIT_SIGN_SEED"),
+		BrokerTokenTTL:         time.Duration(integer("PAM_BROKER_TOKEN_TTL_MIN", 15)) * time.Minute,
+		BrokerMaxArgBytes:      integer("PAM_BROKER_MAX_ARG_BYTES", 16384),
+		BrokerRatePerMin:       integer("PAM_BROKER_RATE_PER_MIN", 0),
 
 		BrokerTrustDomainJWKS: os.Getenv("PAM_BROKER_TRUST_DOMAIN_JWKS"),
 		BrokerTrustDomain:     os.Getenv("PAM_BROKER_TRUST_DOMAIN"),
@@ -386,6 +413,17 @@ func Load() (*Config, error) {
 	// any well-formed token in any trust domain.
 	if cfg.BrokerTrustDomainJWKS != "" && (cfg.BrokerTrustDomain == "" || cfg.BrokerAudience == "") {
 		errs = append(errs, "PAM_BROKER_TRUST_DOMAIN and PAM_BROKER_AUDIENCE are required when PAM_BROKER_TRUST_DOMAIN_JWKS is set")
+	}
+	// Business-hours bounds must be a valid, non-empty window (the off-hours risk
+	// signal is otherwise meaningless or inverted).
+	if cfg.AnalyticsBusinessStart < 0 || cfg.AnalyticsBusinessEnd > 24 ||
+		cfg.AnalyticsBusinessStart >= cfg.AnalyticsBusinessEnd {
+		errs = append(errs, "PAM_ANALYTICS_BUSINESS_START/_END must satisfy 0 <= START < END <= 24")
+	}
+	// A Zero Standing Privilege certificate must have a positive lifetime; a
+	// zero/negative TTL would mint an already-expired certificate every session.
+	if cfg.SSHCAKeyPath != "" && cfg.SSHCertTTL <= 0 {
+		errs = append(errs, "PAM_SSH_CERT_TTL_MIN must be >= 1 when PAM_SSH_CA_KEY is set")
 	}
 	// Rate limits are "0 = off"; a negative value must fail loud rather than
 	// silently disable throttling (a fat-fingered minus turning off brute-force

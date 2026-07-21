@@ -32,6 +32,7 @@ import (
 
 	"github.com/morandeirachema/pamv1/internal/agentid"
 	"github.com/morandeirachema/pamv1/internal/alert"
+	"github.com/morandeirachema/pamv1/internal/analytics"
 	"github.com/morandeirachema/pamv1/internal/api"
 	"github.com/morandeirachema/pamv1/internal/auditchain"
 	"github.com/morandeirachema/pamv1/internal/auth"
@@ -44,6 +45,7 @@ import (
 	"github.com/morandeirachema/pamv1/internal/proxy"
 	"github.com/morandeirachema/pamv1/internal/session"
 	"github.com/morandeirachema/pamv1/internal/shamir"
+	"github.com/morandeirachema/pamv1/internal/sshca"
 	"github.com/morandeirachema/pamv1/internal/store"
 	"github.com/morandeirachema/pamv1/internal/store/memstore"
 	"github.com/morandeirachema/pamv1/internal/store/pgstore"
@@ -521,6 +523,27 @@ func run() error {
 		return err
 	}
 
+	// Zero Standing Privilege (Phase 22): load (or create) the SSH certificate
+	// authority when PAM_SSH_CA_KEY is set. Shared by the proxy (which mints
+	// short-lived certificates JIT) and the API (which publishes its public key).
+	var sshCA *sshca.CertAuthority
+	if cfg.SSHCAKeyPath != "" {
+		sshCA, err = sshca.LoadOrCreate(cfg.SSHCAKeyPath)
+		if err != nil {
+			return fmt.Errorf("ssh ca key: %w", err)
+		}
+		log.Info("zero standing privilege enabled (SSH certificate authority)",
+			"fingerprint", sshCA.Fingerprint(), "cert_ttl", cfg.SSHCertTTL.String())
+	}
+
+	// Privileged threat analytics (Phase 23): a behavioral risk scorer over the
+	// audit trail. Always available as a read-only endpoint; the background worker
+	// runs when PAM_ANALYTICS_INTERVAL_MIN > 0.
+	analyticsEngine := analytics.New(analytics.Config{
+		BusinessStart: cfg.AnalyticsBusinessStart,
+		BusinessEnd:   cfg.AnalyticsBusinessEnd,
+	})
+
 	handler, err := api.New(st, v, resolver, authn, api.Options{
 		Sessions:            sessions,
 		Live:                liveHub,
@@ -559,6 +582,10 @@ func run() error {
 		BrokerMaxArgBytes:   cfg.BrokerMaxArgBytes,
 		BrokerRatePerMin:    cfg.BrokerRatePerMin,
 		BrokerSVIDVerifier:  svidVerifier,
+		CA:                  sshCA,
+		Analytics:           analyticsEngine,
+		AnalyticsWindow:     cfg.AnalyticsWindow,
+		AnalyticsAutoKill:   cfg.AnalyticsAutoKill,
 	})
 	if err != nil {
 		return err
@@ -575,6 +602,9 @@ func run() error {
 	}
 	if cfg.BrokerPolicyFile != "" {
 		go handler.RunBrokerTokenGC(ctx) // sweep spent/expired resume tokens
+	}
+	if cfg.AnalyticsInterval > 0 {
+		go handler.RunAnalyticsWorker(ctx, cfg.AnalyticsInterval)
 	}
 
 	// errc receives the first fatal listener error (HTTP or SSH proxy); either
@@ -630,6 +660,8 @@ func run() error {
 			RequireRecording: cfg.RequireRecording,
 			CommandGuard:     cmdGuard,
 			Live:             liveHub,
+			CA:               sshCA,
+			CertTTL:          cfg.SSHCertTTL,
 		})
 		if err != nil {
 			return err

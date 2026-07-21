@@ -79,6 +79,24 @@ func (r *Registry) Kill(id string) bool {
 	return true
 }
 
+// KillByActor terminates every live session owned by actor and returns how many
+// were killed. It backs automated threat-analytics response (Phase 23): when an
+// actor's risk score crosses critical, their active sessions can be cut off.
+func (r *Registry) KillByActor(actor string) int {
+	r.mu.Lock()
+	var kills []func()
+	for _, e := range r.m {
+		if e.info.Actor == actor && e.kill != nil {
+			kills = append(kills, e.kill)
+		}
+	}
+	r.mu.Unlock()
+	for _, k := range kills {
+		k()
+	}
+	return len(kills)
+}
+
 // randID returns a random 16-hex-character session id.
 func randID() string {
 	b := make([]byte, 8)

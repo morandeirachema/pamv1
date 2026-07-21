@@ -13,7 +13,9 @@ import (
 var (
 	validOS       = map[string]bool{"linux": true, "windows": true}
 	validProtocol = map[string]bool{"ssh": true, "winrm": true, "rdp": true, "postgres": true}
-	validSecret   = map[string]bool{"password": true, "ssh_key": true}
+	// "ssh_ca" is a Zero Standing Privilege credential (Phase 22): it stores no
+	// secret — the proxy mints a short-lived certificate just-in-time instead.
+	validSecret = map[string]bool{"password": true, "ssh_key": true, "ssh_ca": true}
 )
 
 // --- targets ---

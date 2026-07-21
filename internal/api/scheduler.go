@@ -46,6 +46,12 @@ func (s *Server) RotateCredentialByID(ctx context.Context, credentialID int64) {
 		s.log.Warn("post-session rotation: target not found", "credential", credentialID, "err", err)
 		return
 	}
+	// A Zero Standing Privilege credential has no stored secret to rotate: the
+	// certificate used in the session was ephemeral and has already expired.
+	if cred.SecretType == "ssh_ca" {
+		s.log.Debug("post-session rotation skipped for zero-standing-privilege credential", "credential", credentialID)
+		return
+	}
 	if _, err := s.rotateCredential(ctx, cred, target); err != nil {
 		s.audit(ctx, "credential.rotate_failed", fmt.Sprintf("credential:%d reason:post-session error:%v", cred.ID, err))
 		s.log.Error("post-session rotation failed", "credential", cred.ID, "err", err)

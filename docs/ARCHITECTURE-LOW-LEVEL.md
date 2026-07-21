@@ -5,7 +5,7 @@
 > the codebase; the conceptual view lives in
 > [ARCHITECTURE-HIGH-LEVEL.md](ARCHITECTURE-HIGH-LEVEL.md).
 >
-> Last updated: 2026-07-21 · Reflects: **Phases 0–18 shipped** — through the 5250 management console (11), the configuration subsystem + custom-profile RBAC + hot-swap (12), the AI-agent access broker (13), SOPS-encrypted secrets (14), the PostgreSQL database session proxy (15), live session monitoring + command control (16), safes + dependent-account propagation (17), optional CyberArk Conjur secret sourcing (18), access certification campaigns (19), an ITSM/ticketing gate (20), and richer approval workflows (21) — plus the security/correctness hardening passes and code-generated diagrams. See the [ROADMAP](../ROADMAP.md) for authoritative per-phase status. Commit the doc update with the code change.
+> Last updated: 2026-07-21 · Reflects: **Phases 0–23 shipped** — through the 5250 management console (11), the configuration subsystem + custom-profile RBAC + hot-swap (12), the AI-agent access broker (13), SOPS-encrypted secrets (14), the PostgreSQL database session proxy (15), live session monitoring + command control (16), safes + dependent-account propagation (17), optional CyberArk Conjur secret sourcing (18), access certification campaigns (19), an ITSM/ticketing gate (20), richer approval workflows (21), Zero Standing Privilege via ephemeral SSH certificates (22), and privileged threat analytics (23) — plus the security/correctness hardening passes and code-generated diagrams. Items that need external infrastructure or a paid account to build/verify honestly are catalogued in [EXTERNAL-INFRA-GAPS.md](EXTERNAL-INFRA-GAPS.md). See the [ROADMAP](../ROADMAP.md) for authoritative per-phase status. Commit the doc update with the code change.
 
 ## 1. Language, layout, dependencies
 
@@ -19,6 +19,8 @@ internal/
   config/      # env (PAM_*) -> Config
   logging/     # slog setup (json/text, level) + per-service loggers
   vault/       # AES-256-GCM encrypt/decrypt, key gen
+  sshca/       # Zero Standing Privilege SSH certificate authority (mints short-lived user certs)
+  analytics/   # privileged threat analytics — behavioral risk scoring over the audit trail
   mfa/         # TOTP (RFC 6238) generate/validate + otpauth URI
   winrm/       # WinRM command Runner (Windows targets) + real client (basic/NTLM)
   guacd/       # Apache Guacamole protocol client (RDP handshake + JIT injection)
@@ -294,6 +296,40 @@ SSH gateway. See §3 for the wire-level flow.
   connections on `ctx` cancel and waits for handlers, and closing audits are
   written detached from the cancelled context.
 
+### 2.5a `sshca` *(Phase 22 — Zero Standing Privilege)*
+
+An SSH **certificate authority** for the ZSP model: no standing secret is stored
+for an account; the proxy mints a short-lived user certificate just-in-time per
+session. `LoadOrCreate(PAM_SSH_CA_KEY)` persists an ed25519 CA key (generated on
+first use, like the host key). `IssueUser(principal, ttl, keyID)` generates a
+**fresh ephemeral keypair** (used for one dial, then discarded), builds an
+`ssh.Certificate` (`UserCert`, `ValidPrincipals=[principal]`, a serial for audit,
+`ValidBefore=now+ttl`, standard interactive extensions), signs it with the CA, and
+returns an `ssh.NewCertSigner`. A credential of `secret_type="ssh_ca"` stores **no
+secret** (`SecretEnc` empty); the proxy's `dialUpstream` branches on it to mint a
+cert instead of decrypting — a missing CA fails the session closed (`session.error`).
+`GET /api/ca/ssh` (`CapReadInventory`) publishes the CA public key + a
+`TrustedUserCAKeys` install hint. Audit `session.cert_issued` (serial · principal ·
+valid-before · key-id — never the private key). Reconciliation reports `ssh_ca` as
+`unsupported`; post-session rotation and the lifecycle worker skip it.
+
+### 2.5b `analytics` *(Phase 23 — privileged threat analytics)*
+
+A deterministic, explainable behavioral **risk scorer** over the audit trail (no
+clock, no I/O, no opaque model in `Score`). Each actor's score is the sum of named
+**signals** — `break_glass`, `command_blocked`, `auth_failure`, `off_hours`,
+`decrypt_failure`, `high_velocity` — each with a configurable weight and a
+per-signal cap; thresholds map the total to low/medium/high/critical. `Config`
+carries the weights, thresholds, business hours (for off-hours) and the velocity
+limit; `New` fills zero fields from `DefaultConfig` (a single break-glass access
+alone reaches **high**). The API wires it up: `GET /api/analytics/risk`
+(`CapReadAudit`, `?min_level=`/`?window_min=`) scores the recent window over
+`store.ExportAudit`; `RunAnalyticsWorker` (`PAM_ANALYTICS_INTERVAL_MIN`) scores each
+tick and, for a **newly elevated** high/critical actor, audits `analytics.risk_flagged`
++ alerts, and — with `PAM_ANALYTICS_AUTO_KILL` — terminates a critical actor's live
+sessions (`session.Registry.KillByActor`, audit `analytics.auto_response`). A
+steady state is not re-alerted; a worsening trend is (a per-actor high-water mark).
+
 ### 2.6 `web`
 
 Single embedded `static/index.html` (`//go:embed`). 5250-style terminal UI:
@@ -370,7 +406,13 @@ cancelled shutdown context so they are not dropped mid-drain.
 | `PAM_SSH_ADDR` | `:2222`; `off` disables | proxy |
 | `PAM_DB_ADDR` | `off` | PostgreSQL session-proxy listen address (Phase 15) |
 | `PAM_COMMAND_DENY_FILE` | "" (off) | regex denylist file for command control (Phase 16) |
+| `PAM_ANALYTICS_INTERVAL_MIN` | `0` (worker off) | privileged-threat-analytics worker interval (Phase 23); the read-only risk endpoint stays available |
+| `PAM_ANALYTICS_WINDOW_MIN` | `60` | how far back each risk-scoring pass looks |
+| `PAM_ANALYTICS_AUTO_KILL` | `false` | terminate a critical-risk actor's live sessions (automated response) |
+| `PAM_ANALYTICS_BUSINESS_START` / `_END` | `7` / `20` | business hours (local) for the off-hours risk signal |
 | `PAM_SSH_HOST_KEY` | "" (ephemeral) | proxy host key |
+| `PAM_SSH_CA_KEY` | "" (ZSP off) | Zero Standing Privilege SSH CA key path (Phase 22); presence enables `ssh_ca` credentials (mint short-lived certs) |
+| `PAM_SSH_CERT_TTL_MIN` | `2` | validity (minutes) of a minted ZSP certificate |
 | `PAM_SSH_KNOWN_HOSTS` | "" (trust-any + warn) | pin upstream target host keys (OpenSSH known_hosts) |
 | `PAM_SSH_JUMP_HOST` / `_USER` / `_KEY` | — | reach SSH targets through an SSH bastion (jump host) |
 | `PAM_RECORDING_DIR` | `recordings` | proxy recordings |
@@ -453,7 +495,8 @@ secrets. Format `json` (SIEM) or `text` (humans); collect from stdout.
 `mfa.enroll` · `mfa.confirm` · `mfa.disable` · `mfa.recovery_generated` ·
 `mfa.recovery_used` · `winrm.run` · `winrm.error` · `ssh.exec` · `rdp.connect` · `rdp.end` ·
 `rdp.error` · `authz.denied` · `login.failed` · `proxy.auth_failed` · `breakglass.access` · `session.start` ·
-`session.record` · `session.record_failed` · `session.end` · `session.denied` · `session.error` ·
+`session.record` · `session.record_failed` · `session.end` · `session.denied` · `session.error` · `session.cert_issued` ·
+`analytics.risk_flagged` · `analytics.auto_response` ·
 `db.session.start` · `db.session.end` · `db.session.denied` · `db.session.error` · `db.query` ·
 `command.blocked` · `session.monitor` ·
 `safe.create` · `safe.delete` · `safe.member.add` · `safe.member.remove` · `target.safe_set` ·
@@ -529,6 +572,8 @@ events are also written to the separate tamper-evident `broker_audit_events` cha
 
 | Date | Change |
 |---|---|
+| 2026-07-21 | Phase 23 (privileged threat analytics): the second Tier-3 gap. New `internal/analytics` — a deterministic, explainable risk scorer over the audit trail (`Score` is pure: no clock/IO/model). Named signals (`break_glass`, `command_blocked`, `auth_failure`, `off_hours`, `decrypt_failure`, `high_velocity`) with configurable weights, per-signal caps and level thresholds; a single break-glass access reaches high. API `GET /api/analytics/risk` (`CapReadAudit`, `?min_level`/`?window_min`) scores the recent window via `store.ExportAudit`; `RunAnalyticsWorker` (`PAM_ANALYTICS_INTERVAL_MIN`) flags a **newly elevated** high/critical actor (`analytics.risk_flagged` + alert) and, with `PAM_ANALYTICS_AUTO_KILL`, terminates a critical actor's live sessions (new `session.Registry.KillByActor`, audit `analytics.auto_response`). A per-actor high-water mark suppresses steady-state re-alerting. New env `PAM_ANALYTICS_*`; `api.Options.Analytics/AnalyticsWindow/AnalyticsAutoKill`. Engine unit tests + API worker/endpoint tests |
+| 2026-07-21 | Phase 22 (Zero Standing Privilege): the first Tier-3 gap. New `internal/sshca` — an SSH certificate authority that mints a short-lived user certificate **just-in-time** per session (fresh ephemeral keypair, one dial, then discarded) so an account has **no standing secret**. A `secret_type="ssh_ca"` credential stores nothing (`SecretEnc` empty); `proxy.dialUpstream` branches on it to mint a cert signed by the CA instead of decrypting, and fails closed (`session.error`) when no CA is configured. `PAM_SSH_CA_KEY` (persistent, generated on first use) + `PAM_SSH_CERT_TTL_MIN` (default 2m); `GET /api/ca/ssh` (`CapReadInventory`) publishes the CA public key + `TrustedUserCAKeys` install hint. Audit `session.cert_issued` (serial/principal/valid-before/key-id, never the key). Reconcile reports `ssh_ca` as `unsupported`; post-session rotation and the lifecycle worker skip it. `proxy.Config.CA/CertTTL`, `api.Options.CA`. `internal/sshca` unit tests + an end-to-end cert-only-upstream ZSP proxy test (no password auth exists) + without-CA fail-closed + credential/endpoint API tests. Infra-bound Tier-3 leftovers catalogued in `docs/EXTERNAL-INFRA-GAPS.md` |
 | 2026-07-21 | Phase 21 (richer approval workflows): multi-tier chains + scheduled windows + mandatory reason on the access-request engine (migration `0016`: `required_approvals`, `approved_by`, `not_before`). **N-of-M** — `decideAccessRequest`'s approve path accumulates DISTINCT approvers into `approved_by` via the new `store.SetApprovalState`; the request stays `pending` (audit `access.approve_partial`) until `RequiredApprovals` is met, then `approved` (double-approval 409, self-approval still 403). **Scheduled window** — `not_before`/`not_after`; `HasActiveApproval` now also requires `not_before <= now`. **Mandatory reason** — `PAM_REQUIRE_REASON`. New env `PAM_APPROVALS_REQUIRED`/`PAM_REQUIRE_REASON` (via `api.Options`). Completes Tier-2. One-time access deferred (needs a consume hook in every connect gate). Store contract + end-to-end API tests |
 | 2026-07-21 | Phase 20 (ITSM / ticketing gate): "no access without an approved change ticket". New `internal/ticket` (no new dependency): a `Validator` with two optional, composable checks — a regex format (`PAM_TICKET_PATTERN`) and a webhook (`PAM_TICKET_VALIDATE_URL`, `POST {"ticket":…}` → 2xx = valid). `createAccessRequest` accepts a `ticket`: mandatory when `PAM_REQUIRE_TICKET` (422 otherwise), validated when a validator is configured (422 + `access.ticket_rejected` on failure), and recorded on the request + in the `access.request` audit (`store.AccessRequest.Ticket`, migration `0015`). Wired via `api.Options.TicketValidator`/`RequireTicket`. Fake-webhook API test + a `ticket` unit test |
 | 2026-07-21 | Phase 19 (access certification campaigns): the first Tier-2 gap. `POST /api/campaigns` snapshots the current access grants — every target grant + every safe member — as `campaign_items` (migration `0014`: `campaigns`, `campaign_items`). `POST /api/campaigns/{id}/items/{iid}/decision {certify\|revoke}` records the attestation; a **revoke deletes the underlying grant** (`DeleteTargetGrant`/`DeleteSafeMember`, no-op if already gone), `…/close` closes it (further decisions 409). Management is `CapManageUsers`, reading `CapReadAudit` (an auditor reviews without changing access) — no new capability. New store types `Campaign`/`CampaignItem`; audit vocab `certification.campaign_created`/`item_certified`/`item_revoked`/`campaign_closed`. Store contract + end-to-end API test |

@@ -63,14 +63,18 @@ flowchart LR
     n_session[session]
   end
   subgraph n_Other["Other"]
+    n_analytics[analytics]
     n_conjur[conjur]
+    n_sshca[sshca]
     n_ticket[ticket]
   end
   n_agentid --> n_auth
   n_agentid --> n_store
   n_alert --> n_logging
+  n_analytics --> n_store
   n_api --> n_agentid
   n_api --> n_alert
+  n_api --> n_analytics
   n_api --> n_auditchain
   n_api --> n_auth
   n_api --> n_broker
@@ -86,6 +90,7 @@ flowchart LR
   n_api --> n_rotate
   n_api --> n_session
   n_api --> n_shamir
+  n_api --> n_sshca
   n_api --> n_store
   n_api --> n_ticket
   n_api --> n_vault
@@ -107,6 +112,7 @@ flowchart LR
   n_memstore --> n_store
   n_pam_server --> n_agentid
   n_pam_server --> n_alert
+  n_pam_server --> n_analytics
   n_pam_server --> n_api
   n_pam_server --> n_auditchain
   n_pam_server --> n_auth
@@ -121,6 +127,7 @@ flowchart LR
   n_pam_server --> n_proxy
   n_pam_server --> n_session
   n_pam_server --> n_shamir
+  n_pam_server --> n_sshca
   n_pam_server --> n_store
   n_pam_server --> n_ticket
   n_pam_server --> n_vault
@@ -130,6 +137,7 @@ flowchart LR
   n_proxy --> n_auth
   n_proxy --> n_logging
   n_proxy --> n_session
+  n_proxy --> n_sshca
   n_proxy --> n_store
   n_proxy --> n_vault
   n_proxy --> n_winrm
@@ -311,7 +319,7 @@ erDiagram
 
 ## 3. REST API surface
 
-The 83 routes registered on the API mux, with the capability or guard each enforces (see `internal/auth` for the role → capability matrix).
+The 85 routes registered on the API mux, with the capability or guard each enforces (see `internal/auth` for the role → capability matrix).
 
 | Method | Path | Guard |
 |---|---|---|
@@ -319,11 +327,13 @@ The 83 routes registered on the API mux, with the capability or guard each enfor
 | POST | `/api/access-requests` | CapConnect |
 | POST | `/api/access-requests/{id}/approve` | CapApprove |
 | POST | `/api/access-requests/{id}/deny` | CapApprove |
+| GET | `/api/analytics/risk` | CapReadAudit |
 | GET | `/api/audit` | CapReadAudit |
 | GET | `/api/audit/export` | CapReadAudit |
 | GET | `/api/auth/oidc/callback` | public (rate-limited) |
 | GET | `/api/auth/oidc/start` | public (rate-limited) |
 | POST | `/api/breakglass/unseal` | public (rate-limited) |
+| GET | `/api/ca/ssh` | CapReadInventory |
 | GET | `/api/campaigns` | CapReadAudit |
 | POST | `/api/campaigns` | CapManageUsers |
 | GET | `/api/campaigns/{id}` | CapReadAudit |

@@ -159,7 +159,10 @@ ssh -p 2222 Administrator@win-01@PAM_HOST
 
 What happens behind the scenes: pamv1 checks your token and role, pulls the
 credential from the vault, decrypts it just for this connection, logs you in to
-the target, and records the session.
+the target, and records the session. For some targets there is **no stored
+password at all** — pamv1 signs a short-lived certificate just for your session
+(Zero Standing Privilege). You connect exactly the same way; nothing changes for
+you.
 
 > **Your session is recorded.** Everything on screen is captured (asciicast) and a
 > tamper-evident hash is stored. Connect only for authorized work. A supervisor
@@ -226,6 +229,7 @@ is audited (`session.monitor`).
 
 | Date | Change |
 |---|---|
+| 2026-07-21 | Phase 22: some targets now use **Zero Standing Privilege** — there is no stored password; pamv1 signs a short-lived certificate just for your session. You connect exactly as before |
 | 2026-07-21 | Phases 15–16: connect to **`postgres` targets with `psql`** through the proxy (`:5433`; every SQL statement audited); sessions can be **watched live** by a supervisor and a command can be **blocked by policy** (`command blocked by policy`). Custom permission profiles (Phase 12) can be assigned in place of the four built-in roles |
 | 2026-07-20 | Phase 11: the portal is now a full role-aware management console — menu options for sessions, check-out, access requests, users, MFA, discovery, reconciliation, audit export and break-glass, in the same 5250 style |
 | 2026-07-18 | Phase 3b: OIDC single sign-on option on Sign On |

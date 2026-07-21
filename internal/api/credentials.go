@@ -33,17 +33,30 @@ func (s *Server) createCredential(w http.ResponseWriter, r *http.Request) {
 	if in.SecretType == "" {
 		in.SecretType = "password"
 	}
+	zsp := in.SecretType == "ssh_ca"
 	switch {
-	case in.Username == "" || in.Secret == "":
-		writeError(w, http.StatusUnprocessableEntity, "username and secret are required")
+	case in.Username == "":
+		writeError(w, http.StatusUnprocessableEntity, "username is required")
 		return
 	case !validSecret[in.SecretType]:
-		writeError(w, http.StatusUnprocessableEntity, `secret_type must be "password" or "ssh_key"`)
+		writeError(w, http.StatusUnprocessableEntity, `secret_type must be "password", "ssh_key" or "ssh_ca"`)
+		return
+	case !zsp && in.Secret == "":
+		writeError(w, http.StatusUnprocessableEntity, "secret is required")
+		return
+	case zsp && in.Secret != "":
+		writeError(w, http.StatusUnprocessableEntity, "an ssh_ca (zero standing privilege) credential must not carry a secret")
 		return
 	}
 	target, err := s.store.GetTarget(r.Context(), in.TargetID)
 	if err != nil {
 		storeError(w, err)
+		return
+	}
+	// A Zero Standing Privilege credential is served by minting a certificate over
+	// SSH — it only makes sense on an ssh target.
+	if zsp && target.Protocol != "ssh" {
+		writeError(w, http.StatusUnprocessableEntity, "ssh_ca credentials are only valid on ssh targets")
 		return
 	}
 	// Insert first so the row has an ID, then bind the ciphertext to (target,
@@ -53,22 +66,26 @@ func (s *Server) createCredential(w http.ResponseWriter, r *http.Request) {
 		storeError(w, err)
 		return
 	}
-	// Roll the half-built row back on a cancel-detached context, so a client
-	// disconnect between the insert and the ciphertext write cannot orphan a
-	// permanent empty-SecretEnc credential (which would be undecryptable).
-	rollback := func() { _ = s.store.DeleteCredential(context.WithoutCancel(r.Context()), c.ID) }
-	enc, err := s.vault.Encrypt(r.Context(), in.Secret, store.CredentialAAD(c.TargetID, c.ID))
-	if err != nil {
-		rollback()
-		writeError(w, http.StatusInternalServerError, "encryption failed")
-		return
+	// Zero Standing Privilege credentials store no secret (SecretEnc stays empty):
+	// there is nothing to vault — the proxy mints a short-lived certificate JIT.
+	if !zsp {
+		// Roll the half-built row back on a cancel-detached context, so a client
+		// disconnect between the insert and the ciphertext write cannot orphan a
+		// permanent empty-SecretEnc credential (which would be undecryptable).
+		rollback := func() { _ = s.store.DeleteCredential(context.WithoutCancel(r.Context()), c.ID) }
+		enc, err := s.vault.Encrypt(r.Context(), in.Secret, store.CredentialAAD(c.TargetID, c.ID))
+		if err != nil {
+			rollback()
+			writeError(w, http.StatusInternalServerError, "encryption failed")
+			return
+		}
+		if err := s.store.UpdateCredentialSecretEnc(r.Context(), c.ID, enc); err != nil {
+			rollback()
+			storeError(w, err)
+			return
+		}
+		c.SecretEnc = enc
 	}
-	if err := s.store.UpdateCredentialSecretEnc(r.Context(), c.ID, enc); err != nil {
-		rollback()
-		storeError(w, err)
-		return
-	}
-	c.SecretEnc = enc
 	s.audit(r.Context(), "credential.create", fmt.Sprintf("%s/%s", target.Name, c.Username))
 	writeJSON(w, http.StatusCreated, c)
 }

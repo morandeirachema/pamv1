@@ -189,7 +189,11 @@ All configuration is environment variables (12-factor). Full descriptions in
 | `PAM_SSH_ADDR` | | `:2222` | SSH proxy bind; `off` disables the proxy. |
 | `PAM_DB_ADDR` | | `off` | PostgreSQL session-proxy bind (Phase 15), e.g. `:5433`; `off` disables it. |
 | `PAM_COMMAND_DENY_FILE` | | (off) | Regex denylist file for command control (Phase 16); blocks matching commands on exec/WinRM/SQL. |
+| `PAM_ANALYTICS_INTERVAL_MIN` | | `0` (off) | Threat-analytics worker interval (Phase 23); `0` leaves the read-only `GET /api/analytics/risk` endpoint on. See §9.7. |
+| `PAM_ANALYTICS_WINDOW_MIN` / `_AUTO_KILL` / `_BUSINESS_START` / `_BUSINESS_END` | | `60` / `false` / `7` / `20` | Risk-scoring window, auto-kill of critical actors' sessions, and business hours for the off-hours signal. |
 | `PAM_SSH_HOST_KEY` | | (ephemeral) | Path to persist the proxy SSH host key. |
+| `PAM_SSH_CA_KEY` | | (ZSP off) | Path to the Zero Standing Privilege SSH CA key (Phase 22); presence enables `ssh_ca` credentials (mint short-lived certs). See §6. |
+| `PAM_SSH_CERT_TTL_MIN` | | `2` | Validity (minutes) of a minted ZSP certificate. |
 | `PAM_SSH_KNOWN_HOSTS` | | (trust-any + warn) | OpenSSH known_hosts file pinning **upstream target** host keys. |
 | `PAM_RECORDING_DIR` | | `recordings` | Where session recordings are written. |
 | `PAM_LOG_LEVEL` | | `info` | `debug` \| `info` \| `warn` \| `error`. |
@@ -358,6 +362,44 @@ curl -H "X-API-Key: $PAM_API_KEY" -X POST http://localhost:8080/api/discovery/sc
   -d '{"hosts":["10.0.0.5","10.0.0.6"],"ports":[22,3389,5986],"create":true}'
 # → {"candidates":[{"host":"10.0.0.5","port":22,"protocol":"ssh",...}],"created":[...]}
 ```
+
+### Zero Standing Privilege: ephemeral SSH certificates (Phase 22)
+
+Instead of storing a password or key for an account, pamv1 can sign a
+**short-lived SSH certificate just-in-time** for each session. The account then
+has **no standing secret at all** — the target trusts only the pamv1 CA, and each
+certificate is minted fresh and expires in minutes (the Teleport / CyberArk ZSP
+model). Enable it by giving pamv1 a persistent CA key path:
+
+```bash
+PAM_SSH_CA_KEY=/data/pamv1_ssh_ca      # created on first use (0600); keep it persistent
+PAM_SSH_CERT_TTL_MIN=2                 # minted certificate validity (default 2 minutes)
+```
+
+**1. Install the CA on each target.** Fetch the CA public key and trust it:
+
+```bash
+curl -H "X-API-Key: $PAM_API_KEY" http://localhost:8080/api/ca/ssh
+# → {"type":"ssh_ca","public_key":"ssh-ed25519 AAAA... pamv1-ca","fingerprint":"SHA256:...","install_hint":"..."}
+```
+
+On the target: write `public_key` to `/etc/ssh/pamv1_ca.pub`, add
+`TrustedUserCAKeys /etc/ssh/pamv1_ca.pub` to `sshd_config`, and reload sshd.
+
+**2. Create a Zero Standing Privilege credential** — no secret is stored:
+
+```bash
+curl -H "X-API-Key: $PAM_API_KEY" -X POST http://localhost:8080/api/credentials \
+  -d '{"target_id":1,"username":"root","secret_type":"ssh_ca"}'
+# note: an ssh_ca credential must NOT carry a secret, and is only valid on ssh targets
+```
+
+**3. Connect as usual** — `ssh root@web-01@pam-host`. The proxy mints a
+certificate for `root`, valid for a couple of minutes, and authenticates with it;
+nothing is ever stored for the account. Each issuance is audited
+`session.cert_issued` (serial, principal, validity, key-id — never the key).
+Because there is no stored secret, an `ssh_ca` credential is never rotated or
+reconciled (reconcile reports it as `unsupported`).
 
 ### Windows targets (WinRM)
 
@@ -966,6 +1008,44 @@ attestation evidence without being able to change access. Every decision is
 audited (`certification.item_certified` / `certification.item_revoked`), and the
 campaign itself is the point-in-time record for your evidence file.
 
+### 9.7 Privileged threat analytics (Phase 23)
+
+pamv1 scores the audit trail into **behavioral risk** per actor, so a supervisor
+can see who is behaving abnormally — and optionally respond automatically. The
+scoring is deliberately **explainable**: every point traces to a named signal
+(break-glass use, blocked commands, authentication-failure bursts, off-hours
+activity, credential-decryption failures, session velocity), not an opaque model.
+
+```bash
+# Highest-risk actors over the last hour (CapReadAudit — an auditor may read it)
+curl -s https://pam.example/api/analytics/risk -H "X-API-Key: $PAM_API_KEY"
+# → {"window_minutes":60,"scored_events":420,"findings":[
+#      {"actor":"mallory","score":100,"level":"critical",
+#       "signals":[{"name":"break_glass","count":2,"points":100}],"events":5,...}]}
+
+# Only high-and-above, over a 24h window
+curl -s "https://pam.example/api/analytics/risk?min_level=high&window_min=1440" \
+  -H "X-API-Key: $PAM_API_KEY"
+```
+
+To run it continuously, enable the background worker. Each pass scores the window
+and, for a **newly elevated** high/critical actor, appends an
+`analytics.risk_flagged` audit event and fires your alert channel
+(`PAM_ALERT_WEBHOOK` / syslog / email). With auto-kill on, a **critical** actor's
+live sessions are terminated (`analytics.auto_response`):
+
+```bash
+PAM_ANALYTICS_INTERVAL_MIN=5      # score every 5 minutes (0 = worker off, endpoint stays on)
+PAM_ANALYTICS_WINDOW_MIN=60       # how far back each pass looks
+PAM_ANALYTICS_AUTO_KILL=true      # cut off a critical-risk actor's live sessions
+PAM_ANALYTICS_BUSINESS_START=7    # business hours (local) for the off-hours signal…
+PAM_ANALYTICS_BUSINESS_END=20     # …outside 07:00–20:00 or on a weekend counts as off-hours
+```
+
+A steady state is not re-alerted every pass (a per-actor high-water mark); a
+worsening trend is. Tune sensitivity by defaulting business hours or by leaving
+auto-kill off until you trust the scores in your environment.
+
 ---
 
 ## 10. Security & hardening notes
@@ -1000,6 +1080,8 @@ campaign itself is the point-in-time record for your evidence file.
 
 | Date | Change |
 |---|---|
+| 2026-07-21 | Phase 23: **privileged threat analytics** — explainable behavioral risk scoring over the audit trail (`GET /api/analytics/risk`, `CapReadAudit`); a background worker (`PAM_ANALYTICS_INTERVAL_MIN`) alerts on newly elevated high/critical actors and, with `PAM_ANALYTICS_AUTO_KILL`, terminates a critical actor's live sessions. See §9.7 |
+| 2026-07-21 | Phase 22: **Zero Standing Privilege** — an `ssh_ca` credential stores no secret; the proxy mints a short-lived SSH certificate just-in-time per session (`PAM_SSH_CA_KEY`, `PAM_SSH_CERT_TTL_MIN`). Install the CA on targets from `GET /api/ca/ssh`. See §6 → *Zero Standing Privilege* |
 | 2026-07-21 | Phase 21: **richer approval workflows** — multi-tier N-of-M approval chains (`PAM_APPROVALS_REQUIRED`, or per-request `approvals`), scheduled maintenance windows (`not_before`/`not_after` on a request), and mandatory reason codes (`PAM_REQUIRE_REASON`) |
 | 2026-07-21 | Phase 20: **ITSM / ticketing gate** — an access request can require a change/incident ticket (`PAM_REQUIRE_TICKET`), validated by a format regex (`PAM_TICKET_PATTERN`) and/or an ITSM webhook (`PAM_TICKET_VALIDATE_URL`); the ticket is recorded in the audit trail |
 | 2026-07-21 | Phase 19: **access certification campaigns** — `POST /api/campaigns` snapshots current access (target grants + safe members); certify/revoke each item (`revoke` deletes the grant); close to record the attestation. Management `CapManageUsers`, reading `CapReadAudit`. See §9.6 |

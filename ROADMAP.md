@@ -4,20 +4,26 @@ Guiding principle: **fully functional at every step**. Each phase ships somethin
 
 Status: ✅ done · 🚧 in progress · ⬜ planned
 
-**Phases 0–21 are shipped** — through the CyberArk/Wallix-style console, the AI-agent
+**Phases 0–23 are shipped** — through the CyberArk/Wallix-style console, the AI-agent
 access broker (MCP + SPIFFE), SOPS-encrypted secrets, the four **Tier-1
 competitive-coverage gaps** closed (a PostgreSQL session proxy, supervised sessions
 with command control, safes, dependent-account propagation), optional CyberArk Conjur
-secret sourcing, and now the three **Tier-2** access-governance gaps closed too
-(certification campaigns, an ITSM/ticketing gate, richer approval workflows) — see
-their sections below. Beyond those,
-a few items genuinely require external infrastructure to build and verify
-honestly, so they are left as documented follow-ons rather than faked:
+secret sourcing, the three **Tier-2** access-governance gaps closed
+(certification campaigns, an ITSM/ticketing gate, richer approval workflows), and now
+the two **Tier-3** market-frontier gaps that can be built and verified honestly in
+process: **Zero Standing Privilege** (ephemeral short-lived SSH certificates, Phase 22)
+and **privileged threat analytics** (behavioral risk scoring + automated response,
+Phase 23) — see their sections below. Beyond those,
+a number of items genuinely require external infrastructure or a paid account to build
+and verify honestly, so they are left as documented follow-ons rather than faked. The
+full catalogue is in **[docs/EXTERNAL-INFRA-GAPS.md](docs/EXTERNAL-INFRA-GAPS.md)**;
+the headline deferrals are:
 
 - **Optional Kerberos bind** (Phase 3b) — needs a KDC.
 - **Browser RDP viewer** (Phase 4) — needs the vendored guacamole-common-js renderer + a real browser/guacd/RDP host (the server-side tunnel is done and tested).
 - **Kerberos WinRM auth** (Phase 4) — needs a KDC + an AD-joined host.
 - **Serial (RS-232 / terminal-server) connectors** (Phase 8) — needs serial hardware.
+- **The remaining three Tier-3 gaps** — connector/plugin breadth, cloud CIEM, and web/SaaS session proxying — each need a real device, cloud account, or browser/SaaS console to build honestly.
 
 ---
 
@@ -290,6 +296,27 @@ The third [Tier-2 competitive-coverage gap](README.md#coverage-vs-commercial-pam
 - [x] **Tests**: store contract (multi-approver accumulation, scheduled-window activation) and end-to-end API tests (a 2-of-N chain — first approval pending, double-approval 409, second distinct approval grants; mandatory reason; a scheduled window round-trips)
 - Deferred (documented): **one-time (single-use) access** — needs a consume-on-connect hook in every connect gate (SSH/DB/WinRM/RDP), so it is a documented follow-on rather than a partial implementation
 
+## Phase 22 — Zero Standing Privilege (ephemeral SSH certificates) ✅
+
+The first [Tier-3 competitive-coverage gap](README.md#coverage-vs-commercial-pam-cyberark-wallix-) (where the market is moving): stop storing a standing secret for an account at all. Instead of a vaulted password/key, pamv1 signs a **short-lived SSH user certificate just-in-time** for each proxied session — the target trusts only the pamv1 CA, so the account has **no standing credential** (the Teleport / CyberArk ZSP model), built directly on the existing JIT proxy chokepoint.
+
+- [x] **SSH certificate authority** (`internal/sshca`): a persistent CA key (`PAM_SSH_CA_KEY`, generated on first use, mirrors the host-key handling) that mints short-lived user certificates. Each certificate gets a fresh ephemeral keypair (used for one dial, then discarded), a serial for audit correlation, the standard interactive extensions, and a validity of `PAM_SSH_CERT_TTL_MIN` (default 2m).
+- [x] **Zero-standing credential type** (`secret_type: "ssh_ca"`): a credential that stores **no secret** (`SecretEnc` stays empty — nothing to vault, reconcile, or rotate). Only valid on ssh targets; rejected with a secret attached. The proxy, seeing `ssh_ca`, mints a certificate at dial time and authenticates upstream with it — no vault decrypt happens, and a missing CA fails the session closed (`session.error`), never falling back to a non-existent secret.
+- [x] **CA public-key publication**: `GET /api/ca/ssh` (`CapReadInventory`) returns the CA public key in authorized_keys form + a `TrustedUserCAKeys` install hint, so an operator can configure their targets; 404 when ZSP is disabled.
+- [x] **Audit vocabulary**: `session.cert_issued` (serial · principal · valid-before · key-id — never the private key). Reconciliation reports `ssh_ca` as `unsupported`; post-session rotation and the lifecycle worker skip it (there is no secret to rotate — the cert already expired).
+- [x] **Tests**: `internal/sshca` unit tests (a minted cert is a user cert, signed by the CA, principal-scoped, and expires — checked with an `ssh.CertChecker`); an **end-to-end ZSP proxy test** against an in-process upstream that accepts **only** a CA-signed certificate (no password auth exists), proving the account has no standing secret; a without-CA fail-closed test; and API tests for the credential rules + the CA endpoint.
+- Deferred (documented): ephemeral **local accounts** (create/destroy the OS account per session — needs a real host), host-certificate issuance, and per-principal certificate options/source-address restrictions.
+
+## Phase 23 — Privileged threat analytics ✅
+
+The second [Tier-3 gap](README.md#coverage-vs-commercial-pam-cyberark-wallix-): behavioral anomaly detection, risk scoring, and automated response over the privileged-session stream (the CyberArk PTA / Wallix analytics capability) — computed from the audit trail pamv1 already produces.
+
+- [x] **Deterministic, explainable risk engine** (`internal/analytics`): a pure scorer over audit events (no clock, no I/O, no opaque model) — every point of an actor's score traces back to a named **signal**: break-glass use, blocked commands, authentication-failure bursts, off-hours activity, credential-decryption failures, and session velocity. Weights, per-signal caps, level thresholds, and business hours are configurable; a single break-glass access alone reaches **high**.
+- [x] **Risk API**: `GET /api/analytics/risk` (`CapReadAudit`) scores the recent audit window into per-actor findings (score, level, contributing signals), sorted by score, filterable by `?min_level=` and `?window_min=` — so an auditor reviews risk without changing any access.
+- [x] **Background worker + automated response** (`RunAnalyticsWorker`, `PAM_ANALYTICS_INTERVAL_MIN`): each pass scores the window, and for a **newly elevated** high/critical actor appends `analytics.risk_flagged`, fires the alert channel, and — with `PAM_ANALYTICS_AUTO_KILL` on — **terminates a critical actor's live sessions** (`session.Registry.KillByActor`, audited `analytics.auto_response`). A steady state is not re-alerted every pass; a worsening trend is.
+- [x] **Tests**: engine unit tests (break-glass → high; clean in-hours work → no finding; off-hours contribution; auth-failure burst + score-descending sort; per-signal cap) and API tests (the risk endpoint scores + enforces `CapReadAudit`; the worker flags, alerts, dedupes, and auto-kills a critical actor's sessions).
+- Deferred (documented): peer-baseline / new-target novelty scoring (needs a longer history model), step-up-MFA response, and a 5250 console risk dashboard.
+
 ---
 
-**Tier-2 (access-governance depth) is now complete** — certification campaigns (19), the ITSM/ticketing gate (20), and richer approval workflows (21). See the [competitive-coverage section](README.md#coverage-vs-commercial-pam-cyberark-wallix-) for the remaining tiers.
+**Tier-2 (access-governance depth) is complete** — certification campaigns (19), the ITSM/ticketing gate (20), and richer approval workflows (21). **Tier-3 is under way**: Zero Standing Privilege (22) and privileged threat analytics (23) are shipped; connector/plugin breadth, cloud CIEM, and web/SaaS session proxying remain, each requiring external infrastructure to build honestly (see [docs/EXTERNAL-INFRA-GAPS.md](docs/EXTERNAL-INFRA-GAPS.md)). See the [competitive-coverage section](README.md#coverage-vs-commercial-pam-cyberark-wallix-) for the full picture.

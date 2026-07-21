@@ -386,6 +386,13 @@ func (s *Server) reconcileOne(ctx context.Context, cred *store.Credential, targe
 	res := reconcileResult{
 		CredentialID: cred.ID, TargetID: target.ID, Target: target.Name, Username: cred.Username,
 	}
+	// A Zero Standing Privilege credential holds no stored secret — there is
+	// nothing to reconcile (each certificate is minted JIT and already expired).
+	if cred.SecretType == "ssh_ca" {
+		res.Status = "unsupported"
+		res.Detail = "zero standing privilege (no stored secret to reconcile)"
+		return res
+	}
 	verifier, ok := s.verifiers[target.Protocol]
 	if !ok {
 		res.Status = "unsupported"

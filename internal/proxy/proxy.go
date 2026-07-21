@@ -31,6 +31,7 @@ import (
 	"github.com/morandeirachema/pamv1/internal/auth"
 	"github.com/morandeirachema/pamv1/internal/logging"
 	"github.com/morandeirachema/pamv1/internal/session"
+	"github.com/morandeirachema/pamv1/internal/sshca"
 	"github.com/morandeirachema/pamv1/internal/store"
 	"github.com/morandeirachema/pamv1/internal/vault"
 	"github.com/morandeirachema/pamv1/internal/winrm"
@@ -70,6 +71,13 @@ type Config struct {
 	// Live, when set, receives a copy of every recorded output byte keyed by
 	// session id, so a supervisor can watch a session live (Phase 16).
 	Live *session.Hub
+	// CA, when set, enables Zero Standing Privilege (Phase 22): for a credential
+	// of type "ssh_ca" the proxy mints a short-lived SSH user certificate signed
+	// by this authority and authenticates upstream with it — no standing secret is
+	// stored for the account (the target trusts the CA via TrustedUserCAKeys).
+	CA *sshca.CertAuthority
+	// CertTTL is how long a minted ZSP certificate is valid (default 2m).
+	CertTTL time.Duration
 }
 
 // JumpConfig configures reaching SSH targets through an SSH bastion.
@@ -100,6 +108,8 @@ type Proxy struct {
 	requireRec   bool
 	guard        *CommandGuard
 	live         *session.Hub
+	ca           *sshca.CertAuthority
+	certTTL      time.Duration
 
 	bg sync.WaitGroup // background tasks (post-session rotation) to drain on shutdown
 
@@ -144,7 +154,12 @@ func New(st store.Store, v *vault.Vault, resolver *auth.Resolver, cfg Config) (*
 		requireRec:   cfg.RequireRecording,
 		guard:        cfg.CommandGuard,
 		live:         cfg.Live,
+		ca:           cfg.CA,
+		certTTL:      cfg.CertTTL,
 		conns:        make(map[net.Conn]struct{}),
+	}
+	if p.certTTL <= 0 {
+		p.certTTL = 2 * time.Minute
 	}
 	if p.upstreamHKCB == nil {
 		p.log.Warn("upstream SSH host keys are NOT verified (set PAM_SSH_KNOWN_HOSTS to pin them)")
@@ -456,14 +471,26 @@ func (p *Proxy) handleConn(ctx context.Context, nConn net.Conn) {
 		return
 	}
 
-	// Every authorization gate has passed — decrypt the secret just-in-time.
-	// Plaintext exists only from here on, never for a session that was denied.
-	secret, err := p.decryptSecret(ctx, target, cred)
-	if err != nil {
-		p.log.Error("credential decryption failed", "actor", actor, "target", target.Name, "err", err)
-		p.audit(ctx, actor, "credential.decrypt_failed",
-			fmt.Sprintf("target:%s cred_user:%s op:connect", target.Name, cred.Username))
-		rejectAll(chans, ssh.ConnectionFailed, "pamv1: credential unavailable")
+	// Every authorization gate has passed — obtain the upstream credential
+	// just-in-time. A Zero Standing Privilege ("ssh_ca") credential has no stored
+	// secret: the proxy mints a short-lived certificate at dial time instead
+	// (dialUpstream). Every other credential's secret is decrypted here — plaintext
+	// exists only from this point, never for a session that was denied.
+	var secret string
+	if cred.SecretType != "ssh_ca" {
+		secret, err = p.decryptSecret(ctx, target, cred)
+		if err != nil {
+			p.log.Error("credential decryption failed", "actor", actor, "target", target.Name, "err", err)
+			p.audit(ctx, actor, "credential.decrypt_failed",
+				fmt.Sprintf("target:%s cred_user:%s op:connect", target.Name, cred.Username))
+			rejectAll(chans, ssh.ConnectionFailed, "pamv1: credential unavailable")
+			return
+		}
+	} else if p.ca == nil {
+		p.log.Error("zero-standing-privilege credential but no SSH CA configured", "actor", actor, "target", target.Name)
+		p.audit(ctx, actor, "session.error",
+			fmt.Sprintf("target:%s cred_user:%s reason:no-ssh-ca", target.Name, cred.Username))
+		rejectAll(chans, ssh.ConnectionFailed, "pamv1: zero standing privilege is not configured on this server")
 		return
 	}
 
@@ -476,7 +503,7 @@ func (p *Proxy) handleConn(ctx context.Context, nConn net.Conn) {
 		return
 	}
 
-	upstream, err := p.dialUpstream(target, cred, secret)
+	upstream, err := p.dialUpstream(ctx, target, cred, secret, actor)
 	if err != nil {
 		p.log.Error("upstream connection failed", "actor", actor, "target", target.Name,
 			"host", fmt.Sprintf("%s:%d", target.Host, target.Port), "err", err)
@@ -547,24 +574,41 @@ func (p *Proxy) decryptSecret(ctx context.Context, target *store.Target, cred *s
 	return jitDecrypt(ctx, p.vault, target, cred)
 }
 
-// dialUpstream opens an SSH client to the target, authenticating with the
-// decrypted secret as either a parsed private key (SecretType "ssh_key") or a
-// password. The upstream host key is checked via the configured callback.
-func (p *Proxy) dialUpstream(target *store.Target, cred *store.Credential, secret string) (*ssh.Client, error) {
-	var auth ssh.AuthMethod
+// dialUpstream opens an SSH client to the target. For a Zero Standing Privilege
+// ("ssh_ca") credential it mints a short-lived certificate just-in-time and
+// authenticates with it (no standing secret); otherwise it authenticates with
+// the decrypted secret as a parsed private key ("ssh_key") or a password. The
+// upstream host key is checked via the configured callback.
+func (p *Proxy) dialUpstream(ctx context.Context, target *store.Target, cred *store.Credential, secret, actor string) (*ssh.Client, error) {
+	var authMethod ssh.AuthMethod
 	switch cred.SecretType {
+	case "ssh_ca":
+		if p.ca == nil {
+			return nil, errors.New("zero-standing-privilege credential but no SSH CA configured")
+		}
+		keyID := fmt.Sprintf("pamv1:%s@%s", actor, target.Name)
+		certSigner, cert, err := p.ca.IssueUser(cred.Username, p.certTTL, keyID)
+		if err != nil {
+			return nil, fmt.Errorf("mint certificate: %w", err)
+		}
+		// Audit the issuance (serial + validity + key-id, never the private key), so
+		// a minted certificate is accounted for even if the subsequent dial fails.
+		p.audit(ctx, actor, "session.cert_issued",
+			fmt.Sprintf("target:%s principal:%s serial:%d valid_before:%d key_id:%s",
+				target.Name, cred.Username, cert.Serial, cert.ValidBefore, keyID))
+		authMethod = ssh.PublicKeys(certSigner)
 	case "ssh_key":
 		signer, err := ssh.ParsePrivateKey([]byte(secret))
 		if err != nil {
 			return nil, fmt.Errorf("parse ssh key: %w", err)
 		}
-		auth = ssh.PublicKeys(signer)
+		authMethod = ssh.PublicKeys(signer)
 	default:
-		auth = ssh.Password(secret)
+		authMethod = ssh.Password(secret)
 	}
 	cfg := &ssh.ClientConfig{
 		User:            cred.Username,
-		Auth:            []ssh.AuthMethod{auth},
+		Auth:            []ssh.AuthMethod{authMethod},
 		HostKeyCallback: p.upstreamHKCB,
 		Timeout:         p.dialTimeout,
 	}

@@ -10,11 +10,13 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/morandeirachema/pamv1/internal/agentid"
 	"github.com/morandeirachema/pamv1/internal/alert"
+	"github.com/morandeirachema/pamv1/internal/analytics"
 	"github.com/morandeirachema/pamv1/internal/auditchain"
 	"github.com/morandeirachema/pamv1/internal/auth"
 	"github.com/morandeirachema/pamv1/internal/broker"
@@ -24,6 +26,7 @@ import (
 	"github.com/morandeirachema/pamv1/internal/policy"
 	"github.com/morandeirachema/pamv1/internal/rotate"
 	"github.com/morandeirachema/pamv1/internal/session"
+	"github.com/morandeirachema/pamv1/internal/sshca"
 	"github.com/morandeirachema/pamv1/internal/store"
 	"github.com/morandeirachema/pamv1/internal/ticket"
 	"github.com/morandeirachema/pamv1/internal/vault"
@@ -174,6 +177,18 @@ type Options struct {
 	// BrokerSVIDVerifier (optional) accepts SPIFFE JWT-SVIDs in addition to static
 	// agent keys (Phase 13d); nil = static keys only.
 	BrokerSVIDVerifier agentid.Verifier
+	// CA (optional) is the Zero Standing Privilege SSH certificate authority
+	// (Phase 22). When set, GET /api/ca/ssh publishes its public key so operators
+	// can install it in a target's TrustedUserCAKeys; nil disables ZSP.
+	CA *sshca.CertAuthority
+	// Analytics (optional) enables privileged threat analytics (Phase 23): the
+	// GET /api/analytics/risk endpoint and, when AnalyticsInterval > 0, a
+	// background risk-scoring worker. nil disables both. AnalyticsWindow is how
+	// far back each pass scores (default 60m); AnalyticsAutoKill terminates a
+	// critical-risk actor's live sessions.
+	Analytics         *analytics.Engine
+	AnalyticsWindow   time.Duration
+	AnalyticsAutoKill bool
 }
 
 type Server struct {
@@ -204,6 +219,12 @@ type Server struct {
 	sshConnector       rotate.SSHConnector // one-shot SSH exec for the broker's ssh_exec tool
 	airGap             bool
 	discoveryDial      func(ctx context.Context, network, addr string) (net.Conn, error)
+	sshCA              *sshca.CertAuthority
+	analytics          *analytics.Engine
+	analyticsWindow    time.Duration
+	analyticsAutoKill  bool
+	analyticsMu        sync.Mutex
+	analyticsAlerted   map[string]int // actor → highest score already alerted on
 	metrics            *metrics.Metrics
 	log                *slog.Logger
 	mux                *http.ServeMux
@@ -379,6 +400,11 @@ func New(st store.Store, v *vault.Vault, resolver *auth.Resolver, authn auth.Aut
 		airGap:             opts.AirGap,
 		discoveryDial:      opts.DiscoveryDial,
 		reconfigure:        opts.Reconfigure,
+		sshCA:              opts.CA,
+		analytics:          opts.Analytics,
+		analyticsWindow:    opts.AnalyticsWindow,
+		analyticsAutoKill:  opts.AnalyticsAutoKill,
+		analyticsAlerted:   make(map[string]int),
 		metrics:            metrics.New(),
 		log:                logging.Component("api"),
 		mux:                http.NewServeMux(),
@@ -398,6 +424,9 @@ func New(st store.Store, v *vault.Vault, resolver *auth.Resolver, authn auth.Aut
 		CheckoutTTL:      opts.CheckoutTTL,
 		AllowedProtocols: opts.AllowedProtocols,
 	}))
+	if s.analyticsWindow <= 0 {
+		s.analyticsWindow = time.Hour
+	}
 	if s.sessions != nil {
 		s.metrics.SetActiveSessionsSource(func() int { return len(s.sessions.List()) })
 	}
@@ -524,6 +553,10 @@ func (s *Server) routes() {
 	s.mux.Handle("POST /api/targets/{id}/winrm", s.authz(auth.CapConnect, s.runWinRM))
 	s.mux.HandleFunc("GET /api/targets/{id}/rdp", s.rdpTunnel) // WebSocket; auths via query token
 
+	// Zero Standing Privilege (Phase 22): publish the SSH CA public key so an
+	// operator can install it in a target's TrustedUserCAKeys. 404 when ZSP is off.
+	s.mux.Handle("GET /api/ca/ssh", s.authz(auth.CapReadInventory, s.sshCAPublicKey))
+
 	s.mux.Handle("POST /api/credentials", s.authz(auth.CapManageCredentials, s.createCredential))
 	s.mux.Handle("GET /api/credentials", s.authz(auth.CapReadInventory, s.listCredentials))
 	s.mux.Handle("POST /api/credentials/{id}/reveal", s.authz(auth.CapRevealSecret, s.revealCredential))
@@ -555,6 +588,12 @@ func (s *Server) routes() {
 	s.mux.Handle("GET /api/sessions", s.authz(auth.CapReadAudit, s.listSessions))
 	s.mux.Handle("GET /api/sessions/{id}/stream", s.authz(auth.CapReadAudit, s.streamSession))
 	s.mux.Handle("DELETE /api/sessions/{id}", s.authz(auth.CapManageTargets, s.killSession))
+
+	// Privileged threat analytics (Phase 23): behavioral risk scores over the
+	// audit trail. Read-only, so an auditor may review risk without changing state.
+	if s.analytics != nil {
+		s.mux.Handle("GET /api/analytics/risk", s.authz(auth.CapReadAudit, s.analyticsRisk))
+	}
 
 	s.mux.Handle("POST /api/users", s.authz(auth.CapManageUsers, s.createUser))
 	s.mux.Handle("GET /api/users", s.authz(auth.CapManageUsers, s.listUsers))

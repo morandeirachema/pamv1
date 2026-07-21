@@ -292,11 +292,15 @@ existing chokepoint architecture, and they map to candidate future phases.
 
 | Gap | Leaders | pamv1 today |
 |---|---|---|
-| **Zero Standing Privilege** — ephemeral accounts / short-lived SSH certs instead of a stored standing secret | [CyberArk ZSP](https://www.cyberark.com/what-is/zero-standing-privileges/), Teleport | vaulted standing credential + JIT injection |
-| **Connector / plugin breadth** — network devices (Cisco/Juniper/F5/Palo Alto), database accounts, cloud IAM, VMware/SAP/mainframe | CyberArk's core moat | SSH / WinRM / ssh_key rotation only |
-| **Cloud privileged access (CIEM-lite)** — federated console + short-lived cloud credentials, entitlement right-sizing | CyberArk, Wallix | AWS KMS for the KEK only |
-| **Privileged threat analytics** — behavioural anomaly detection, risk scoring, automated response | CyberArk PTA, Wallix | raw audited stream + syslog/SIEM export (detect downstream) |
-| **Web / SaaS session proxying** — record + inject into web admin consoles | CyberArk Secure Web Sessions, Wallix | SSH/WinRM/RDP only (the heaviest lift) |
+| ~~**Zero Standing Privilege**~~ **✅ shipped (Phase 22)** — ephemeral short-lived SSH certificates instead of a stored standing secret | [CyberArk ZSP](https://www.cyberark.com/what-is/zero-standing-privileges/), Teleport | an `ssh_ca` credential stores **no secret**; the proxy mints a short-lived cert (`PAM_SSH_CA_KEY`) signed by the pamv1 CA per session — the account has no standing credential |
+| ~~**Privileged threat analytics**~~ **✅ shipped (Phase 23)** — behavioural risk scoring + automated response | CyberArk PTA, Wallix | `internal/analytics` scores the audit trail into explainable per-actor risk (`GET /api/analytics/risk`); a worker alerts on and can auto-kill a critical actor's sessions |
+| **Connector / plugin breadth** — network devices (Cisco/Juniper/F5/Palo Alto), database accounts, cloud IAM, VMware/SAP/mainframe | CyberArk's core moat | SSH (incl. network devices) / WinRM / PostgreSQL / ssh_key rotation — **needs real devices/DBs** to extend honestly |
+| **Cloud privileged access (CIEM-lite)** — federated console + short-lived cloud credentials, entitlement right-sizing | CyberArk, Wallix | AWS KMS for the KEK only — **needs a cloud account** to broker short-lived cloud creds |
+| **Web / SaaS session proxying** — record + inject into web admin consoles | CyberArk Secure Web Sessions, Wallix | SSH/WinRM/RDP only (the heaviest lift; **needs a browser + SaaS console**) |
+
+Two of the five Tier-3 gaps are closed. The remaining three each require external
+infrastructure or an account to build and verify honestly — catalogued, with what to
+stand up, in **[docs/EXTERNAL-INFRA-GAPS.md](docs/EXTERNAL-INFRA-GAPS.md)**.
 
 ### Tier 4 — ecosystem
 
@@ -320,7 +324,7 @@ vault + proxy chokepoint, and is **out of scope** by design.
 2. ~~**Phase 16 — Live monitoring + command control**~~ ✅ **shipped** (SSE live stream + regex command control on exec/WinRM/SQL).
 3. ~~**Phase 17 — Safes / containers + dependent-account propagation**~~ ✅ **shipped** — the authorization upgrade for multi-team use and *safe* service-account rotation.
 
-**All four Tier-1 gaps are now closed.** The remaining tiers (governance depth, ZSP, connector breadth, cloud, analytics, web proxying) are the next frontier.
+**All four Tier-1 gaps and all three Tier-2 gaps are closed**, and **two of the five Tier-3 gaps** (Zero Standing Privilege, privileged threat analytics). The rest of Tier 3 (connector breadth, cloud CIEM, web proxying) and the Tier-4 ecosystem are the next frontier — each gated on external infrastructure or accounts, catalogued in [docs/EXTERNAL-INFRA-GAPS.md](docs/EXTERNAL-INFRA-GAPS.md).
 
 ## Quickstart
 
