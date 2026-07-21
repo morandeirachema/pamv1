@@ -155,6 +155,9 @@ erDiagram
     ptr_time_Time DecidedAt
     time_Time ExpiresAt
     string Ticket
+    int RequiredApprovals
+    string ApprovedBy
+    ptr_time_Time NotBefore
   }
   AgentKey {
     int64 ID

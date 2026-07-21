@@ -545,6 +545,8 @@ func run() error {
 		ApprovalWindow:      cfg.ApprovalWindow,
 		TicketValidator:     ticketValidator,
 		RequireTicket:       cfg.RequireTicket,
+		ApprovalsRequired:   cfg.ApprovalsRequired,
+		RequireReason:       cfg.RequireReason,
 		AirGap:              cfg.AirGap,
 		CheckoutTTL:         cfg.CheckoutTTL,
 		AllowedProtocols:    splitAndTrim(cfg.AllowedProtocols),

@@ -95,6 +95,11 @@ type Config struct {
 	RequireTicket     bool
 	TicketPattern     string
 	TicketValidateURL string
+	// Approval workflow (Phase 21). ApprovalsRequired is the default number of
+	// distinct approvers an access request needs (multi-tier chains); a request
+	// may ask for more. RequireReason rejects an access request with no reason.
+	ApprovalsRequired int
+	RequireReason     bool
 	// CheckoutTTL is the lifetime of a credential checkout lease.
 	CheckoutTTL time.Duration
 	// AllowedProtocols restricts which target protocols may be created and
@@ -267,6 +272,8 @@ func Load() (*Config, error) {
 		RequireTicket:       boolean("PAM_REQUIRE_TICKET", false),
 		TicketPattern:       os.Getenv("PAM_TICKET_PATTERN"),
 		TicketValidateURL:   os.Getenv("PAM_TICKET_VALIDATE_URL"),
+		ApprovalsRequired:   integer("PAM_APPROVALS_REQUIRED", 1),
+		RequireReason:       boolean("PAM_REQUIRE_REASON", false),
 		AirGap:              boolean("PAM_OT_AIRGAP", false),
 		CheckoutTTL:         time.Duration(integer("PAM_CHECKOUT_TTL_MIN", 30)) * time.Minute,
 		AllowedProtocols:    os.Getenv("PAM_ALLOWED_PROTOCOLS"),

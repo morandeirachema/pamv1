@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/morandeirachema/pamv1/internal/alert"
@@ -16,6 +17,12 @@ type accessRequestIn struct {
 	TargetID int64  `json:"target_id"`
 	Reason   string `json:"reason"`
 	Ticket   string `json:"ticket"`
+	// Phase 21: multi-tier chains + scheduled windows. Approvals asks for more
+	// than the configured minimum distinct approvers; NotBefore/NotAfter schedule
+	// a maintenance window (the approval is only active between them).
+	Approvals int        `json:"approvals,omitempty"`
+	NotBefore *time.Time `json:"not_before,omitempty"`
+	NotAfter  *time.Time `json:"not_after,omitempty"`
 }
 
 // createAccessRequest files a request to connect to a target. The requester is
@@ -27,6 +34,11 @@ func (s *Server) createAccessRequest(w http.ResponseWriter, r *http.Request) {
 	}
 	if _, err := s.store.GetTarget(r.Context(), in.TargetID); err != nil {
 		storeError(w, err)
+		return
+	}
+	// Mandatory reason code (Phase 21), when configured.
+	if s.requireReason && in.Reason == "" {
+		writeError(w, http.StatusUnprocessableEntity, "a reason is required for access requests")
 		return
 	}
 	// ITSM / ticketing gate (Phase 20): require and/or validate a change ticket
@@ -42,19 +54,36 @@ func (s *Server) createAccessRequest(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// Multi-tier chains + scheduled window (Phase 21). RequiredApprovals is the
+	// larger of the request's ask and the configured default (at least 1). The
+	// window defaults to now → now+approvalWindow; a scheduled request supplies
+	// not_before / not_after.
+	required := s.approvalsRequired
+	if in.Approvals > required {
+		required = in.Approvals
+	}
+	if required < 1 {
+		required = 1
+	}
+	expires := time.Now().Add(s.rt().approvalWindow).UTC()
+	if in.NotAfter != nil {
+		expires = in.NotAfter.UTC()
+	}
 	ar := store.AccessRequest{
-		Requester: actorFrom(r.Context()),
-		TargetID:  in.TargetID,
-		Reason:    in.Reason,
-		Status:    "pending",
-		ExpiresAt: time.Now().Add(s.rt().approvalWindow).UTC(),
-		Ticket:    in.Ticket,
+		Requester:         actorFrom(r.Context()),
+		TargetID:          in.TargetID,
+		Reason:            in.Reason,
+		Status:            "pending",
+		ExpiresAt:         expires,
+		Ticket:            in.Ticket,
+		RequiredApprovals: required,
+		NotBefore:         in.NotBefore,
 	}
 	if err := s.store.CreateAccessRequest(r.Context(), &ar); err != nil {
 		storeError(w, err)
 		return
 	}
-	s.audit(r.Context(), "access.request", fmt.Sprintf("request:%d target:%d reason:%q ticket:%q", ar.ID, ar.TargetID, ar.Reason, ar.Ticket))
+	s.audit(r.Context(), "access.request", fmt.Sprintf("request:%d target:%d reason:%q ticket:%q approvals_required:%d", ar.ID, ar.TargetID, ar.Reason, ar.Ticket, ar.RequiredApprovals))
 	writeJSON(w, http.StatusCreated, ar)
 }
 
@@ -108,23 +137,79 @@ func (s *Server) decideAccessRequest(w http.ResponseWriter, r *http.Request, dec
 		writeError(w, http.StatusConflict, "request already "+ar.Status)
 		return
 	}
-	if err := s.store.DecideAccessRequest(r.Context(), ar.ID, decision, approver, time.Now()); err != nil {
-		storeError(w, err)
+
+	// A single deny is final.
+	if decision == "denied" {
+		if err := s.store.DecideAccessRequest(r.Context(), ar.ID, "denied", approver, time.Now()); err != nil {
+			storeError(w, err)
+			return
+		}
+		s.notifyDecision(r, "access.deny", approver, ar)
+		ar.Status = "denied"
+		ar.Approver = approver
+		writeJSON(w, http.StatusOK, ar)
 		return
 	}
-	action := "access.approve"
-	if decision == "denied" {
-		action = "access.deny"
+
+	// Approve: accumulate DISTINCT approvers (Phase 21 multi-tier chains). The
+	// request is granted only once RequiredApprovals of them have approved.
+	approvers := splitApprovers(ar.ApprovedBy)
+	for _, a := range approvers {
+		if strings.EqualFold(a, approver) {
+			writeError(w, http.StatusConflict, "you have already approved this request")
+			return
+		}
 	}
-	s.audit(r.Context(), action, fmt.Sprintf("request:%d requester:%s target:%d", ar.ID, ar.Requester, ar.TargetID))
+	approvers = append(approvers, approver)
+	required := ar.RequiredApprovals
+	if required < 1 {
+		required = 1
+	}
+	joined := strings.Join(approvers, ",")
+	if len(approvers) >= required {
+		now := time.Now()
+		if err := s.store.SetApprovalState(r.Context(), ar.ID, joined, "approved", approver, &now); err != nil {
+			storeError(w, err)
+			return
+		}
+		s.audit(r.Context(), "access.approve", fmt.Sprintf("request:%d requester:%s target:%d approvers:%d/%d", ar.ID, ar.Requester, ar.TargetID, len(approvers), required))
+		s.notifyDecision(r, "access.approve", approver, ar)
+		ar.Status = "approved"
+		ar.Approver = approver
+	} else {
+		if err := s.store.SetApprovalState(r.Context(), ar.ID, joined, "pending", "", nil); err != nil {
+			storeError(w, err)
+			return
+		}
+		s.audit(r.Context(), "access.approve_partial", fmt.Sprintf("request:%d target:%d approver:%s approvals:%d/%d", ar.ID, ar.TargetID, approver, len(approvers), required))
+	}
+	ar.ApprovedBy = joined
+	writeJSON(w, http.StatusOK, ar)
+}
+
+// splitApprovers parses a comma-joined approver set into a trimmed, non-empty
+// slice.
+func splitApprovers(s string) []string {
+	var out []string
+	for _, a := range strings.Split(s, ",") {
+		if a = strings.TrimSpace(a); a != "" {
+			out = append(out, a)
+		}
+	}
+	return out
+}
+
+// notifyDecision audits nothing (the caller audits) but fires the real-time
+// alert for a final approve/deny decision.
+func (s *Server) notifyDecision(r *http.Request, action, approver string, ar *store.AccessRequest) {
+	if action == "access.deny" {
+		s.audit(r.Context(), "access.deny", fmt.Sprintf("request:%d requester:%s target:%d", ar.ID, ar.Requester, ar.TargetID))
+	}
 	s.alerter.Notify(r.Context(), alert.Event{
 		Type: action, Actor: approver,
 		Detail: fmt.Sprintf("request:%d requester:%s target:%d", ar.ID, ar.Requester, ar.TargetID),
 		Remote: r.RemoteAddr, Time: time.Now(),
 	})
-	ar.Status = decision
-	ar.Approver = approver
-	writeJSON(w, http.StatusOK, ar)
 }
 
 // --- enforcement ---

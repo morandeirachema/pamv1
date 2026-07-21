@@ -5,7 +5,7 @@
 > the codebase; the conceptual view lives in
 > [ARCHITECTURE-HIGH-LEVEL.md](ARCHITECTURE-HIGH-LEVEL.md).
 >
-> Last updated: 2026-07-21 · Reflects: **Phases 0–18 shipped** — through the 5250 management console (11), the configuration subsystem + custom-profile RBAC + hot-swap (12), the AI-agent access broker (13), SOPS-encrypted secrets (14), the PostgreSQL database session proxy (15), live session monitoring + command control (16), safes + dependent-account propagation (17), optional CyberArk Conjur secret sourcing (18), access certification campaigns (19), and an ITSM/ticketing gate (20) — plus the security/correctness hardening passes and code-generated diagrams. See the [ROADMAP](../ROADMAP.md) for authoritative per-phase status. Commit the doc update with the code change.
+> Last updated: 2026-07-21 · Reflects: **Phases 0–18 shipped** — through the 5250 management console (11), the configuration subsystem + custom-profile RBAC + hot-swap (12), the AI-agent access broker (13), SOPS-encrypted secrets (14), the PostgreSQL database session proxy (15), live session monitoring + command control (16), safes + dependent-account propagation (17), optional CyberArk Conjur secret sourcing (18), access certification campaigns (19), an ITSM/ticketing gate (20), and richer approval workflows (21) — plus the security/correctness hardening passes and code-generated diagrams. See the [ROADMAP](../ROADMAP.md) for authoritative per-phase status. Commit the doc update with the code change.
 
 ## 1. Language, layout, dependencies
 
@@ -364,6 +364,8 @@ cancelled shutdown context so they are not dropped mid-drain.
 | `PAM_CONJUR_CACERT` | "" | PEM CA bundle for TLS to Conjur |
 | `PAM_REQUIRE_TICKET` | `false` | require an ITSM ticket on access requests (Phase 20) |
 | `PAM_TICKET_PATTERN` / `PAM_TICKET_VALIDATE_URL` | "" | ticket format regex / ITSM validation webhook |
+| `PAM_APPROVALS_REQUIRED` | `1` | default distinct approvers per access request (Phase 21) |
+| `PAM_REQUIRE_REASON` | `false` | reject an access request with no reason |
 | `PAM_LISTEN_ADDR` | `:8080` | http server |
 | `PAM_SSH_ADDR` | `:2222`; `off` disables | proxy |
 | `PAM_DB_ADDR` | `off` | PostgreSQL session-proxy listen address (Phase 15) |
@@ -457,7 +459,7 @@ secrets. Format `json` (SIEM) or `text` (humans); collect from stdout.
 `safe.create` · `safe.delete` · `safe.member.add` · `safe.member.remove` · `target.safe_set` ·
 `dependency.create` · `dependency.delete` · `credential.dependency_updated` · `credential.dependency_failed` ·
 `certification.campaign_created` · `certification.item_certified` · `certification.item_revoked` · `certification.campaign_closed` ·
-`access.ticket_rejected` ·
+`access.ticket_rejected` · `access.approve_partial` ·
 `agent.create` · `agent.revoke` · `broker.tool_call.requested` · `broker.tool_call.executed` · `broker.tool_call.denied` · `broker.tool_call.pending_approval` · `broker.tool_call.failed` · `broker.tool_call.resumed` · `broker.approval.granted` · `broker.approval.denied` ·
 `config.update` · `config.revert` · `profile.create` · `profile.delete`. The actor is the Principal name
 (`bootstrap-admin`, `break-glass`, a username, or an agent name). Agent-broker
@@ -527,6 +529,7 @@ events are also written to the separate tamper-evident `broker_audit_events` cha
 
 | Date | Change |
 |---|---|
+| 2026-07-21 | Phase 21 (richer approval workflows): multi-tier chains + scheduled windows + mandatory reason on the access-request engine (migration `0016`: `required_approvals`, `approved_by`, `not_before`). **N-of-M** — `decideAccessRequest`'s approve path accumulates DISTINCT approvers into `approved_by` via the new `store.SetApprovalState`; the request stays `pending` (audit `access.approve_partial`) until `RequiredApprovals` is met, then `approved` (double-approval 409, self-approval still 403). **Scheduled window** — `not_before`/`not_after`; `HasActiveApproval` now also requires `not_before <= now`. **Mandatory reason** — `PAM_REQUIRE_REASON`. New env `PAM_APPROVALS_REQUIRED`/`PAM_REQUIRE_REASON` (via `api.Options`). Completes Tier-2. One-time access deferred (needs a consume hook in every connect gate). Store contract + end-to-end API tests |
 | 2026-07-21 | Phase 20 (ITSM / ticketing gate): "no access without an approved change ticket". New `internal/ticket` (no new dependency): a `Validator` with two optional, composable checks — a regex format (`PAM_TICKET_PATTERN`) and a webhook (`PAM_TICKET_VALIDATE_URL`, `POST {"ticket":…}` → 2xx = valid). `createAccessRequest` accepts a `ticket`: mandatory when `PAM_REQUIRE_TICKET` (422 otherwise), validated when a validator is configured (422 + `access.ticket_rejected` on failure), and recorded on the request + in the `access.request` audit (`store.AccessRequest.Ticket`, migration `0015`). Wired via `api.Options.TicketValidator`/`RequireTicket`. Fake-webhook API test + a `ticket` unit test |
 | 2026-07-21 | Phase 19 (access certification campaigns): the first Tier-2 gap. `POST /api/campaigns` snapshots the current access grants — every target grant + every safe member — as `campaign_items` (migration `0014`: `campaigns`, `campaign_items`). `POST /api/campaigns/{id}/items/{iid}/decision {certify\|revoke}` records the attestation; a **revoke deletes the underlying grant** (`DeleteTargetGrant`/`DeleteSafeMember`, no-op if already gone), `…/close` closes it (further decisions 409). Management is `CapManageUsers`, reading `CapReadAudit` (an auditor reviews without changing access) — no new capability. New store types `Campaign`/`CampaignItem`; audit vocab `certification.campaign_created`/`item_certified`/`item_revoked`/`campaign_closed`. Store contract + end-to-end API test |
 | 2026-07-21 | Phase 18 (Conjur secret sourcing): pamv1 can source its **own** bootstrap secrets from CyberArk Conjur at startup — the runtime-broker alternative to the SOPS GitOps sealing (Phase 14), which stays the default. New `internal/conjur` (hand-rolled over two REST endpoints, **no new dependency**): `New`/`Authenticate`/`Get` with `authn-api-key` **and** `authn-jwt` (a Kubernetes projected SA token — no bootstrap secret in Git), TLS with an optional CA bundle. `conjur.SourceEnv(ctx)` runs in `main` **before `config.Load`**: when `PAM_CONJUR_URL` is set it fills any empty bootstrap `PAM_*` (`master-key`/`api-key`/`database-url`/`break-glass-key-hash`/`broker-audit-key`/`_sign-seed`) from `PAM_CONJUR_POLICY_PREFIX/<name>`; an explicit env value wins, a 404 variable is skipped, a configured-but-unreachable Conjur is fail-loud. Same philosophy as the pluggable KEK (externalize the root of trust), now for the secret values. New env `PAM_CONJUR_*`; `deploy/k8s/conjur/` (policy + authn-jwt Deployment + README). Fake-Conjur tests; no schema/wire-format/audit-vocab change |

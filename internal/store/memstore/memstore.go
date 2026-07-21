@@ -490,7 +490,29 @@ func (m *Memstore) CreateAccessRequest(_ context.Context, ar *store.AccessReques
 	if ar.Status == "" {
 		ar.Status = "pending"
 	}
+	if ar.RequiredApprovals < 1 {
+		ar.RequiredApprovals = 1
+	}
 	m.accessReq[ar.ID] = *ar
+	return nil
+}
+
+// SetApprovalState records a multi-approver decision (Phase 21).
+func (m *Memstore) SetApprovalState(_ context.Context, id int64, approvedBy, status, approver string, decidedAt *time.Time) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	ar, ok := m.accessReq[id]
+	if !ok {
+		return store.ErrNotFound
+	}
+	ar.ApprovedBy = approvedBy
+	ar.Status = status
+	ar.Approver = approver
+	if decidedAt != nil {
+		t := decidedAt.UTC()
+		ar.DecidedAt = &t
+	}
+	m.accessReq[id] = ar
 	return nil
 }
 
@@ -546,7 +568,8 @@ func (m *Memstore) HasActiveApproval(_ context.Context, requester string, target
 	defer m.mu.Unlock()
 	for _, ar := range m.accessReq {
 		if ar.Requester == requester && ar.TargetID == targetID &&
-			ar.Status == "approved" && now.Before(ar.ExpiresAt) {
+			ar.Status == "approved" && now.Before(ar.ExpiresAt) &&
+			(ar.NotBefore == nil || !now.Before(*ar.NotBefore)) {
 			return true, nil
 		}
 	}

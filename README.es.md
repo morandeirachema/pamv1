@@ -26,7 +26,7 @@ de fósforo verde** sin concesiones, porque tocar un PAM debe *sentirse* serio.
 
 Construido fase a fase con una regla: **cada fase es funcional de principio a fin** — arranca,
 pasa los tests y se despliega como Infraestructura-como-Código. El **[roadmap](ROADMAP.md)**
-abarca de la 0 a la 20 y **se han entregado las veintiuna fases** — desde el proxy SSH JIT y el
+abarca de la 0 a la 21 y **se han entregado las veintidós fases** — desde el proxy SSH JIT y el
 RBAC, pasando por el login AD/Entra/OIDC, los objetivos Windows, el quórum de break-glass, la
 adaptación OT/industrial, las herramientas NIS2, escala/HA y la consola 5250 completa, hasta un
 subsistema de configuración con hot-swap y RBAC de perfiles personalizados, un **bróker de
@@ -36,7 +36,7 @@ un **proxy de sesión de base de datos PostgreSQL** (inyección JIT + auditoría
 **sesiones supervisadas** (monitorización en vivo + control de comandos) y **safes + propagación
 a cuentas dependientes** — lo que cierra las cuatro brechas de Nivel 1 frente a los líderes
 comerciales — y el aprovisionamiento opcional de los secretos de arranque de pamv1 desde
-**CyberArk Conjur** (junto a SOPS) y la **profundidad de gobierno de accesos** — campañas de certificación y una pasarela ITSM/tickets (Nivel 2). Sigue siendo un proyecto **alpha y educativo** — léelo,
+**CyberArk Conjur** (junto a SOPS) y la **profundidad de gobierno de accesos** — campañas de certificación, una pasarela ITSM/tickets y flujos de aprobación más ricos (Nivel 2). Sigue siendo un proyecto **alpha y educativo** — léelo,
 ejecútalo, aprende de él, pero no le confíes secretos reales.
 
 🔎 **Resumen interactivo:** [página del proyecto](https://claude.ai/code/artifact/b9f19443-5ad1-42d2-955f-e43ca17ac542) — qué funciona, arquitectura y hoja de ruta de un vistazo &nbsp;·&nbsp; 📖 **[Read it in English →](README.md)**
@@ -229,7 +229,7 @@ ves la credencial. Las grabaciones van a `PAM_RECORDING_DIR`; desactiva el proxy
 
 ## Hoja de ruta
 
-Se han entregado las veintiuna fases — detalle por fase en **[ROADMAP.md](ROADMAP.md)**:
+Se han entregado las veintidós fases — detalle por fase en **[ROADMAP.md](ROADMAP.md)**:
 
 | Fase | Tema | Estado |
 |---|---|---|
@@ -254,6 +254,7 @@ Se han entregado las veintiuna fases — detalle por fase en **[ROADMAP.md](ROAD
 | 18 | Aprovisionamiento de secretos desde CyberArk Conjur (opcional, junto a SOPS) | ✅ entregada |
 | 19 | Campañas de certificación / atestación de accesos | ✅ entregada |
 | 20 | Pasarela ITSM / tickets en las solicitudes de acceso | ✅ entregada |
+| 21 | Flujos de aprobación más ricos (N-de-M, ventanas programadas, códigos de motivo) | ✅ entregada |
 
 ## Cobertura frente al PAM comercial (CyberArk, Wallix, …)
 
@@ -287,7 +288,9 @@ posibles fases futuras.
 
 - ~~**Campañas de certificación / atestación de accesos**~~ **✅ entregado (Fase 19)** — una campaña toma una instantánea del acceso actual (concesiones por objetivo + miembros de safes); un revisor certifica o revoca cada elemento, y una revocación borra la concesión subyacente (`POST /api/campaigns`). El control de revisión de accesos de SOX / ISO 27001 / NIS2.
 - ~~**Pasarela ITSM / tickets**~~ **✅ entregado (Fase 20)** — una solicitud de acceso puede exigir un ticket de cambio/incidencia, validado por un regex de formato y/o un webhook que el ITSM responde `2xx` para un ticket válido (`PAM_REQUIRE_TICKET`), y grabado en la auditoría.
-- **Flujos de aprobación más ricos** — cadenas multinivel, ventanas de acceso temporizadas / programadas, acceso de un solo uso, códigos de motivo obligatorios (pamv1 es hoy de un solo nivel a cuatro ojos).
+- ~~**Flujos de aprobación más ricos**~~ **✅ entregado (Fase 21)** — cadenas multinivel **N-de-M** (`PAM_APPROVALS_REQUIRED`), ventanas de acceso **programadas** (`not_before`/`not_after`) y códigos de motivo obligatorios. *(El acceso de un solo uso es el único seguimiento documentado.)*
+
+**Las tres brechas de gobierno de accesos de Nivel 2 están cerradas.**
 
 ### Nivel 3 — hacia dónde va el mercado
 

@@ -223,6 +223,37 @@ func RunStoreContract(t *testing.T, st store.Store) {
 		t.Fatalf("ListAccessRequests(approved): %d err %v", len(reqs), err)
 	}
 
+	// --- multi-approver chain + scheduled window (Phase 21) ---
+	nb := now.Add(2 * time.Hour) // window opens in 2h
+	na := now.Add(3 * time.Hour) // and closes in 3h (after not_before)
+	mreq := &store.AccessRequest{Requester: "dave", TargetID: tgt.ID, Reason: "chain", Status: "pending", ExpiresAt: na, RequiredApprovals: 2, NotBefore: &nb}
+	if err := st.CreateAccessRequest(ctx, mreq); err != nil {
+		t.Fatalf("CreateAccessRequest(chain): %v", err)
+	}
+	if m, _ := st.GetAccessRequest(ctx, mreq.ID); m == nil || m.RequiredApprovals != 2 || m.NotBefore == nil {
+		t.Fatalf("chain request not round-tripped: %+v", m)
+	}
+	// One approval — still pending (2 required).
+	if err := st.SetApprovalState(ctx, mreq.ID, "eve", "pending", "", nil); err != nil {
+		t.Fatalf("SetApprovalState(partial): %v", err)
+	}
+	if m, _ := st.GetAccessRequest(ctx, mreq.ID); m.Status != "pending" || m.ApprovedBy != "eve" {
+		t.Fatalf("partial approval: %+v", m)
+	}
+	// Second approval — now approved.
+	dec := now
+	if err := st.SetApprovalState(ctx, mreq.ID, "eve,frank", "approved", "frank", &dec); err != nil {
+		t.Fatalf("SetApprovalState(complete): %v", err)
+	}
+	// Approved, but the maintenance window hasn't opened yet → not active now,
+	// active once not_before passes.
+	if ok, _ := st.HasActiveApproval(ctx, "dave", tgt.ID, now); ok {
+		t.Fatal("scheduled approval must not be active before its window")
+	}
+	if ok, _ := st.HasActiveApproval(ctx, "dave", tgt.ID, nb.Add(time.Minute)); !ok {
+		t.Fatal("scheduled approval must be active inside its window")
+	}
+
 	// --- checkouts (exclusive lease) ---
 	co := &store.Checkout{CredentialID: cred.ID, TargetID: tgt.ID, Holder: "alice", ExpiresAt: future}
 	if err := st.CreateCheckout(ctx, co, now); err != nil {

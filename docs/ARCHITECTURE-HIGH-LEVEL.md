@@ -9,7 +9,7 @@
 > [ARCHITECTURE-DIAGRAMS.md](ARCHITECTURE-DIAGRAMS.md). This file holds the
 > hand-authored conceptual diagrams below.
 >
-> Last updated: 2026-07-21 · Reflects: **Phases 0–19 shipped** — the PostgreSQL database session proxy (15), live session monitoring + command control (16), safes + dependent-account propagation (17), optional CyberArk Conjur secret sourcing (18), access certification campaigns (19), and an ITSM/ticketing gate (20). All four Tier-1 competitive-coverage gaps are closed and the Tier-2 (access-governance) gaps are landing. See the [ROADMAP](../ROADMAP.md) for the authoritative per-phase status.
+> Last updated: 2026-07-21 · Reflects: **Phases 0–19 shipped** — the PostgreSQL database session proxy (15), live session monitoring + command control (16), safes + dependent-account propagation (17), optional CyberArk Conjur secret sourcing (18), access certification campaigns (19), an ITSM/ticketing gate (20), and richer approval workflows (21). All four Tier-1 and all three Tier-2 (access-governance) competitive-coverage gaps are now closed. See the [ROADMAP](../ROADMAP.md) for the authoritative per-phase status.
 
 ## 1. Purpose
 
@@ -77,6 +77,7 @@ flowchart TB
 | **Safes & dependent accounts** | Delegated-access containers; rotation updates service/task/app-pool consumers | ✅ Phase 17 |
 | **Access certification** | Periodic campaigns to recertify/revoke who has access to what | ✅ Phase 19 |
 | **ITSM ticket gate** | Require + validate a change ticket before an access request | ✅ Phase 20 |
+| **Approval workflows** | Multi-tier N-of-M chains, scheduled windows, mandatory reason | ✅ Phase 21 |
 | **RBAC** | Four profiles (admin/user/auditor/approver), per-user tokens | ✅ Phase 3a |
 | **AD / Entra / OIDC login** | LDAPS + Entra ID (ROPC) + OIDC auth-code SSO, groups/app-roles → roles, session tokens | ✅ Phase 3b |
 | **MFA** | TOTP (RFC 6238), recovery codes, enforce-MFA policy | ✅ Phase 3b |
@@ -172,6 +173,7 @@ flowchart LR
 
 | Date | Change |
 |---|---|
+| 2026-07-21 | Phase 21: **richer approval workflows** — an access request can require several distinct approvers (N-of-M chains), be scheduled for a future maintenance window (not-before/not-after), and demand a reason code. Completes the Tier-2 access-governance gaps |
 | 2026-07-21 | Phase 20: **ITSM / ticketing gate** — an access request can require a change/incident ticket, validated by a regex format and/or a webhook the ITSM system answers 2xx for a valid ticket, then stamped into the audit trail. The "no access without an approved change" control (`PAM_REQUIRE_TICKET`) |
 | 2026-07-21 | Phase 19: **access certification campaigns** — a manager creates a campaign that snapshots who currently has access to what (target grants + safe members), then certifies or revokes each item; a revoke removes the underlying grant. The SOX/ISO/NIS2 access-review control, and the first Tier-2 competitive-coverage gap |
 | 2026-07-21 | Phase 18: **Conjur secret sourcing** — pamv1 can fetch its own bootstrap secrets (master key, API key, DB URL, …) from CyberArk Conjur at startup (`PAM_CONJUR_URL`, authn-api-key or Kubernetes authn-jwt), as a runtime-broker alternative to the SOPS GitOps sealing (Phase 14). Both ship; SOPS stays the zero-dependency default. Hand-rolled client, no new dependency; fail-loud when configured but unreachable |

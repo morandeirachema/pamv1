@@ -485,10 +485,13 @@ func (s *PGStore) CreateAccessRequest(ctx context.Context, ar *store.AccessReque
 	if ar.Status == "" {
 		ar.Status = "pending"
 	}
+	if ar.RequiredApprovals < 1 {
+		ar.RequiredApprovals = 1
+	}
 	err := s.pool.QueryRow(ctx,
-		`INSERT INTO access_requests (requester, target_id, reason, status, expires_at, ticket)
-		 VALUES ($1, $2, $3, $4, $5, $6) RETURNING id, created_at`,
-		ar.Requester, ar.TargetID, ar.Reason, ar.Status, ar.ExpiresAt, ar.Ticket,
+		`INSERT INTO access_requests (requester, target_id, reason, status, expires_at, ticket, required_approvals, not_before)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id, created_at`,
+		ar.Requester, ar.TargetID, ar.Reason, ar.Status, ar.ExpiresAt, ar.Ticket, ar.RequiredApprovals, ar.NotBefore,
 	).Scan(&ar.ID, &ar.CreatedAt)
 	if pgCode(err) == pgForeignKeyViolation {
 		return store.ErrNotFound
@@ -499,7 +502,7 @@ func (s *PGStore) CreateAccessRequest(ctx context.Context, ar *store.AccessReque
 // GetAccessRequest returns the access request with the given ID, or ErrNotFound.
 func (s *PGStore) GetAccessRequest(ctx context.Context, id int64) (*store.AccessRequest, error) {
 	return getOne(ctx, s.pool, scanAccessRequest,
-		`SELECT id, requester, target_id, reason, status, approver, created_at, decided_at, expires_at, ticket
+		`SELECT id, requester, target_id, reason, status, approver, created_at, decided_at, expires_at, ticket, required_approvals, approved_by, not_before
 		 FROM access_requests WHERE id = $1`, id)
 }
 
@@ -507,7 +510,7 @@ func (s *PGStore) GetAccessRequest(ctx context.Context, id int64) (*store.Access
 // ""), ordered by ID.
 func (s *PGStore) ListAccessRequests(ctx context.Context, status string) ([]store.AccessRequest, error) {
 	rows, err := s.pool.Query(ctx,
-		`SELECT id, requester, target_id, reason, status, approver, created_at, decided_at, expires_at, ticket
+		`SELECT id, requester, target_id, reason, status, approver, created_at, decided_at, expires_at, ticket, required_approvals, approved_by, not_before
 		 FROM access_requests WHERE ($1 = '' OR status = $1) ORDER BY id`, status)
 	if err != nil {
 		return nil, err
@@ -530,9 +533,17 @@ func (s *PGStore) HasActiveApproval(ctx context.Context, requester string, targe
 	err := s.pool.QueryRow(ctx,
 		`SELECT EXISTS(
 			SELECT 1 FROM access_requests
-			WHERE requester = $1 AND target_id = $2 AND status = 'approved' AND expires_at > $3)`,
+			WHERE requester = $1 AND target_id = $2 AND status = 'approved'
+			  AND expires_at > $3 AND (not_before IS NULL OR not_before <= $3))`,
 		requester, targetID, now.UTC()).Scan(&exists)
 	return exists, err
+}
+
+// SetApprovalState records a multi-approver decision (Phase 21).
+func (s *PGStore) SetApprovalState(ctx context.Context, id int64, approvedBy, status, approver string, decidedAt *time.Time) error {
+	return execExpectingRow(ctx, s.pool,
+		`UPDATE access_requests SET approved_by = $2, status = $3, approver = $4, decided_at = $5 WHERE id = $1`,
+		id, approvedBy, status, approver, decidedAt)
 }
 
 // AppendAudit inserts an audit event, populating its ID and TS.
@@ -1140,7 +1151,8 @@ func scanTarget(row pgx.CollectableRow) (store.Target, error) {
 func scanAccessRequest(row pgx.CollectableRow) (store.AccessRequest, error) {
 	var ar store.AccessRequest
 	err := row.Scan(&ar.ID, &ar.Requester, &ar.TargetID, &ar.Reason, &ar.Status,
-		&ar.Approver, &ar.CreatedAt, &ar.DecidedAt, &ar.ExpiresAt, &ar.Ticket)
+		&ar.Approver, &ar.CreatedAt, &ar.DecidedAt, &ar.ExpiresAt, &ar.Ticket,
+		&ar.RequiredApprovals, &ar.ApprovedBy, &ar.NotBefore)
 	return ar, err
 }
 

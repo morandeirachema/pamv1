@@ -131,6 +131,11 @@ type Options struct {
 	// mandatory on every access request.
 	TicketValidator *ticket.Validator
 	RequireTicket   bool
+	// ApprovalsRequired is the default number of distinct approvers an access
+	// request needs (Phase 21 multi-tier chains; default 1). RequireReason
+	// rejects an access request that carries no reason.
+	ApprovalsRequired int
+	RequireReason     bool
 	// CheckoutTTL is the lifetime of a credential checkout lease (default 30m).
 	CheckoutTTL time.Duration
 	// AirGap disables all outbound network calls (alert webhooks) for isolated
@@ -192,6 +197,8 @@ type Server struct {
 	alerter            alert.Notifier
 	ticketValidator    *ticket.Validator
 	requireTicket      bool
+	approvalsRequired  int
+	requireReason      bool
 	rotators           map[string]rotate.Rotator
 	verifiers          map[string]rotate.Verifier
 	sshConnector       rotate.SSHConnector // one-shot SSH exec for the broker's ssh_exec tool
@@ -350,6 +357,8 @@ func New(st store.Store, v *vault.Vault, resolver *auth.Resolver, authn auth.Aut
 		winrm:              runner,
 		ticketValidator:    opts.TicketValidator,
 		requireTicket:      opts.RequireTicket,
+		approvalsRequired:  opts.ApprovalsRequired,
+		requireReason:      opts.RequireReason,
 		recordingDir:       opts.RecordingDir,
 		portalURL:          portalURL,
 		guacdAddr:          opts.GuacdAddr,

@@ -4,12 +4,13 @@ Guiding principle: **fully functional at every step**. Each phase ships somethin
 
 Status: ✅ done · 🚧 in progress · ⬜ planned
 
-**Phases 0–20 are shipped** — through the CyberArk/Wallix-style console, the AI-agent
+**Phases 0–21 are shipped** — through the CyberArk/Wallix-style console, the AI-agent
 access broker (MCP + SPIFFE), SOPS-encrypted secrets, the four **Tier-1
 competitive-coverage gaps** closed (a PostgreSQL session proxy, supervised sessions
 with command control, safes, dependent-account propagation), optional CyberArk Conjur
-secret sourcing, and the **Tier-2** access-governance gaps landing (certification
-campaigns, an ITSM/ticketing gate) — see their sections below. Beyond those,
+secret sourcing, and now the three **Tier-2** access-governance gaps closed too
+(certification campaigns, an ITSM/ticketing gate, richer approval workflows) — see
+their sections below. Beyond those,
 a few items genuinely require external infrastructure to build and verify
 honestly, so they are left as documented follow-ons rather than faked:
 
@@ -278,3 +279,17 @@ The second [Tier-2 competitive-coverage gap](README.md#coverage-vs-commercial-pa
 - [x] **Gate on access requests**: `POST /api/access-requests` accepts a `ticket`; when `PAM_REQUIRE_TICKET` is set it is mandatory (422 otherwise), a configured validator must pass (422 + `access.ticket_rejected` audit on failure), and the ticket is **stamped into the request and the audit trail** (`store.AccessRequest.Ticket`, migration `0015`)
 - [x] **Tests**: a `ticket` unit test (disabled / bad-pattern / format reject) and an end-to-end API test with a fake ITSM webhook (missing → 422, bad format → 422, webhook-rejected → 422, an approved ticket → 201 and recorded)
 - Deferred (documented): a first-class ServiceNow/Jira connector (this ships the generic webhook + regex hook), and gating the connect path directly on a live ticket lookup (today the ticket is validated at request time)
+
+## Phase 21 — Richer approval workflows ✅
+
+The third [Tier-2 competitive-coverage gap](README.md#coverage-vs-commercial-pam-cyberark-wallix-): move past single-level 4-eyes to the approval depth CyberArk/Wallix offer — built on the existing access-request engine (migration `0016`).
+
+- [x] **Multi-tier approval chains (N-of-M)**: an access request needs `RequiredApprovals` **distinct** approvers before it is granted (`PAM_APPROVALS_REQUIRED` default; a request may ask for more via `approvals`). Each approval accumulates into `approved_by`; the request stays `pending` until the count is met, then flips to `approved`. An approver can't approve twice (409); self-approval is still refused (four-eyes). Partial approvals audit `access.approve_partial`
+- [x] **Scheduled / time-boxed windows**: a request may carry `not_before` / `not_after`; an approved request is only **active inside that window** (`HasActiveApproval` honors `not_before`), so access can be pre-approved for a future maintenance window
+- [x] **Mandatory reason codes**: `PAM_REQUIRE_REASON` rejects an access request with no reason (422)
+- [x] **Tests**: store contract (multi-approver accumulation, scheduled-window activation) and end-to-end API tests (a 2-of-N chain — first approval pending, double-approval 409, second distinct approval grants; mandatory reason; a scheduled window round-trips)
+- Deferred (documented): **one-time (single-use) access** — needs a consume-on-connect hook in every connect gate (SSH/DB/WinRM/RDP), so it is a documented follow-on rather than a partial implementation
+
+---
+
+**Tier-2 (access-governance depth) is now complete** — certification campaigns (19), the ITSM/ticketing gate (20), and richer approval workflows (21). See the [competitive-coverage section](README.md#coverage-vs-commercial-pam-cyberark-wallix-) for the remaining tiers.

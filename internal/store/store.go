@@ -134,6 +134,13 @@ type AccessRequest struct {
 	// ticket validation is configured it is validated before the request is
 	// created, and it is recorded in the audit trail.
 	Ticket string `json:"ticket,omitempty"`
+	// RequiredApprovals is how many DISTINCT approvers must approve before the
+	// request is granted (Phase 21 multi-tier chains; default 1). ApprovedBy is
+	// the comma-joined set of approvers so far. NotBefore, when set, delays when
+	// an approved request becomes active (a scheduled maintenance window).
+	RequiredApprovals int        `json:"required_approvals,omitempty"`
+	ApprovedBy        string     `json:"approved_by,omitempty"`
+	NotBefore         *time.Time `json:"not_before,omitempty"`
 }
 
 // Credential is a privileged account on a Target. SecretEnc is always an
@@ -374,6 +381,11 @@ type Store interface {
 	ListAccessRequests(ctx context.Context, status string) ([]AccessRequest, error)
 	// DecideAccessRequest records an approve/deny decision by approver.
 	DecideAccessRequest(ctx context.Context, id int64, status, approver string, decidedAt time.Time) error
+	// SetApprovalState records a multi-approver decision (Phase 21): the updated
+	// distinct-approver set, the resulting status ("pending" while partial,
+	// "approved" once the required count is met), the final approver, and the
+	// decided-at time (nil while still partial).
+	SetApprovalState(ctx context.Context, id int64, approvedBy, status, approver string, decidedAt *time.Time) error
 	// HasActiveApproval reports whether requester has an approved, unexpired
 	// request for targetID as of now.
 	HasActiveApproval(ctx context.Context, requester string, targetID int64, now time.Time) (bool, error)
