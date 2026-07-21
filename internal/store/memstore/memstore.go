@@ -26,6 +26,8 @@ type Memstore struct {
 	oidcStates    map[string]oidcState
 	audit         []store.AuditEvent
 	agentKeys     map[int64]store.AgentKey
+	appKeys       map[int64]store.AppKey
+	appGrants     map[int64]store.AppSecretGrant
 	brokerLog     []store.BrokerAuditEvent
 	brokerTok     map[string]store.BrokerToken
 	settings      map[string]store.Setting
@@ -50,6 +52,8 @@ func New() *Memstore {
 		accessReq:     make(map[int64]store.AccessRequest),
 		checkouts:     make(map[int64]store.Checkout),
 		agentKeys:     make(map[int64]store.AgentKey),
+		appKeys:       make(map[int64]store.AppKey),
+		appGrants:     make(map[int64]store.AppSecretGrant),
 		brokerTok:     make(map[string]store.BrokerToken),
 		settings:      make(map[string]store.Setting),
 		profiles:      make(map[int64]store.Profile),
@@ -758,6 +762,12 @@ func (m *Memstore) DeleteCredential(_ context.Context, id int64) error {
 			delete(m.credDeps, did)
 		}
 	}
+	// pgstore FK cascades app_secret_grants on credential delete — match it.
+	for gid, g := range m.appGrants {
+		if g.CredentialID == id {
+			delete(m.appGrants, gid)
+		}
+	}
 	return nil
 }
 
@@ -917,6 +927,123 @@ func (m *Memstore) GetAgentKey(_ context.Context, id int64) (*store.AgentKey, er
 		return nil, store.ErrNotFound
 	}
 	return &k, nil
+}
+
+// CreateAppKey inserts an application key; ErrConflict if the token hash is taken.
+func (m *Memstore) CreateAppKey(_ context.Context, k *store.AppKey) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, existing := range m.appKeys {
+		if existing.TokenHash == k.TokenHash {
+			return store.ErrConflict
+		}
+	}
+	k.ID = m.id()
+	k.CreatedAt = time.Now().UTC()
+	m.appKeys[k.ID] = *k
+	return nil
+}
+
+// GetAppKeyByTokenHash returns the enabled app key whose token hash matches, or
+// ErrNotFound (a disabled key is treated as not found).
+func (m *Memstore) GetAppKeyByTokenHash(_ context.Context, tokenHashHex string) (*store.AppKey, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, k := range m.appKeys {
+		if k.TokenHash == tokenHashHex && !k.Disabled {
+			out := k
+			return &out, nil
+		}
+	}
+	return nil, store.ErrNotFound
+}
+
+// ListAppKeys returns all application keys ordered by ID.
+func (m *Memstore) ListAppKeys(_ context.Context) ([]store.AppKey, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]store.AppKey, 0, len(m.appKeys))
+	for _, k := range m.appKeys {
+		out = append(out, k)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out, nil
+}
+
+// DeleteAppKey removes an app key by ID (cascading its secret grants), or ErrNotFound.
+func (m *Memstore) DeleteAppKey(_ context.Context, id int64) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.appKeys[id]; !ok {
+		return store.ErrNotFound
+	}
+	delete(m.appKeys, id)
+	// pgstore FK cascades the app's grants on delete — match it.
+	for gid, g := range m.appGrants {
+		if g.AppID == id {
+			delete(m.appGrants, gid)
+		}
+	}
+	return nil
+}
+
+// GrantAppSecret authorizes an app to retrieve a credential's secret (ErrConflict
+// on a duplicate grant, ErrNotFound if the app or credential is missing).
+func (m *Memstore) GrantAppSecret(_ context.Context, g *store.AppSecretGrant) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.appKeys[g.AppID]; !ok {
+		return store.ErrNotFound
+	}
+	if _, ok := m.creds[g.CredentialID]; !ok {
+		return store.ErrNotFound
+	}
+	for _, existing := range m.appGrants {
+		if existing.AppID == g.AppID && existing.CredentialID == g.CredentialID {
+			return store.ErrConflict
+		}
+	}
+	g.ID = m.id()
+	g.CreatedAt = time.Now().UTC()
+	m.appGrants[g.ID] = *g
+	return nil
+}
+
+// ListAppSecretGrants returns an app's secret grants ordered by id.
+func (m *Memstore) ListAppSecretGrants(_ context.Context, appID int64) ([]store.AppSecretGrant, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]store.AppSecretGrant, 0)
+	for _, g := range m.appGrants {
+		if g.AppID == appID {
+			out = append(out, g)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out, nil
+}
+
+// DeleteAppSecretGrant removes a grant by ID, or ErrNotFound.
+func (m *Memstore) DeleteAppSecretGrant(_ context.Context, id int64) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.appGrants[id]; !ok {
+		return store.ErrNotFound
+	}
+	delete(m.appGrants, id)
+	return nil
+}
+
+// AppMayAccessCredential reports whether app appID has a grant for credentialID.
+func (m *Memstore) AppMayAccessCredential(_ context.Context, appID, credentialID int64) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, g := range m.appGrants {
+		if g.AppID == appID && g.CredentialID == credentialID {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // CreateBrokerToken stores a single-use resume token for a parked tool call.

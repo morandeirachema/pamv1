@@ -38,10 +38,11 @@
     text-shadow: inherit; caret-color: #2eff7b;
   }
   select { border: 1px solid #123c1f; }
-  input:focus { background: #0a2a12; }
+  input:focus, select:focus, a:focus { background: #0a2a12; outline: 1px solid #4be0e0; }
   input.opt { width: 3ch; text-align: center; text-transform: uppercase; }
   input[type=checkbox] { width: auto; }
   .fkeys { color: #4be0e0; margin-top: 8px; }
+  .khint { color: #2f7d4a; margin-top: 2px; font-size: 0.9em; }
   .msg { min-height: 1.3em; color: #eaffea; }
   .msg.err { color: #ff4d4d; }
   form.inline { display: inline; }
@@ -110,6 +111,7 @@
            `<div class="row"><span>${me ? esc(me.name) + " / " + esc(me.role) + (me.break_glass ? " (BREAK-GLASS)" : "") : ""}</span><span class="cyan">${now()}</span></div><hr>`;
   }
   const fkeys = (t) => `<hr><div class="fkeys">${t}</div>` +
+    `<div class="khint">Enter=Confirm&nbsp;&nbsp;Esc=Back&nbsp;&nbsp;Tab / ↑↓=Move&nbsp;&nbsp;(the mouse is optional)</div>` +
     `<div class="msg${msgErr ? " err" : ""}">${esc(msg)}</div>`;
 
   // opt renders a subfile option input; optCell reads the typed option for a row.
@@ -854,6 +856,18 @@ ${fkeys("F3=Exit   F12=Cancel")}`;
         };
       },
     })[screen]();
+    focusPrimary();
+  }
+
+  // focusPrimary lands the cursor on the screen's primary field after every
+  // render, so the operator never has to reach for the mouse to start typing
+  // (dynamically-inserted autofocus attributes do not reliably fire). Prefers an
+  // explicit [autofocus], then the first real input/select, then a link.
+  function focusPrimary() {
+    const el = term.querySelector("[autofocus]") ||
+      term.querySelector("input:not([type=hidden]):not([type=submit]):not([type=checkbox]), select, textarea") ||
+      term.querySelector("a[href]");
+    if (el) { try { el.focus({ preventScroll: false }); } catch (e) {} }
   }
 
   function auditRows(list) {
@@ -874,6 +888,25 @@ ${fkeys("F3=Exit   F12=Cancel")}`;
 
   window.addEventListener("keydown", async (ev) => {
     const k = ev.key;
+    // Arrow keys move between subfile option cells (5250-style row navigation), so
+    // a whole list of rows is operable without the mouse.
+    if ((k === "ArrowDown" || k === "ArrowUp") && ev.target.classList && ev.target.classList.contains("opt")) {
+      const opts = [...term.querySelectorAll("input.opt")];
+      const i = opts.indexOf(ev.target);
+      if (i >= 0) {
+        ev.preventDefault();
+        const next = opts[k === "ArrowDown" ? i + 1 : i - 1];
+        if (next) next.focus();
+      }
+      return;
+    }
+    // Esc cancels / goes back (the keyboard twin of F12), except at sign-on/main.
+    if (k === "Escape") {
+      if (screen === "signon" || screen === "main") return;
+      ev.preventDefault();
+      go(back);
+      return;
+    }
     if (!["F3", "F5", "F6", "F7", "F8", "F9", "F12"].includes(k)) return;
     ev.preventDefault();
     if (screen === "signon") return;

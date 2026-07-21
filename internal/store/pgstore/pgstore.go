@@ -756,6 +756,96 @@ func (s *PGStore) DeleteAgentKey(ctx context.Context, id int64) error {
 	return execExpectingRow(ctx, s.pool, `DELETE FROM agent_keys WHERE id = $1`, id)
 }
 
+// scanAppKey scans one app_keys row into a store.AppKey.
+func scanAppKey(row pgx.CollectableRow) (store.AppKey, error) {
+	var k store.AppKey
+	err := row.Scan(&k.ID, &k.Name, &k.Owner, &k.TokenHash, &k.Disabled, &k.CreatedAt)
+	return k, err
+}
+
+// scanAppSecretGrant scans one app_secret_grants row into a store.AppSecretGrant.
+func scanAppSecretGrant(row pgx.CollectableRow) (store.AppSecretGrant, error) {
+	var g store.AppSecretGrant
+	err := row.Scan(&g.ID, &g.AppID, &g.CredentialID, &g.CreatedAt)
+	return g, err
+}
+
+// CreateAppKey inserts an application identity key, populating ID and CreatedAt.
+func (s *PGStore) CreateAppKey(ctx context.Context, k *store.AppKey) error {
+	err := s.pool.QueryRow(ctx,
+		`INSERT INTO app_keys (name, owner, token_hash, disabled)
+		 VALUES ($1, $2, $3, $4) RETURNING id, created_at`,
+		k.Name, k.Owner, k.TokenHash, k.Disabled,
+	).Scan(&k.ID, &k.CreatedAt)
+	if pgCode(err) == pgUniqueViolation {
+		return store.ErrConflict
+	}
+	return err
+}
+
+// GetAppKeyByTokenHash returns the enabled app key whose token hash matches, or
+// ErrNotFound (a disabled key is treated as not found).
+func (s *PGStore) GetAppKeyByTokenHash(ctx context.Context, tokenHashHex string) (*store.AppKey, error) {
+	return getOne(ctx, s.pool, scanAppKey,
+		`SELECT id, name, owner, token_hash, disabled, created_at
+		 FROM app_keys WHERE token_hash = $1 AND disabled = FALSE`, tokenHashHex)
+}
+
+// ListAppKeys returns all application keys ordered by ID.
+func (s *PGStore) ListAppKeys(ctx context.Context) ([]store.AppKey, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT id, name, owner, token_hash, disabled, created_at FROM app_keys ORDER BY id`)
+	if err != nil {
+		return nil, err
+	}
+	return pgx.CollectRows(rows, scanAppKey)
+}
+
+// DeleteAppKey removes an app key by ID (its grants cascade); ErrNotFound if absent.
+func (s *PGStore) DeleteAppKey(ctx context.Context, id int64) error {
+	return execExpectingRow(ctx, s.pool, `DELETE FROM app_keys WHERE id = $1`, id)
+}
+
+// GrantAppSecret authorizes an app to retrieve a credential's secret.
+func (s *PGStore) GrantAppSecret(ctx context.Context, g *store.AppSecretGrant) error {
+	err := s.pool.QueryRow(ctx,
+		`INSERT INTO app_secret_grants (app_id, credential_id)
+		 VALUES ($1, $2) RETURNING id, created_at`,
+		g.AppID, g.CredentialID,
+	).Scan(&g.ID, &g.CreatedAt)
+	switch pgCode(err) {
+	case pgUniqueViolation:
+		return store.ErrConflict
+	case pgForeignKeyViolation:
+		return store.ErrNotFound
+	}
+	return err
+}
+
+// ListAppSecretGrants returns an app's secret grants ordered by id.
+func (s *PGStore) ListAppSecretGrants(ctx context.Context, appID int64) ([]store.AppSecretGrant, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT id, app_id, credential_id, created_at FROM app_secret_grants WHERE app_id = $1 ORDER BY id`, appID)
+	if err != nil {
+		return nil, err
+	}
+	return pgx.CollectRows(rows, scanAppSecretGrant)
+}
+
+// DeleteAppSecretGrant removes a grant by ID, or ErrNotFound.
+func (s *PGStore) DeleteAppSecretGrant(ctx context.Context, id int64) error {
+	return execExpectingRow(ctx, s.pool, `DELETE FROM app_secret_grants WHERE id = $1`, id)
+}
+
+// AppMayAccessCredential reports whether app appID has a grant for credentialID.
+func (s *PGStore) AppMayAccessCredential(ctx context.Context, appID, credentialID int64) (bool, error) {
+	var ok bool
+	err := s.pool.QueryRow(ctx,
+		`SELECT EXISTS(SELECT 1 FROM app_secret_grants WHERE app_id = $1 AND credential_id = $2)`,
+		appID, credentialID).Scan(&ok)
+	return ok, err
+}
+
 // CreateBrokerToken stores a single-use resume token for a parked tool call.
 func (s *PGStore) CreateBrokerToken(ctx context.Context, t *store.BrokerToken) error {
 	_, err := s.pool.Exec(ctx,

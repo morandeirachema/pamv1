@@ -212,6 +212,31 @@ type AgentKey struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
+// AppKey is a non-human application identity for the application-secrets API
+// (Phase 24, Tier-4 Conjur-style secret delivery): a bearer key whose SHA-256
+// hash is stored, letting an application retrieve only the specific secrets it
+// has been explicitly granted — nothing else. Owner is the accountable
+// human/team recorded in the audit trail.
+type AppKey struct {
+	ID        int64     `json:"id"`
+	Name      string    `json:"name"`
+	Owner     string    `json:"owner"`
+	TokenHash string    `json:"-"`
+	Disabled  bool      `json:"disabled"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// AppSecretGrant authorizes an application (AppKey) to retrieve one specific
+// credential's secret through the application-secrets API. Access is
+// default-deny: an app may fetch only the credentials it has an explicit grant
+// for.
+type AppSecretGrant struct {
+	ID           int64     `json:"id"`
+	AppID        int64     `json:"app_id"`
+	CredentialID int64     `json:"credential_id"`
+	CreatedAt    time.Time `json:"created_at"`
+}
+
 // BrokerToken is a short-lived, single-use ticket the broker mints when a tool
 // call is parked for approval (Phase 13). The agent presents its opaque token to
 // resume and collect the post-approval result exactly once; the stored JTI is the
@@ -431,6 +456,26 @@ type Store interface {
 	ListAgentKeys(ctx context.Context) ([]AgentKey, error)
 	// DeleteAgentKey removes an agent key by ID, or ErrNotFound.
 	DeleteAgentKey(ctx context.Context, id int64) error
+
+	// CreateAppKey inserts an application identity key, populating ID and CreatedAt
+	// (ErrConflict on a duplicate token hash).
+	CreateAppKey(ctx context.Context, k *AppKey) error
+	// GetAppKeyByTokenHash returns the enabled app key whose token hash matches, or
+	// ErrNotFound (a disabled key is treated as not found).
+	GetAppKeyByTokenHash(ctx context.Context, tokenHashHex string) (*AppKey, error)
+	// ListAppKeys returns all application keys.
+	ListAppKeys(ctx context.Context) ([]AppKey, error)
+	// DeleteAppKey removes an app key by ID (cascading its secret grants), or ErrNotFound.
+	DeleteAppKey(ctx context.Context, id int64) error
+	// GrantAppSecret authorizes an app to retrieve a credential's secret
+	// (ErrConflict on a duplicate grant, ErrNotFound if the app or credential is missing).
+	GrantAppSecret(ctx context.Context, g *AppSecretGrant) error
+	// ListAppSecretGrants returns an app's secret grants ordered by id.
+	ListAppSecretGrants(ctx context.Context, appID int64) ([]AppSecretGrant, error)
+	// DeleteAppSecretGrant removes a grant by ID, or ErrNotFound.
+	DeleteAppSecretGrant(ctx context.Context, id int64) error
+	// AppMayAccessCredential reports whether app appID has a grant for credentialID.
+	AppMayAccessCredential(ctx context.Context, appID, credentialID int64) (bool, error)
 
 	// CreateBrokerToken stores a single-use resume token (its JTI is the token's
 	// SHA-256 hash) for a parked, approval-pending tool call.

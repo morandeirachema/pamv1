@@ -4,16 +4,18 @@ Guiding principle: **fully functional at every step**. Each phase ships somethin
 
 Status: ✅ done · 🚧 in progress · ⬜ planned
 
-**Phases 0–23 are shipped** — through the CyberArk/Wallix-style console, the AI-agent
+**Phases 0–24 are shipped** — through the CyberArk/Wallix-style console, the AI-agent
 access broker (MCP + SPIFFE), SOPS-encrypted secrets, the four **Tier-1
 competitive-coverage gaps** closed (a PostgreSQL session proxy, supervised sessions
 with command control, safes, dependent-account propagation), optional CyberArk Conjur
 secret sourcing, the three **Tier-2** access-governance gaps closed
-(certification campaigns, an ITSM/ticketing gate, richer approval workflows), and now
+(certification campaigns, an ITSM/ticketing gate, richer approval workflows),
 the two **Tier-3** market-frontier gaps that can be built and verified honestly in
-process: **Zero Standing Privilege** (ephemeral short-lived SSH certificates, Phase 22)
+process — **Zero Standing Privilege** (ephemeral short-lived SSH certificates, Phase 22)
 and **privileged threat analytics** (behavioral risk scoring + automated response,
-Phase 23) — see their sections below. Beyond those,
+Phase 23) — and now the first **Tier-4** ecosystem gap: a **Conjur-style
+application-secrets API** for non-agent apps (Phase 24). The portal is also
+**keyboard-first** (mouse optional). See their sections below. Beyond those,
 a number of items genuinely require external infrastructure or a paid account to build
 and verify honestly, so they are left as documented follow-ons rather than faked. The
 full catalogue is in **[docs/EXTERNAL-INFRA-GAPS.md](docs/EXTERNAL-INFRA-GAPS.md)**;
@@ -319,4 +321,21 @@ The second [Tier-3 gap](README.md#coverage-vs-commercial-pam-cyberark-wallix-): 
 
 ---
 
-**Tier-2 (access-governance depth) is complete** — certification campaigns (19), the ITSM/ticketing gate (20), and richer approval workflows (21). **Tier-3 is under way**: Zero Standing Privilege (22) and privileged threat analytics (23) are shipped; connector/plugin breadth, cloud CIEM, and web/SaaS session proxying remain, each requiring external infrastructure to build honestly (see [docs/EXTERNAL-INFRA-GAPS.md](docs/EXTERNAL-INFRA-GAPS.md)). See the [competitive-coverage section](README.md#coverage-vs-commercial-pam-cyberark-wallix-) for the full picture.
+## Phase 24 — Application-secrets API (Tier-4: Conjur-style secret delivery) ✅
+
+The first [Tier-4 ecosystem gap](README.md#coverage-vs-commercial-pam-cyberark-wallix-): a **Conjur-style application-secrets API** so a **non-agent application** (a CI job, a legacy service, a microservice) can retrieve the specific secrets it needs at startup — without an operator, a session proxy, or the AI-agent tool broker. Opt-in via `PAM_APP_SECRETS_ENABLED`; **default-deny** and least-privilege by construction.
+
+- [x] **Application identity** (migration `0017`: `app_keys`): a bearer key whose **SHA-256 hash only** is stored (like agent keys), with an accountable owner recorded in the audit trail. Admin CRUD `POST/GET /v1/apps` + `DELETE /v1/apps/{id}` (`CapManageUsers`).
+- [x] **Per-app secret grants** (`app_secret_grants`, default-deny): an app may fetch a credential's secret **only** if it has an explicit grant (`POST/GET /v1/apps/{id}/grants`, `DELETE …/{gid}`). Granting needs **`CapRevealSecret`** — you can only hand an app a secret you could reveal yourself, so a delegated `manage_users` principal can't exfiltrate secrets it couldn't otherwise read. Grants cascade when the app or the credential is deleted.
+- [x] **The fetch path** `GET /v1/app-secrets/{credential_id}` (application bearer auth): decrypts the granted credential just-in-time and returns it, audited `app.secret_retrieved` (never the secret itself); a non-granted credential is `app.secret_denied` + 403; a disabled/unknown app is 401; a Zero Standing Privilege (`ssh_ca`) credential has no secret to deliver (422). Independent of `PAM_REVEAL_DISABLED` (apps can't use the session proxy); **front it with TLS** — it delivers plaintext to machines.
+- [x] **Audit vocabulary**: `app.create` · `app.revoke` · `app.grant` · `app.grant_revoked` · `app.secret_retrieved` · `app.secret_denied`.
+- [x] **Tests**: store contract (app-key CRUD, default-deny + grant, duplicate/missing-FK errors, cascade on credential and app delete) and an end-to-end API test (mint → grant → fetch exactly the granted secret; ungranted 403; bad token 401; the secret never enters the audit trail; a plain user can neither mint apps nor grant secrets; routes absent when disabled).
+- Deferred (documented, Tier-4): a **Terraform provider** for pamv1 objects (a separate module + the Terraform Registry), **Secrets-Hub-style sync-out** to AWS Secrets Manager / Azure Key Vault (needs a cloud account), **SSH-key fleet discovery** at scale (needs a real host fleet), and **thick-app connection components** (Windows RemoteApp hosts) — see [docs/EXTERNAL-INFRA-GAPS.md](docs/EXTERNAL-INFRA-GAPS.md).
+
+## Portal: keyboard-first navigation ✅
+
+The 5250 console is now explicitly **keyboard-first** (the mouse is optional), matching the IBM-terminal heritage: focus lands on each screen's primary field after every render, **Esc** cancels/goes back (the twin of F12), **↑/↓** move between subfile option cells, Tab/Enter/F-keys work throughout, and a persistent hint documents the shortcuts. The look is unchanged — only keyboard affordances were added.
+
+---
+
+**Tier-2 (access-governance depth) is complete** — certification campaigns (19), the ITSM/ticketing gate (20), and richer approval workflows (21). **Tier-3**: Zero Standing Privilege (22) and privileged threat analytics (23) are shipped; connector/plugin breadth, cloud CIEM, and web/SaaS session proxying remain (infra-bound). **Tier-4 is under way**: the application-secrets API (24) is shipped; a Terraform provider, Secrets-Hub sync-out, SSH-key fleet discovery, and thick-app components remain, each requiring external infrastructure or an account to build honestly (see [docs/EXTERNAL-INFRA-GAPS.md](docs/EXTERNAL-INFRA-GAPS.md)). See the [competitive-coverage section](README.md#coverage-vs-commercial-pam-cyberark-wallix-) for the full picture.

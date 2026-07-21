@@ -132,6 +132,12 @@ type Config struct {
 	AnalyticsBusinessEnd   int
 	AnalyticsTimezone      string
 
+	// AppSecretsEnabled turns on the application-secrets API (Phase 24, Tier-4):
+	// a Conjur-style path where a non-agent application retrieves the specific
+	// secrets it has been granted with a bearer key. Opt-in (default off) because
+	// it delivers plaintext secrets to machines — front it with TLS.
+	AppSecretsEnabled bool
+
 	// Broker (Phase 13, AI-agent access broker). Setting BrokerPolicyFile enables
 	// the broker; the audit key + seed are then required (fail-loud).
 	BrokerPolicyFile    string        // PAM_BROKER_POLICY_FILE — YAML policy rules; enables the broker
@@ -308,6 +314,7 @@ func Load() (*Config, error) {
 		AnalyticsBusinessStart: integer("PAM_ANALYTICS_BUSINESS_START", 7),
 		AnalyticsBusinessEnd:   integer("PAM_ANALYTICS_BUSINESS_END", 20),
 		AnalyticsTimezone:      os.Getenv("PAM_ANALYTICS_TIMEZONE"),
+		AppSecretsEnabled:      boolean("PAM_APP_SECRETS_ENABLED", false),
 		BrokerPolicyFile:       os.Getenv("PAM_BROKER_POLICY_FILE"),
 		BrokerAuditKey:         os.Getenv("PAM_BROKER_AUDIT_KEY"),
 		BrokerAuditSignSeed:    os.Getenv("PAM_BROKER_AUDIT_SIGN_SEED"),

@@ -552,6 +552,10 @@ func run() error {
 		Location:      analyticsLoc,
 	})
 
+	if cfg.AppSecretsEnabled {
+		log.Warn("application-secrets API enabled (Conjur-style secret delivery to apps); front it with TLS")
+	}
+
 	handler, err := api.New(st, v, resolver, authn, api.Options{
 		Sessions:            sessions,
 		Live:                liveHub,
@@ -594,6 +598,7 @@ func run() error {
 		Analytics:           analyticsEngine,
 		AnalyticsWindow:     cfg.AnalyticsWindow,
 		AnalyticsAutoKill:   cfg.AnalyticsAutoKill,
+		AppSecretsEnabled:   cfg.AppSecretsEnabled,
 	})
 	if err != nil {
 		return err

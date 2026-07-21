@@ -304,12 +304,19 @@ stand up, in **[docs/EXTERNAL-INFRA-GAPS.md](docs/EXTERNAL-INFRA-GAPS.md)**.
 
 ### Tier 4 — ecosystem
 
-A [Terraform **provider**](https://developer.hashicorp.com/terraform) for pamv1 objects
-(targets / credentials / policies-as-code — strongly aligned with the IaC ethos) ·
-[Secrets Hub](https://www.cyberark.com/products/secrets-hub/)-style sync-out to AWS
-Secrets Manager / Azure Key Vault · a [Conjur](https://www.conjur.org/)-style
-application-secrets API for non-agent apps · SSH-key fleet discovery · thick-app
-connection components (auto-login into SSMS / Toad / vSphere via RDP RemoteApp).
+- ~~**Application-secrets API for non-agent apps**~~ **✅ shipped (Phase 24)** — a
+  [Conjur](https://www.conjur.org/)-style path (`PAM_APP_SECRETS_ENABLED`) where an
+  application retrieves the specific secrets it was **explicitly granted** with a
+  bearer key (`GET /v1/app-secrets/{credential_id}`); default-deny, granting needs
+  `reveal_secret`, every retrieval audited.
+- Remaining (external-infra/account-bound): a
+  [Terraform **provider**](https://developer.hashicorp.com/terraform) for pamv1 objects
+  (a separate module + the Terraform Registry) ·
+  [Secrets Hub](https://www.cyberark.com/products/secrets-hub/)-style sync-out to AWS
+  Secrets Manager / Azure Key Vault (a cloud account) · SSH-key fleet discovery at
+  scale (a real host fleet) · thick-app connection components (auto-login into SSMS /
+  Toad / vSphere via RDP RemoteApp — Windows RemoteApp hosts). See
+  [docs/EXTERNAL-INFRA-GAPS.md](docs/EXTERNAL-INFRA-GAPS.md).
 
 ### Deliberate non-goal
 
@@ -324,7 +331,7 @@ vault + proxy chokepoint, and is **out of scope** by design.
 2. ~~**Phase 16 — Live monitoring + command control**~~ ✅ **shipped** (SSE live stream + regex command control on exec/WinRM/SQL).
 3. ~~**Phase 17 — Safes / containers + dependent-account propagation**~~ ✅ **shipped** — the authorization upgrade for multi-team use and *safe* service-account rotation.
 
-**All four Tier-1 gaps and all three Tier-2 gaps are closed**, and **two of the five Tier-3 gaps** (Zero Standing Privilege, privileged threat analytics). The rest of Tier 3 (connector breadth, cloud CIEM, web proxying) and the Tier-4 ecosystem are the next frontier — each gated on external infrastructure or accounts, catalogued in [docs/EXTERNAL-INFRA-GAPS.md](docs/EXTERNAL-INFRA-GAPS.md).
+**All four Tier-1 gaps and all three Tier-2 gaps are closed**, **two of the five Tier-3 gaps** (Zero Standing Privilege, privileged threat analytics), and the **first Tier-4 gap** (the application-secrets API). The rest of Tier 3 (connector breadth, cloud CIEM, web proxying) and Tier 4 (Terraform provider, Secrets-Hub sync-out, SSH-key fleet discovery, thick-app components) are the next frontier — each gated on external infrastructure or accounts, catalogued in [docs/EXTERNAL-INFRA-GAPS.md](docs/EXTERNAL-INFRA-GAPS.md).
 
 ## Quickstart
 

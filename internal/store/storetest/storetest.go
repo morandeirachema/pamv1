@@ -569,6 +569,87 @@ func RunStoreContract(t *testing.T, st store.Store) {
 		t.Fatal("a deleted agent key must not resolve")
 	}
 
+	// Application-secrets API (Phase 24): app keys + per-app secret grants
+	// (default-deny; grants cascade on credential or app delete).
+	appTarget := &store.Target{Name: "app-host", Host: "10.9.9.9", Port: 22, OSType: "linux", Protocol: "ssh"}
+	if err := st.CreateTarget(ctx, appTarget); err != nil {
+		t.Fatalf("CreateTarget(app): %v", err)
+	}
+	appCred := &store.Credential{TargetID: appTarget.ID, Username: "svc", SecretType: "password", SecretEnc: "v2:enc"}
+	if err := st.CreateCredential(ctx, appCred); err != nil {
+		t.Fatalf("CreateCredential(app): %v", err)
+	}
+	app := &store.AppKey{Name: "ci-runner", Owner: "team", TokenHash: "apphash1"}
+	if err := st.CreateAppKey(ctx, app); err != nil {
+		t.Fatalf("CreateAppKey: %v", err)
+	}
+	if got, err := st.GetAppKeyByTokenHash(ctx, "apphash1"); err != nil || got.Name != "ci-runner" {
+		t.Fatalf("GetAppKeyByTokenHash: %+v err %v", got, err)
+	}
+	if err := st.CreateAppKey(ctx, &store.AppKey{Name: "off", TokenHash: "apphash2", Disabled: true}); err != nil {
+		t.Fatalf("CreateAppKey(disabled): %v", err)
+	}
+	if _, err := st.GetAppKeyByTokenHash(ctx, "apphash2"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatal("a disabled app key must not resolve")
+	}
+	// Default-deny before a grant.
+	if ok, err := st.AppMayAccessCredential(ctx, app.ID, appCred.ID); err != nil || ok {
+		t.Fatalf("AppMayAccessCredential before grant: ok=%v err=%v", ok, err)
+	}
+	ag := &store.AppSecretGrant{AppID: app.ID, CredentialID: appCred.ID}
+	if err := st.GrantAppSecret(ctx, ag); err != nil {
+		t.Fatalf("GrantAppSecret: %v", err)
+	}
+	if ok, err := st.AppMayAccessCredential(ctx, app.ID, appCred.ID); err != nil || !ok {
+		t.Fatalf("AppMayAccessCredential after grant: ok=%v err=%v", ok, err)
+	}
+	if err := st.GrantAppSecret(ctx, &store.AppSecretGrant{AppID: app.ID, CredentialID: appCred.ID}); !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("duplicate grant: want ErrConflict, got %v", err)
+	}
+	if err := st.GrantAppSecret(ctx, &store.AppSecretGrant{AppID: app.ID, CredentialID: 999999}); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("grant to a missing credential: want ErrNotFound, got %v", err)
+	}
+	if grants, err := st.ListAppSecretGrants(ctx, app.ID); err != nil || len(grants) != 1 {
+		t.Fatalf("ListAppSecretGrants: %d err %v", len(grants), err)
+	}
+	// Explicit grant delete.
+	if err := st.DeleteAppSecretGrant(ctx, ag.ID); err != nil {
+		t.Fatalf("DeleteAppSecretGrant: %v", err)
+	}
+	if err := st.DeleteAppSecretGrant(ctx, ag.ID); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("DeleteAppSecretGrant(missing): want ErrNotFound, got %v", err)
+	}
+	if ok, _ := st.AppMayAccessCredential(ctx, app.ID, appCred.ID); ok {
+		t.Fatal("access must be denied after the grant is deleted")
+	}
+	// Grant cascades when the credential is deleted.
+	if err := st.GrantAppSecret(ctx, &store.AppSecretGrant{AppID: app.ID, CredentialID: appCred.ID}); err != nil {
+		t.Fatalf("GrantAppSecret(re): %v", err)
+	}
+	if err := st.DeleteCredential(ctx, appCred.ID); err != nil {
+		t.Fatalf("DeleteCredential(app): %v", err)
+	}
+	if grants, err := st.ListAppSecretGrants(ctx, app.ID); err != nil || len(grants) != 0 {
+		t.Fatalf("grant should cascade on credential delete: %d err %v", len(grants), err)
+	}
+	// Grant cascades when the app is deleted.
+	appCred2 := &store.Credential{TargetID: appTarget.ID, Username: "svc2", SecretType: "password", SecretEnc: "v2:enc"}
+	if err := st.CreateCredential(ctx, appCred2); err != nil {
+		t.Fatalf("CreateCredential(app2): %v", err)
+	}
+	if err := st.GrantAppSecret(ctx, &store.AppSecretGrant{AppID: app.ID, CredentialID: appCred2.ID}); err != nil {
+		t.Fatalf("GrantAppSecret(2): %v", err)
+	}
+	if err := st.DeleteAppKey(ctx, app.ID); err != nil {
+		t.Fatalf("DeleteAppKey: %v", err)
+	}
+	if _, err := st.GetAppKeyByTokenHash(ctx, "apphash1"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatal("a deleted app key must not resolve")
+	}
+	if ok, _ := st.AppMayAccessCredential(ctx, app.ID, appCred2.ID); ok {
+		t.Fatal("grant should cascade on app delete")
+	}
+
 	// Broker audit is append-only; the store reads the head under its append lock
 	// and threads it to the linker (nil at genesis), so appends can't fork the
 	// chain. Head follows the latest, list is chain order.

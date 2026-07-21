@@ -192,6 +192,7 @@ All configuration is environment variables (12-factor). Full descriptions in
 | `PAM_ANALYTICS_INTERVAL_MIN` | | `0` (off) | Threat-analytics worker interval (Phase 23); `0` leaves the read-only `GET /api/analytics/risk` endpoint on. See §9.7. |
 | `PAM_ANALYTICS_WINDOW_MIN` / `_AUTO_KILL` / `_BUSINESS_START` / `_BUSINESS_END` | | `60` / `false` / `7` / `20` | Risk-scoring window (also the re-alert cooldown), auto-kill of critical actors' sessions, and business hours for the off-hours signal. |
 | `PAM_ANALYTICS_TIMEZONE` | | (UTC) | IANA timezone the business hours are interpreted in (audit timestamps are UTC). |
+| `PAM_APP_SECRETS_ENABLED` | | `false` | Enable the application-secrets API (Phase 24): Conjur-style secret delivery to non-agent apps. Front it with TLS. See §7. |
 | `PAM_SSH_HOST_KEY` | | (ephemeral) | Path to persist the proxy SSH host key. |
 | `PAM_SSH_CA_KEY` | | (ZSP off) | Path to the Zero Standing Privilege SSH CA key (Phase 22); presence enables `ssh_ca` credentials (mint short-lived certs). See §6. |
 | `PAM_SSH_CERT_TTL_MIN` | | `2` | Validity (minutes) of a minted ZSP certificate. |
@@ -769,6 +770,39 @@ For SPIFFE JWT-SVID agents and RFC 8693 delegation, set `PAM_BROKER_TRUST_DOMAIN
 `PAM_BROKER_TRUST_DOMAIN_JWKS`, and `PAM_BROKER_AUDIENCE`; delegation depth is
 capped by `PAM_BROKER_MAX_DELEGATION_DEPTH`.
 
+### Application-secrets API (Phase 24, Tier-4)
+
+For a **non-agent application** (a CI job, a legacy service) that just needs to
+fetch a secret at startup — not an operator through the proxy, not the AI-agent
+tool broker — pamv1 offers a **Conjur-style** delivery path. It is **opt-in** and
+**default-deny**: an app retrieves only the specific credentials it has been
+explicitly granted.
+
+```bash
+PAM_APP_SECRETS_ENABLED=true          # off by default; front it with TLS
+```
+
+```bash
+# 1. Mint an application identity (CapManageUsers); the token is shown once.
+curl -sX POST https://pam.example/v1/apps -H "X-API-Key: $PAM_API_KEY" \
+  -d '{"name":"orders-svc","owner":"payments-team"}'   # → {"id":3,"token":"pamt_…"}
+
+# 2. Grant it one credential (needs CapRevealSecret — you can only hand out a
+#    secret you could reveal yourself).
+curl -sX POST https://pam.example/v1/apps/3/grants -H "X-API-Key: $PAM_API_KEY" \
+  -d '{"credential_id":42}'
+
+# 3. The application fetches exactly that secret with its bearer key.
+curl -s https://pam.example/v1/app-secrets/42 -H "Authorization: Bearer pamt_…"
+# → {"credential_id":42,"target":"appdb","username":"svc","secret_type":"password","secret":"…"}
+```
+
+A credential the app was **not** granted returns 403 (`app.secret_denied`); a
+disabled/unknown app returns 401; every successful retrieval is audited
+`app.secret_retrieved` (never the secret). Revoke an app (`DELETE /v1/apps/{id}`)
+or a single grant (`DELETE /v1/apps/{id}/grants/{gid}`); both cascade. This path
+delivers **plaintext** to machines, so run it only over HTTPS and grant narrowly.
+
 ---
 
 ## 8. Break-glass procedure
@@ -1087,6 +1121,7 @@ scores in your environment.
 
 | Date | Change |
 |---|---|
+| 2026-07-21 | Phase 24: **application-secrets API** (Tier-4) — a Conjur-style path (`PAM_APP_SECRETS_ENABLED`) where a non-agent app retrieves the secrets it was explicitly granted with a bearer key (`GET /v1/app-secrets/{credential_id}`); default-deny, granting needs `reveal_secret`, every retrieval audited. See §7. The portal is now **keyboard-first** (mouse optional): focus lands on each screen's field, Esc goes back, ↑/↓ move subfile rows. |
 | 2026-07-21 | Phase 23: **privileged threat analytics** — explainable behavioral risk scoring over the audit trail (`GET /api/analytics/risk`, `CapReadAudit`); a background worker (`PAM_ANALYTICS_INTERVAL_MIN`) alerts on newly elevated high/critical actors and, with `PAM_ANALYTICS_AUTO_KILL`, terminates a critical actor's live sessions. See §9.7 |
 | 2026-07-21 | Phase 22: **Zero Standing Privilege** — an `ssh_ca` credential stores no secret; the proxy mints a short-lived SSH certificate just-in-time per session (`PAM_SSH_CA_KEY`, `PAM_SSH_CERT_TTL_MIN`). Install the CA on targets from `GET /api/ca/ssh`. See §6 → *Zero Standing Privilege* |
 | 2026-07-21 | Phase 21: **richer approval workflows** — multi-tier N-of-M approval chains (`PAM_APPROVALS_REQUIRED`, or per-request `approvals`), scheduled maintenance windows (`not_before`/`not_after` on a request), and mandatory reason codes (`PAM_REQUIRE_REASON`) |

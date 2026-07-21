@@ -189,6 +189,9 @@ type Options struct {
 	Analytics         *analytics.Engine
 	AnalyticsWindow   time.Duration
 	AnalyticsAutoKill bool
+	// AppSecretsEnabled turns on the application-secrets API (Phase 24): the app
+	// identity + secret-grant admin routes and the /v1/app-secrets fetch path.
+	AppSecretsEnabled bool
 }
 
 type Server struct {
@@ -226,6 +229,7 @@ type Server struct {
 	analyticsAutoKill  bool
 	analyticsMu        sync.Mutex
 	analyticsAlerted   map[string]analyticsAlert // actor → last alert (score + time)
+	appSecretsEnabled  bool
 	metrics            *metrics.Metrics
 	log                *slog.Logger
 	mux                *http.ServeMux
@@ -406,6 +410,7 @@ func New(st store.Store, v *vault.Vault, resolver *auth.Resolver, authn auth.Aut
 		analyticsWindow:    opts.AnalyticsWindow,
 		analyticsAutoKill:  opts.AnalyticsAutoKill,
 		analyticsAlerted:   make(map[string]analyticsAlert),
+		appSecretsEnabled:  opts.AppSecretsEnabled,
 		metrics:            metrics.New(),
 		log:                logging.Component("api"),
 		mux:                http.NewServeMux(),
@@ -598,6 +603,21 @@ func (s *Server) routes() {
 	// audit trail. Read-only, so an auditor may review risk without changing state.
 	if s.analytics != nil {
 		s.mux.Handle("GET /api/analytics/risk", s.authz(auth.CapReadAudit, s.analyticsRisk))
+	}
+
+	// Application-secrets API (Phase 24, Tier-4): Conjur-style secret delivery for
+	// non-agent applications, opt-in via PAM_APP_SECRETS_ENABLED. The fetch path
+	// authenticates an application bearer key; the admin routes reuse human RBAC —
+	// app identity CRUD needs CapManageUsers, and delegating a secret to an app
+	// needs CapRevealSecret (you can only hand out a secret you could reveal).
+	if s.appSecretsEnabled {
+		s.mux.HandleFunc("GET /v1/app-secrets/{id}", s.appAuth(s.fetchAppSecret))
+		s.mux.Handle("POST /v1/apps", s.authz(auth.CapManageUsers, s.createAppKey))
+		s.mux.Handle("GET /v1/apps", s.authz(auth.CapManageUsers, s.listAppKeys))
+		s.mux.Handle("DELETE /v1/apps/{id}", s.authz(auth.CapManageUsers, s.deleteAppKey))
+		s.mux.Handle("GET /v1/apps/{id}/grants", s.authz(auth.CapManageUsers, s.listAppSecretGrants))
+		s.mux.Handle("POST /v1/apps/{id}/grants", s.authz(auth.CapRevealSecret, s.grantAppSecret))
+		s.mux.Handle("DELETE /v1/apps/{id}/grants/{gid}", s.authz(auth.CapRevealSecret, s.deleteAppSecretGrant))
 	}
 
 	s.mux.Handle("POST /api/users", s.authz(auth.CapManageUsers, s.createUser))

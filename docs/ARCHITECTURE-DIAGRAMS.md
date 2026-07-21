@@ -174,6 +174,19 @@ erDiagram
     bool Disabled
     time_Time CreatedAt
   }
+  AppKey {
+    int64 ID
+    string Name
+    string Owner
+    bool Disabled
+    time_Time CreatedAt
+  }
+  AppSecretGrant {
+    int64 ID
+    int64 AppID
+    int64 CredentialID
+    time_Time CreatedAt
+  }
   AuditEvent {
     int64 ID
     time_Time TS
@@ -307,6 +320,7 @@ erDiagram
     time_Time CreatedAt
   }
   Campaign ||--o{ CampaignItem : "has"
+  Credential ||--o{ AppSecretGrant : "has"
   Credential ||--o{ Checkout : "has"
   Credential ||--o{ CredentialDependency : "has"
   Safe ||--o{ SafeMember : "has"
@@ -319,7 +333,7 @@ erDiagram
 
 ## 3. REST API surface
 
-The 85 routes registered on the API mux, with the capability or guard each enforces (see `internal/auth` for the role → capability matrix).
+The 92 routes registered on the API mux, with the capability or guard each enforces (see `internal/auth` for the role → capability matrix).
 
 | Method | Path | Guard |
 |---|---|---|
@@ -399,8 +413,15 @@ The 85 routes registered on the API mux, with the capability or guard each enfor
 | GET | `/v1/agents` | CapManageUsers |
 | POST | `/v1/agents` | CapManageUsers |
 | DELETE | `/v1/agents/{id}` | CapManageUsers |
+| GET | `/v1/app-secrets/{id}` | public |
 | GET | `/v1/approvals` | CapApprove |
 | POST | `/v1/approvals/{id}/decision` | CapApprove |
+| GET | `/v1/apps` | CapManageUsers |
+| POST | `/v1/apps` | CapManageUsers |
+| DELETE | `/v1/apps/{id}` | CapManageUsers |
+| GET | `/v1/apps/{id}/grants` | CapManageUsers |
+| POST | `/v1/apps/{id}/grants` | CapRevealSecret |
+| DELETE | `/v1/apps/{id}/grants/{gid}` | CapRevealSecret |
 | GET | `/v1/audit` | CapReadAudit |
 | GET | `/v1/audit/head` | CapReadAudit |
 | GET | `/v1/audit/verify` | CapReadAudit |

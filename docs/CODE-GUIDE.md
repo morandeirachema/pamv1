@@ -331,6 +331,12 @@ The menu is **role-aware**: `GET /api/me` returns the caller's identity + the
 stable capability names it holds, and the portal shows only the options the role
 may use (panels still tolerate a 403 as a backstop).
 
+It is also **keyboard-first** (the mouse is optional), matching the 5250 heritage:
+`render()` calls `focusPrimary()` to land the cursor on each screen's main field
+after every redraw (dynamically-inserted `autofocus` is unreliable), `Esc` cancels
+/ goes back (the twin of F12), `↑`/`↓` move between subfile option cells, and Tab /
+Enter / F-keys work throughout. The look is unchanged — only affordances were added.
+
 ### 4.4 Request lifecycle (a typical write)
 
 ```mermaid
@@ -741,6 +747,29 @@ sequenceDiagram
 ```
 
 ---
+
+## 10a. Application-secrets API (Phase 24, Tier-4 — `app_secrets_handlers.go`)
+
+The **Conjur-style** counterpart to the agent broker: a **non-agent application**
+(a CI job, a legacy service) fetches the specific secrets it needs at startup —
+no operator, no session proxy, no tool-call loop. Opt-in via
+`PAM_APP_SECRETS_ENABLED`; default-deny.
+
+- **Identity** — `store.AppKey` (`app_keys`, migration `0017`): a bearer key whose
+  **SHA-256 hash only** is stored. `appAuth` resolves the `Authorization: Bearer`
+  token by hash (a disabled/unknown key → 401, fail-closed).
+- **Authorization** — `store.AppSecretGrant` (`app_secret_grants`, both FKs
+  cascade): an app may fetch a credential **only** with an explicit grant.
+  `AppMayAccessCredential(appID, credID)` is the gate. Granting a secret requires
+  **`CapRevealSecret`** — you can only delegate a secret you could reveal yourself,
+  which stops a delegated `manage_users` principal from exfiltrating secrets.
+- **Fetch** — `GET /v1/app-secrets/{id}` decrypts the granted credential JIT and
+  returns it, audited `app.secret_retrieved` (never the secret); ungranted →
+  `app.secret_denied` + 403; a Zero Standing Privilege `ssh_ca` credential → 422
+  (no secret to deliver). It is independent of `PAM_REVEAL_DISABLED` (apps can't
+  use the proxy) and delivers plaintext, so it must be fronted with TLS.
+- **Admin** — `POST/GET/DELETE /v1/apps[...]` (`CapManageUsers`) and
+  `POST/GET/DELETE /v1/apps/{id}/grants[...]` (`CapRevealSecret`).
 
 ## 11. Break-glass (Phase 1 + Phase 6)
 

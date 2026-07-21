@@ -102,11 +102,18 @@ touching privileged systems.
 | Key | Action |
 |---|---|
 | **Enter** | Confirm / submit the screen |
+| **Esc** | Cancel / go back (the twin of F12) |
+| **↑ / ↓** | Move between the option cells in a list |
+| **Tab** | Move to the next field |
 | **F3** | Exit to the main menu / sign off |
 | **F5** | Refresh |
 | **F6** | Add (target, credential, grant, user, access request) |
 | **F9** | Context action (export the audit CSV; reconcile the directory) |
 | **F12** | Cancel / go back |
+
+The portal is **keyboard-first**: the mouse is **optional**. The cursor lands on
+each screen's main field automatically, so you can just start typing — no clicking
+required.
 
 The **main menu** is your whole management surface, and it shows **only the
 options your role may use**:
@@ -229,6 +236,7 @@ is audited (`session.monitor`).
 
 | Date | Change |
 |---|---|
+| 2026-07-21 | Portal is now **keyboard-first** (mouse optional): the cursor lands on each screen's field, **Esc** goes back, **↑/↓** move between list rows |
 | 2026-07-21 | Phase 22: some targets now use **Zero Standing Privilege** — there is no stored password; pamv1 signs a short-lived certificate just for your session. You connect exactly as before |
 | 2026-07-21 | Phases 15–16: connect to **`postgres` targets with `psql`** through the proxy (`:5433`; every SQL statement audited); sessions can be **watched live** by a supervisor and a command can be **blocked by policy** (`command blocked by policy`). Custom permission profiles (Phase 12) can be assigned in place of the four built-in roles |
 | 2026-07-20 | Phase 11: the portal is now a full role-aware management console — menu options for sessions, check-out, access requests, users, MFA, discovery, reconciliation, audit export and break-glass, in the same 5250 style |

@@ -128,12 +128,16 @@ so they are scoped here rather than stubbed:
 
 ## 8. Tier-4 ecosystem (external systems / registries)
 
+The **application-secrets API** (Conjur-style secret delivery for non-agent apps)
+**shipped in Phase 24** — it is fully in-process and tested (`PAM_APP_SECRETS_ENABLED`,
+`GET /v1/app-secrets/{credential_id}`). The rest of Tier 4 needs an external system,
+account, or a separate module/registry:
+
 | Item | Needs |
 |---|---|
-| **Terraform provider** for pamv1 objects | The Terraform Registry + a running pamv1 to target |
-| **Secrets-Hub-style sync-out** | AWS Secrets Manager / Azure Key Vault accounts to push managed secrets to |
-| **Application-secrets API** (Conjur-style) for non-agent apps | Consuming applications to integrate |
-| **SSH-key fleet discovery** | A fleet of hosts with existing authorized_keys to inventory |
+| **Terraform provider** for pamv1 objects | A separate Go module (terraform-plugin-framework) + the Terraform Registry; acceptance tests need a running pamv1 to target |
+| **Secrets-Hub-style sync-out** | AWS Secrets Manager / Azure Key Vault accounts to push managed secrets to (and a deliberate decision to export secrets outward) |
+| **SSH-key fleet discovery** at scale | A fleet of hosts with existing authorized_keys to inventory (the read mechanism is unit-testable in-process, like the rotation connectors) |
 | **Thick-app connection components** (SSMS / Toad / vSphere via RDP RemoteApp) | Windows RemoteApp hosts + the thick clients |
 
 ---
