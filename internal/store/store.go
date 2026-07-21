@@ -55,6 +55,34 @@ type Target struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
+// Campaign is an access-certification (attestation) campaign: a point-in-time
+// review of who has access to what, so a reviewer certifies or revokes each
+// grant (Phase 19 — a SOX / ISO 27001 / NIS2 access-review control).
+type Campaign struct {
+	ID        int64      `json:"id"`
+	Name      string     `json:"name"`
+	CreatedBy string     `json:"created_by"`
+	CreatedAt time.Time  `json:"created_at"`
+	DueAt     *time.Time `json:"due_at,omitempty"`
+	Status    string     `json:"status"` // open | closed
+	ClosedAt  *time.Time `json:"closed_at,omitempty"`
+}
+
+// CampaignItem is one access grant under review in a campaign. RefID points at
+// the underlying grant so a "revoke" decision can delete it.
+type CampaignItem struct {
+	ID          int64      `json:"id"`
+	CampaignID  int64      `json:"campaign_id"`
+	Kind        string     `json:"kind"`   // target_grant | safe_member
+	RefID       int64      `json:"ref_id"` // id of the underlying grant/member
+	SubjectType string     `json:"subject_type"`
+	Subject     string     `json:"subject"`
+	Detail      string     `json:"detail"`   // human-readable ("grant on target web-01")
+	Decision    string     `json:"decision"` // pending | certified | revoked
+	DecidedBy   string     `json:"decided_by,omitempty"`
+	DecidedAt   *time.Time `json:"decided_at,omitempty"`
+}
+
 // CredentialDependency declares a consumer of a credential — a Windows Service,
 // Scheduled Task or IIS App Pool that logs on with the account — so that when
 // the credential is rotated, pamv1 also updates the consumer over WinRM and the
@@ -315,6 +343,23 @@ type Store interface {
 	ListCredentialDependencies(ctx context.Context, credentialID int64) ([]CredentialDependency, error)
 	// DeleteCredentialDependency removes a dependency by ID, or ErrNotFound.
 	DeleteCredentialDependency(ctx context.Context, id int64) error
+
+	// CreateCampaign inserts a certification campaign, populating ID/CreatedAt.
+	CreateCampaign(ctx context.Context, c *Campaign) error
+	// ListCampaigns returns all campaigns, newest first.
+	ListCampaigns(ctx context.Context) ([]Campaign, error)
+	// GetCampaign returns a campaign by ID, or ErrNotFound.
+	GetCampaign(ctx context.Context, id int64) (*Campaign, error)
+	// CloseCampaign marks a campaign closed at the given time, or ErrNotFound.
+	CloseCampaign(ctx context.Context, id int64, at time.Time) error
+	// AddCampaignItem adds one access item to a campaign (ErrNotFound if absent).
+	AddCampaignItem(ctx context.Context, item *CampaignItem) error
+	// ListCampaignItems returns a campaign's items ordered by id.
+	ListCampaignItems(ctx context.Context, campaignID int64) ([]CampaignItem, error)
+	// GetCampaignItem returns one item by ID, or ErrNotFound.
+	GetCampaignItem(ctx context.Context, id int64) (*CampaignItem, error)
+	// DecideCampaignItem records a certify/revoke decision on an item.
+	DecideCampaignItem(ctx context.Context, id int64, decision, decidedBy string, at time.Time) error
 
 	// Access requests (4-eyes approval workflow).
 	CreateAccessRequest(ctx context.Context, ar *AccessRequest) error

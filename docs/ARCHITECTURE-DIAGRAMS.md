@@ -182,6 +182,27 @@ erDiagram
     time_Time ExpiresAt
     ptr_time_Time UsedAt
   }
+  Campaign {
+    int64 ID
+    string Name
+    string CreatedBy
+    time_Time CreatedAt
+    ptr_time_Time DueAt
+    string Status
+    ptr_time_Time ClosedAt
+  }
+  CampaignItem {
+    int64 ID
+    int64 CampaignID
+    string Kind
+    int64 RefID
+    string SubjectType
+    string Subject
+    string Detail
+    string Decision
+    string DecidedBy
+    ptr_time_Time DecidedAt
+  }
   Checkout {
     int64 ID
     int64 CredentialID
@@ -270,6 +291,7 @@ erDiagram
     string Role
     time_Time CreatedAt
   }
+  Campaign ||--o{ CampaignItem : "has"
   Credential ||--o{ Checkout : "has"
   Credential ||--o{ CredentialDependency : "has"
   Safe ||--o{ SafeMember : "has"
@@ -282,7 +304,7 @@ erDiagram
 
 ## 3. REST API surface
 
-The 78 routes registered on the API mux, with the capability or guard each enforces (see `internal/auth` for the role → capability matrix).
+The 83 routes registered on the API mux, with the capability or guard each enforces (see `internal/auth` for the role → capability matrix).
 
 | Method | Path | Guard |
 |---|---|---|
@@ -295,6 +317,11 @@ The 78 routes registered on the API mux, with the capability or guard each enfor
 | GET | `/api/auth/oidc/callback` | public (rate-limited) |
 | GET | `/api/auth/oidc/start` | public (rate-limited) |
 | POST | `/api/breakglass/unseal` | public (rate-limited) |
+| GET | `/api/campaigns` | CapReadAudit |
+| POST | `/api/campaigns` | CapManageUsers |
+| GET | `/api/campaigns/{id}` | CapReadAudit |
+| POST | `/api/campaigns/{id}/close` | CapManageUsers |
+| POST | `/api/campaigns/{id}/items/{iid}/decision` | CapManageUsers |
 | GET | `/api/checkouts` | CapReadAudit |
 | GET | `/api/config` | CapManageUsers |
 | PUT | `/api/config` | CapManageUsers |

@@ -932,6 +932,36 @@ shell access where you need that guarantee.
   non-zero when unhealthy. The container images use it as their `HEALTHCHECK`
   because the distroless base has no shell or curl.
 
+### 9.6 Access certification campaigns (Phase 19)
+
+A **certification campaign** is the periodic "recertify or revoke who has access
+to what" review that SOX / ISO 27001 / NIS2 Art. 21(2) expect. Creating a
+campaign **snapshots the current access grants** — every target grant and every
+safe member — into reviewable items; you then certify (keep) or revoke each, and
+a **revoke actually removes the underlying grant**.
+
+```bash
+# create a campaign (CapManageUsers) — snapshots current access
+curl -sX POST https://pam.example/api/campaigns -H "X-API-Key: $PAM_API_KEY" \
+  -d '{"name":"Q3 access review"}'      # → {"campaign":{"id":1,...},"items":N}
+
+# review the items, then decide each one
+curl -s https://pam.example/api/campaigns/1 -H "X-API-Key: $PAM_API_KEY"
+curl -sX POST https://pam.example/api/campaigns/1/items/7/decision \
+  -H "X-API-Key: $PAM_API_KEY" -d '{"decision":"revoke"}'   # deletes that grant
+curl -sX POST https://pam.example/api/campaigns/1/items/8/decision \
+  -H "X-API-Key: $PAM_API_KEY" -d '{"decision":"certify"}'  # attests, keeps it
+
+# close the campaign — the attestation record; further decisions are refused
+curl -sX POST https://pam.example/api/campaigns/1/close -H "X-API-Key: $PAM_API_KEY"
+```
+
+Management (create / decide / close) requires `CapManageUsers`; **reading** a
+campaign and its items requires `CapReadAudit`, so an **auditor** can review the
+attestation evidence without being able to change access. Every decision is
+audited (`certification.item_certified` / `certification.item_revoked`), and the
+campaign itself is the point-in-time record for your evidence file.
+
 ---
 
 ## 10. Security & hardening notes
@@ -966,6 +996,7 @@ shell access where you need that guarantee.
 
 | Date | Change |
 |---|---|
+| 2026-07-21 | Phase 19: **access certification campaigns** — `POST /api/campaigns` snapshots current access (target grants + safe members); certify/revoke each item (`revoke` deletes the grant); close to record the attestation. Management `CapManageUsers`, reading `CapReadAudit`. See §9.6 |
 | 2026-07-21 | Phase 18: **Conjur secret sourcing** — an alternative to SOPS: set `PAM_CONJUR_URL` and pam-server fetches its own bootstrap secrets from CyberArk Conjur at startup (authn-api-key or Kubernetes authn-jwt). Both ship; SOPS stays the default. See [deploy/k8s/conjur/README.md](../deploy/k8s/conjur/README.md) |
 | 2026-07-21 | Phase 17: **safes + dependent-account propagation** — group targets into delegated-access safes (`/api/safes`, a member reaches every target in the safe; `can_manage` delegated administration) and declare a credential's consumers (`/api/credentials/{id}/dependencies`) so rotation updates the Windows Services / Scheduled Tasks / IIS App Pools that use it. See §7 → *Safes* and *Dependent accounts* |
 | 2026-07-21 | Phase 16: **live session monitoring + command control** — watch an SSH/PostgreSQL session live over `GET /api/sessions/{id}/stream` (SSE, `CapReadAudit`); block dangerous commands on exec/WinRM/SQL via a regex denylist (`PAM_COMMAND_DENY_FILE`, audited `command.blocked`). See §9.4 |

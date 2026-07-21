@@ -25,7 +25,7 @@ unapologetically **AS/400 / IBM 5250 green-screen console**, because touching a 
 
 Built phase by phase with a single rule: **every phase is functional end to end** — it
 runs, passes tests, and deploys as Infrastructure-as-Code. The **[roadmap](ROADMAP.md)** runs
-0–18 and **all nineteen phases have shipped** — from the JIT SSH proxy and RBAC, through
+0–19 and **all twenty phases have shipped** — from the JIT SSH proxy and RBAC, through
 AD/Entra/OIDC login, Windows targets, break-glass quorum, OT/industrial adaptation, NIS2
 tooling, scale/HA and the full 5250 console, to a hot-swappable configuration subsystem with
 custom-profile RBAC, an **AI-agent access broker** (policy engine, JIT tool execution,
@@ -33,9 +33,9 @@ verifiable audit, MCP transport and SPIFFE identity), **SOPS-encrypted Kubernete
 a **PostgreSQL database session proxy** (JIT injection + per-statement query audit),
 **supervised sessions** (live monitoring + command control), **safes + dependent-account
 propagation** — which closes all four Tier-1 gaps against the commercial leaders — and optional
-**CyberArk Conjur** sourcing of pamv1's own bootstrap secrets (alongside SOPS). It remains
-an **alpha, educational** codebase — read it, run it, learn from it, but don't trust it with
-real secrets.
+**CyberArk Conjur** sourcing of pamv1's own bootstrap secrets (alongside SOPS), and
+**access certification campaigns** (the first Tier-2 governance gap). It remains an **alpha,
+educational** codebase — read it, run it, learn from it, but don't trust it with real secrets.
 
 🔎 **Live overview:** [interactive project page](https://claude.ai/code/artifact/a1b34e5b-cd84-4fc7-8389-ebb1897495f7) — what works, architecture and roadmap at a glance &nbsp;·&nbsp; 📖 **[Léelo en español →](README.es.md)**
 
@@ -226,7 +226,7 @@ disable the proxy with `PAM_SSH_ADDR=off`.
 
 ## Roadmap
 
-All nineteen phases have shipped — full per-phase detail in **[ROADMAP.md](ROADMAP.md)**:
+All twenty phases have shipped — full per-phase detail in **[ROADMAP.md](ROADMAP.md)**:
 
 | Phase | Theme | Status |
 |---|---|---|
@@ -249,6 +249,7 @@ All nineteen phases have shipped — full per-phase detail in **[ROADMAP.md](ROA
 | 16 | Live session monitoring (SSE) + command control | ✅ shipped |
 | 17 | Safes (delegated-access containers) + dependent-account propagation | ✅ shipped |
 | 18 | CyberArk Conjur secret sourcing (optional, alongside SOPS) | ✅ shipped |
+| 19 | Access certification / attestation campaigns | ✅ shipped |
 
 ## Coverage vs. commercial PAM (CyberArk, Wallix, …)
 
@@ -278,7 +279,7 @@ existing chokepoint architecture, and they map to candidate future phases.
 
 ### Tier 2 — access-governance depth
 
-- **Access certification / attestation campaigns** — periodic "managers recertify or revoke who has access to what" (a SOX / ISO 27001 / NIS2 control). *No coverage today; the grant model + audit trail are the foundation.*
+- ~~**Access certification / attestation campaigns**~~ **✅ shipped (Phase 19)** — a campaign snapshots current access (target grants + safe members); a reviewer certifies or revokes each item, and a revoke deletes the underlying grant (`POST /api/campaigns`). The SOX / ISO 27001 / NIS2 access-review control.
 - **ITSM / ticketing gate** — require a valid ServiceNow/Jira change ticket before access and stamp its ID into the audit. *The existing 4-eyes approval engine is the hook.*
 - **Richer approval workflows** — multi-tier chains, time-boxed / scheduled access windows, one-time access, mandatory reason codes (pamv1 is single-level 4-eyes today).
 

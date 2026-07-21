@@ -12,48 +12,52 @@ import (
 )
 
 type Memstore struct {
-	mu          sync.Mutex
-	nextID      int64
-	targets     map[int64]store.Target
-	creds       map[int64]store.Credential
-	users       map[int64]store.User
-	sessions    map[int64]store.Session
-	mfa         map[string]store.MFAEnrollment
-	recovery    map[string]map[string]bool // username -> set of code hashes
-	grants      map[int64]store.TargetGrant
-	accessReq   map[int64]store.AccessRequest
-	checkouts   map[int64]store.Checkout
-	oidcStates  map[string]oidcState
-	audit       []store.AuditEvent
-	agentKeys   map[int64]store.AgentKey
-	brokerLog   []store.BrokerAuditEvent
-	brokerTok   map[string]store.BrokerToken
-	settings    map[string]store.Setting
-	profiles    map[int64]store.Profile
-	safes       map[int64]store.Safe
-	safeMembers map[int64]store.SafeMember
-	credDeps    map[int64]store.CredentialDependency
+	mu            sync.Mutex
+	nextID        int64
+	targets       map[int64]store.Target
+	creds         map[int64]store.Credential
+	users         map[int64]store.User
+	sessions      map[int64]store.Session
+	mfa           map[string]store.MFAEnrollment
+	recovery      map[string]map[string]bool // username -> set of code hashes
+	grants        map[int64]store.TargetGrant
+	accessReq     map[int64]store.AccessRequest
+	checkouts     map[int64]store.Checkout
+	oidcStates    map[string]oidcState
+	audit         []store.AuditEvent
+	agentKeys     map[int64]store.AgentKey
+	brokerLog     []store.BrokerAuditEvent
+	brokerTok     map[string]store.BrokerToken
+	settings      map[string]store.Setting
+	profiles      map[int64]store.Profile
+	safes         map[int64]store.Safe
+	safeMembers   map[int64]store.SafeMember
+	credDeps      map[int64]store.CredentialDependency
+	campaigns     map[int64]store.Campaign
+	campaignItems map[int64]store.CampaignItem
 }
 
 // New returns an empty in-memory store ready for use.
 func New() *Memstore {
 	return &Memstore{
-		targets:     make(map[int64]store.Target),
-		creds:       make(map[int64]store.Credential),
-		users:       make(map[int64]store.User),
-		sessions:    make(map[int64]store.Session),
-		mfa:         make(map[string]store.MFAEnrollment),
-		recovery:    make(map[string]map[string]bool),
-		grants:      make(map[int64]store.TargetGrant),
-		accessReq:   make(map[int64]store.AccessRequest),
-		checkouts:   make(map[int64]store.Checkout),
-		agentKeys:   make(map[int64]store.AgentKey),
-		brokerTok:   make(map[string]store.BrokerToken),
-		settings:    make(map[string]store.Setting),
-		profiles:    make(map[int64]store.Profile),
-		safes:       make(map[int64]store.Safe),
-		safeMembers: make(map[int64]store.SafeMember),
-		credDeps:    make(map[int64]store.CredentialDependency),
+		targets:       make(map[int64]store.Target),
+		creds:         make(map[int64]store.Credential),
+		users:         make(map[int64]store.User),
+		sessions:      make(map[int64]store.Session),
+		mfa:           make(map[string]store.MFAEnrollment),
+		recovery:      make(map[string]map[string]bool),
+		grants:        make(map[int64]store.TargetGrant),
+		accessReq:     make(map[int64]store.AccessRequest),
+		checkouts:     make(map[int64]store.Checkout),
+		agentKeys:     make(map[int64]store.AgentKey),
+		brokerTok:     make(map[string]store.BrokerToken),
+		settings:      make(map[string]store.Setting),
+		profiles:      make(map[int64]store.Profile),
+		safes:         make(map[int64]store.Safe),
+		safeMembers:   make(map[int64]store.SafeMember),
+		credDeps:      make(map[int64]store.CredentialDependency),
+		campaigns:     make(map[int64]store.Campaign),
+		campaignItems: make(map[int64]store.CampaignItem),
 	}
 }
 
@@ -363,6 +367,113 @@ func (m *Memstore) DeleteCredentialDependency(_ context.Context, id int64) error
 		return store.ErrNotFound
 	}
 	delete(m.credDeps, id)
+	return nil
+}
+
+// CreateCampaign inserts a certification campaign, assigning ID and CreatedAt.
+func (m *Memstore) CreateCampaign(_ context.Context, c *store.Campaign) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if c.Status == "" {
+		c.Status = "open"
+	}
+	c.ID = m.id()
+	c.CreatedAt = time.Now().UTC()
+	m.campaigns[c.ID] = *c
+	return nil
+}
+
+// ListCampaigns returns all campaigns, newest first.
+func (m *Memstore) ListCampaigns(_ context.Context) ([]store.Campaign, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]store.Campaign, 0, len(m.campaigns))
+	for _, c := range m.campaigns {
+		out = append(out, c)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID > out[j].ID })
+	return out, nil
+}
+
+// GetCampaign returns a campaign by ID, or ErrNotFound.
+func (m *Memstore) GetCampaign(_ context.Context, id int64) (*store.Campaign, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	c, ok := m.campaigns[id]
+	if !ok {
+		return nil, store.ErrNotFound
+	}
+	return &c, nil
+}
+
+// CloseCampaign marks a campaign closed at the given time.
+func (m *Memstore) CloseCampaign(_ context.Context, id int64, at time.Time) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	c, ok := m.campaigns[id]
+	if !ok {
+		return store.ErrNotFound
+	}
+	c.Status = "closed"
+	t := at.UTC()
+	c.ClosedAt = &t
+	m.campaigns[id] = c
+	return nil
+}
+
+// AddCampaignItem adds one access item to a campaign.
+func (m *Memstore) AddCampaignItem(_ context.Context, item *store.CampaignItem) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.campaigns[item.CampaignID]; !ok {
+		return store.ErrNotFound
+	}
+	if item.Decision == "" {
+		item.Decision = "pending"
+	}
+	item.ID = m.id()
+	m.campaignItems[item.ID] = *item
+	return nil
+}
+
+// ListCampaignItems returns a campaign's items ordered by id.
+func (m *Memstore) ListCampaignItems(_ context.Context, campaignID int64) ([]store.CampaignItem, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]store.CampaignItem, 0)
+	for _, it := range m.campaignItems {
+		if it.CampaignID == campaignID {
+			out = append(out, it)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out, nil
+}
+
+// GetCampaignItem returns one item by ID, or ErrNotFound.
+func (m *Memstore) GetCampaignItem(_ context.Context, id int64) (*store.CampaignItem, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	it, ok := m.campaignItems[id]
+	if !ok {
+		return nil, store.ErrNotFound
+	}
+	return &it, nil
+}
+
+// DecideCampaignItem records a certify/revoke decision on an item.
+func (m *Memstore) DecideCampaignItem(_ context.Context, id int64, decision, decidedBy string, at time.Time) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	it, ok := m.campaignItems[id]
+	if !ok {
+		return store.ErrNotFound
+	}
+	it.Decision = decision
+	it.DecidedBy = decidedBy
+	t := at.UTC()
+	it.DecidedAt = &t
+	m.campaignItems[id] = it
 	return nil
 }
 

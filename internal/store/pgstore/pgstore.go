@@ -385,6 +385,88 @@ func (s *PGStore) DeleteCredentialDependency(ctx context.Context, id int64) erro
 	return execExpectingRow(ctx, s.pool, `DELETE FROM credential_dependencies WHERE id = $1`, id)
 }
 
+// CreateCampaign inserts a certification campaign, populating ID and CreatedAt.
+func (s *PGStore) CreateCampaign(ctx context.Context, c *store.Campaign) error {
+	if c.Status == "" {
+		c.Status = "open"
+	}
+	return s.pool.QueryRow(ctx,
+		`INSERT INTO campaigns (name, created_by, due_at, status) VALUES ($1, $2, $3, $4) RETURNING id, created_at`,
+		c.Name, c.CreatedBy, c.DueAt, c.Status,
+	).Scan(&c.ID, &c.CreatedAt)
+}
+
+// ListCampaigns returns all campaigns, newest first.
+func (s *PGStore) ListCampaigns(ctx context.Context) ([]store.Campaign, error) {
+	rows, err := s.pool.Query(ctx, `SELECT id, name, created_by, created_at, due_at, status, closed_at FROM campaigns ORDER BY id DESC`)
+	if err != nil {
+		return nil, err
+	}
+	return pgx.CollectRows(rows, scanCampaign)
+}
+
+// GetCampaign returns a campaign by ID, or ErrNotFound.
+func (s *PGStore) GetCampaign(ctx context.Context, id int64) (*store.Campaign, error) {
+	return getOne(ctx, s.pool, scanCampaign, `SELECT id, name, created_by, created_at, due_at, status, closed_at FROM campaigns WHERE id = $1`, id)
+}
+
+// CloseCampaign marks a campaign closed at the given time.
+func (s *PGStore) CloseCampaign(ctx context.Context, id int64, at time.Time) error {
+	return execExpectingRow(ctx, s.pool, `UPDATE campaigns SET status = 'closed', closed_at = $2 WHERE id = $1`, id, at)
+}
+
+// AddCampaignItem adds one access item to a campaign.
+func (s *PGStore) AddCampaignItem(ctx context.Context, item *store.CampaignItem) error {
+	if item.Decision == "" {
+		item.Decision = "pending"
+	}
+	err := s.pool.QueryRow(ctx,
+		`INSERT INTO campaign_items (campaign_id, kind, ref_id, subject_type, subject, detail, decision)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
+		item.CampaignID, item.Kind, item.RefID, item.SubjectType, item.Subject, item.Detail, item.Decision,
+	).Scan(&item.ID)
+	if pgCode(err) == pgForeignKeyViolation {
+		return store.ErrNotFound
+	}
+	return err
+}
+
+// ListCampaignItems returns a campaign's items ordered by id.
+func (s *PGStore) ListCampaignItems(ctx context.Context, campaignID int64) ([]store.CampaignItem, error) {
+	rows, err := s.pool.Query(ctx, `SELECT `+campaignItemCols+` FROM campaign_items WHERE campaign_id = $1 ORDER BY id`, campaignID)
+	if err != nil {
+		return nil, err
+	}
+	return pgx.CollectRows(rows, scanCampaignItem)
+}
+
+// GetCampaignItem returns one item by ID, or ErrNotFound.
+func (s *PGStore) GetCampaignItem(ctx context.Context, id int64) (*store.CampaignItem, error) {
+	return getOne(ctx, s.pool, scanCampaignItem, `SELECT `+campaignItemCols+` FROM campaign_items WHERE id = $1`, id)
+}
+
+// DecideCampaignItem records a certify/revoke decision on an item.
+func (s *PGStore) DecideCampaignItem(ctx context.Context, id int64, decision, decidedBy string, at time.Time) error {
+	return execExpectingRow(ctx, s.pool,
+		`UPDATE campaign_items SET decision = $2, decided_by = $3, decided_at = $4 WHERE id = $1`, id, decision, decidedBy, at)
+}
+
+const campaignItemCols = `id, campaign_id, kind, ref_id, subject_type, subject, detail, decision, decided_by, decided_at`
+
+// scanCampaign scans one campaign row.
+func scanCampaign(row pgx.CollectableRow) (store.Campaign, error) {
+	var c store.Campaign
+	err := row.Scan(&c.ID, &c.Name, &c.CreatedBy, &c.CreatedAt, &c.DueAt, &c.Status, &c.ClosedAt)
+	return c, err
+}
+
+// scanCampaignItem scans one campaign-item row.
+func scanCampaignItem(row pgx.CollectableRow) (store.CampaignItem, error) {
+	var it store.CampaignItem
+	err := row.Scan(&it.ID, &it.CampaignID, &it.Kind, &it.RefID, &it.SubjectType, &it.Subject, &it.Detail, &it.Decision, &it.DecidedBy, &it.DecidedAt)
+	return it, err
+}
+
 // scanSafe scans one safe row.
 func scanSafe(row pgx.CollectableRow) (store.Safe, error) {
 	var sf store.Safe

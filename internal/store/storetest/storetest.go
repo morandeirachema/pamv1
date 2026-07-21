@@ -159,6 +159,43 @@ func RunStoreContract(t *testing.T, st store.Store) {
 		t.Fatalf("ListCredentialDependencies(empty): %v", err)
 	}
 
+	// --- access certification campaigns (Phase 19) ---
+	camp := &store.Campaign{Name: "Q3 access review", CreatedBy: "alice"}
+	if err := st.CreateCampaign(ctx, camp); err != nil {
+		t.Fatalf("CreateCampaign: %v", err)
+	}
+	if camp.Status != "open" {
+		t.Fatalf("new campaign status = %q, want open", camp.Status)
+	}
+	it := &store.CampaignItem{CampaignID: camp.ID, Kind: "target_grant", RefID: 42, SubjectType: "user", Subject: "bob", Detail: "grant on target x"}
+	if err := st.AddCampaignItem(ctx, it); err != nil {
+		t.Fatalf("AddCampaignItem: %v", err)
+	}
+	if err := st.AddCampaignItem(ctx, &store.CampaignItem{CampaignID: 999999, Kind: "target_grant", RefID: 1, SubjectType: "user", Subject: "z"}); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("item on missing campaign: want ErrNotFound, got %v", err)
+	}
+	if items, err := st.ListCampaignItems(ctx, camp.ID); err != nil || len(items) != 1 || items[0].Decision != "pending" {
+		t.Fatalf("ListCampaignItems: %+v err %v", items, err)
+	}
+	if got, err := st.GetCampaignItem(ctx, it.ID); err != nil || got.Subject != "bob" {
+		t.Fatalf("GetCampaignItem: %+v err %v", got, err)
+	}
+	if err := st.DecideCampaignItem(ctx, it.ID, "revoked", "carol", now); err != nil {
+		t.Fatalf("DecideCampaignItem: %v", err)
+	}
+	if got, _ := st.GetCampaignItem(ctx, it.ID); got.Decision != "revoked" || got.DecidedBy != "carol" || got.DecidedAt == nil {
+		t.Fatalf("decided item: %+v", got)
+	}
+	if err := st.CloseCampaign(ctx, camp.ID, now); err != nil {
+		t.Fatalf("CloseCampaign: %v", err)
+	}
+	if got, _ := st.GetCampaign(ctx, camp.ID); got.Status != "closed" || got.ClosedAt == nil {
+		t.Fatalf("closed campaign: %+v", got)
+	}
+	if cs, err := st.ListCampaigns(ctx); err != nil || len(cs) != 1 {
+		t.Fatalf("ListCampaigns: %d err %v", len(cs), err)
+	}
+
 	// --- access requests (4-eyes) ---
 	ar := &store.AccessRequest{Requester: "alice", TargetID: tgt.ID, Reason: "patch", Status: "pending", ExpiresAt: future}
 	if err := st.CreateAccessRequest(ctx, ar); err != nil {

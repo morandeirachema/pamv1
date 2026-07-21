@@ -542,6 +542,14 @@ func (s *Server) routes() {
 	s.mux.Handle("DELETE /api/users/{id}", s.authz(auth.CapManageUsers, s.deleteUser))
 	s.mux.Handle("POST /api/identity/reconcile", s.authz(auth.CapManageUsers, s.reconcileIdentities))
 
+	// Access certification / attestation campaigns (Phase 19): a periodic review
+	// of who has access to what; a revoke decision removes the underlying grant.
+	s.mux.Handle("POST /api/campaigns", s.authz(auth.CapManageUsers, s.createCampaign))
+	s.mux.Handle("GET /api/campaigns", s.authz(auth.CapReadAudit, s.listCampaigns))
+	s.mux.Handle("GET /api/campaigns/{id}", s.authz(auth.CapReadAudit, s.getCampaign))
+	s.mux.Handle("POST /api/campaigns/{id}/items/{iid}/decision", s.authz(auth.CapManageUsers, s.decideCampaignItem))
+	s.mux.Handle("POST /api/campaigns/{id}/close", s.authz(auth.CapManageUsers, s.closeCampaign))
+
 	// Custom permission profiles (Phase 12): named capability sets for users.
 	s.mux.Handle("POST /api/profiles", s.authz(auth.CapManageUsers, s.createProfile))
 	s.mux.Handle("GET /api/profiles", s.authz(auth.CapManageUsers, s.listProfiles))

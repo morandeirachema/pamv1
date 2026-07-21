@@ -4,10 +4,12 @@ Guiding principle: **fully functional at every step**. Each phase ships somethin
 
 Status: ✅ done · 🚧 in progress · ⬜ planned
 
-**Phases 0–14 are shipped** (through the configuration subsystem, custom-profile
-RBAC, hot-swap, the CyberArk/Wallix-style console, the AI-agent access broker with
-MCP + SPIFFE identity, and SOPS-encrypted Kubernetes secrets) — see their sections
-below. Beyond those,
+**Phases 0–19 are shipped** — through the CyberArk/Wallix-style console, the AI-agent
+access broker (MCP + SPIFFE), SOPS-encrypted secrets, and then the four **Tier-1
+competitive-coverage gaps** closed (a PostgreSQL session proxy, supervised sessions
+with command control, safes, dependent-account propagation), optional CyberArk Conjur
+secret sourcing, and the first **Tier-2** access-governance gap (certification
+campaigns) — see their sections below. Beyond those,
 a few items genuinely require external infrastructure to build and verify
 honestly, so they are left as documented follow-ons rather than faked:
 
@@ -256,3 +258,14 @@ Let pamv1 source its **own** bootstrap secrets from [CyberArk Conjur](https://ww
 - [x] **IaC**: `deploy/k8s/conjur/` — a Conjur policy (`policy.yaml`), a pam-server Deployment with the authn-jwt projected-token volume (`deployment.yaml`), and a README covering the SOPS-vs-Conjur trade-offs
 - [x] **Tests**: an in-process fake Conjur (authenticate → retrieve, 404-as-not-found, auth-failure fail-loud) plus `SourceEnv` behavior (fills empty, env wins, disabled no-op, `PAM_SECRETS_PROVIDER=conjur` without a URL fails loud)
 - Deferred (documented): runtime secret **refresh** without a restart (sourcing is one-shot at boot, like SOPS at apply), a per-variable override map, and pushing pamv1's *managed* secrets **out** to Conjur (Secrets-Hub-style sync — a Tier-4 gap)
+
+## Phase 19 — Access certification / attestation campaigns ✅
+
+The first [Tier-2 competitive-coverage gap](README.md#coverage-vs-commercial-pam-cyberark-wallix-) (access-governance depth): the periodic "recertify or revoke who has access to what" review that SOX / ISO 27001 / NIS2 Art. 21(2) expect, and that CyberArk/SailPoint-style IGA provides.
+
+- [x] **Campaign snapshot**: `POST /api/campaigns` captures the *current* access grants — every target grant and every safe member — as reviewable **campaign items** (migration `0014`: `campaigns`, `campaign_items`). A campaign is a point-in-time attestation record
+- [x] **Certify or revoke, with teeth**: `POST /api/campaigns/{id}/items/{iid}/decision {certify|revoke}` — a **revoke actually deletes the underlying grant** (`DeleteTargetGrant`/`DeleteSafeMember`; a grant already gone is a no-op, since the goal state is "no access"), certify records the attestation. `POST …/close` closes the campaign (further decisions refused). Every decision is audited
+- [x] **Governance-scoped authz**: management (`create`/`decide`/`close`) needs `CapManageUsers`; reading a campaign + its items needs `CapReadAudit` — so an auditor can review the evidence without being able to change access. No new capability added to the matrix
+- [x] **Audit vocabulary**: `certification.campaign_created` · `certification.item_certified` · `certification.item_revoked` · `certification.campaign_closed`
+- [x] **Tests**: store contract (CRUD, decide, close, missing-campaign `ErrNotFound`) and an end-to-end API test (a campaign snapshots a grant + a safe member; revoke deletes the grant, certify retains the member, a closed campaign returns 409; auditor can read, a plain user cannot manage)
+- Deferred (documented): scheduled/recurring campaigns, scoped campaigns (per-safe or per-owner), reviewer assignment + reminders, and a 5250 console review screen
