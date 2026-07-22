@@ -1,6 +1,7 @@
 package logging
 
 import (
+	"context"
 	"log/slog"
 	"testing"
 )
@@ -23,7 +24,7 @@ func TestParseLevel(t *testing.T) {
 // TestSetupAndComponent checks Setup installs the logger and Component tags it.
 func TestSetupAndComponent(t *testing.T) {
 	Setup("debug", "json")
-	if !slog.Default().Enabled(nil, slog.LevelDebug) {
+	if !slog.Default().Enabled(context.TODO(), slog.LevelDebug) {
 		t.Fatal("debug level should be enabled after Setup(debug)")
 	}
 	if Component("api") == nil {
