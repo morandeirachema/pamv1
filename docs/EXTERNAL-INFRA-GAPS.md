@@ -70,7 +70,8 @@ to exercise fully:
 | **Account & identity reconciliation** | `/api/reconcile`, `/reconcile` | in-process | Real hosts to detect out-of-band drift | Drift is detected and (opt-in) remediated |
 | **Discovery scan** | `POST /api/discovery/scan` | injected dialer | A network with reachable SSH/WinRM/RDP hosts | Reachable management ports are found and (opt-in) onboarded |
 | **Dependent-account propagation** | `/api/credentials/{id}/dependencies` | fake WinRM | A Windows host running Services / Scheduled Tasks / IIS App Pools | The consumer's stored password is updated on rotation so the service keeps running |
-| **PostgreSQL session proxy** | `PAM_DB_ADDR`, `dbproxy.go` | in-process fake upstream | (optional) a real Postgres for interop breadth | JIT injection + per-statement `db.query` audit against a managed/SCRAM Postgres |
+| **PostgreSQL session proxy** | `PAM_DB_ADDR`, `dbproxy.go` | in-process fake upstream | (optional) a real Postgres for interop breadth | JIT injection + per-statement `db.query` audit against a managed/SCRAM Postgres; the SCRAM server signature is verified |
+| **Upstream DB TLS verification** | `PAM_DB_UPSTREAM_CA` / `_TLS_VERIFY` | in-process fake upstream | A Postgres with a CA-issued (or pinned) server cert | With a CA set, the proxy verifies the target's certificate fail-closed (no MITM of the injected credential); unset = trust-any + startup warning |
 | **Zero Standing Privilege (SSH certs)** | `PAM_SSH_CA_KEY`, `internal/sshca` (Phase 22) | in-process cert-only sshd | A target sshd trusting the pamv1 CA (`TrustedUserCAKeys`) | A minted short-lived cert authenticates; no standing secret exists for the account |
 | **Serial (RS-232) connectors** — *deferred* | Phase 8 | — none | Serial hardware / a terminal server | Legacy OT equipment reached over serial. Not implemented — needs the hardware |
 
