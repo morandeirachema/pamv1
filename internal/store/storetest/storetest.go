@@ -735,4 +735,15 @@ func RunStoreContract(t *testing.T, st store.Store) {
 	if cid, err := st.PeekBrokerToken(ctx, "jti-live"); err != nil || cid != "call_live" {
 		t.Fatalf("GC removed a live token: cid=%q err=%v", cid, err)
 	}
+
+	// --- leader lock ---
+	// An uncontended lock runs fn and reports ran=true; fn's error propagates.
+	ran, err := st.WithLeaderLock(ctx, 0x70616d5f7473, func(context.Context) error { return nil }) // "pam_ts"
+	if err != nil || !ran {
+		t.Fatalf("WithLeaderLock(uncontended): ran=%v err=%v", ran, err)
+	}
+	sentinel := errors.New("boom")
+	if _, err := st.WithLeaderLock(ctx, 0x70616d5f7473, func(context.Context) error { return sentinel }); !errors.Is(err, sentinel) {
+		t.Fatalf("WithLeaderLock must propagate fn's error, got %v", err)
+	}
 }

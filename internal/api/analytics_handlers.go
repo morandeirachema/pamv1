@@ -86,7 +86,17 @@ func (s *Server) RunAnalyticsWorker(ctx context.Context, interval time.Duration)
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			s.analyticsPass(ctx, time.Now())
+			// Run under a leader lock so N replicas don't each alert on and
+			// auto-kill the same actor (duplicate alerts / redundant kills).
+			ran, err := s.store.WithLeaderLock(ctx, analyticsLockKey, func(c context.Context) error {
+				s.analyticsPass(c, time.Now())
+				return nil
+			})
+			if err != nil {
+				s.log.Warn("threat-analytics lock unavailable; skipping pass", "err", err)
+			} else if !ran {
+				s.log.Debug("threat-analytics pass skipped (another replica is leader)")
+			}
 		}
 	}
 }

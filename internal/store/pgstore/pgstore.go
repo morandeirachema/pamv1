@@ -1245,6 +1245,30 @@ func (s *PGStore) Ping(ctx context.Context) error {
 	return s.pool.Ping(ctx)
 }
 
+// WithLeaderLock runs fn only if it can immediately acquire the session-level
+// advisory lock for key. It holds the lock on a dedicated pooled connection for
+// the whole of fn (which uses the pool's other connections normally), so across
+// HA replicas exactly one runs the job per tick. pg_try_advisory_lock is
+// non-blocking: a replica that doesn't get the lock returns ran=false and skips
+// fn rather than piling up behind the leader.
+func (s *PGStore) WithLeaderLock(ctx context.Context, key int64, fn func(context.Context) error) (bool, error) {
+	conn, err := s.pool.Acquire(ctx)
+	if err != nil {
+		return false, err
+	}
+	defer conn.Release()
+	var got bool
+	if err := conn.QueryRow(ctx, `SELECT pg_try_advisory_lock($1)`, key).Scan(&got); err != nil {
+		return false, err
+	}
+	if !got {
+		return false, nil // another replica holds the lock; skip this tick
+	}
+	// Unlock on the same connection, even if ctx is cancelled mid-run.
+	defer conn.Exec(context.Background(), `SELECT pg_advisory_unlock($1)`, key)
+	return true, fn(ctx)
+}
+
 // Close releases the underlying connection pool.
 func (s *PGStore) Close() {
 	s.pool.Close()

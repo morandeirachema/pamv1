@@ -45,3 +45,62 @@ func TestPGStoreContract(t *testing.T) {
 
 	storetest.RunStoreContract(t, st)
 }
+
+// TestPGStoreLeaderLockMutualExclusion proves the advisory-lock leader election
+// is real against a live database: while one holder runs under the lock, a
+// concurrent acquisition of the SAME key is refused (ran=false), and a DIFFERENT
+// key is granted. Memstore can't exercise this (it always runs fn), so it lives
+// in the live-Postgres suite.
+func TestPGStoreLeaderLockMutualExclusion(t *testing.T) {
+	url := os.Getenv("PAM_TEST_DATABASE_URL")
+	if url == "" {
+		t.Skip("PAM_TEST_DATABASE_URL not set; skipping live Postgres leader-lock test")
+	}
+	ctx := context.Background()
+	st, err := pgstore.Open(ctx, url)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer st.Close()
+
+	const key = int64(0x70616d5f6c6f636b) // "pam_lock"
+	holding := make(chan struct{})
+	release := make(chan struct{})
+	done := make(chan error, 1)
+
+	// Holder acquires the lock and keeps it until we signal release.
+	go func() {
+		_, err := st.WithLeaderLock(ctx, key, func(context.Context) error {
+			close(holding)
+			<-release
+			return nil
+		})
+		done <- err
+	}()
+
+	<-holding // the holder now owns the lock
+	// A concurrent attempt on the same key must be refused without running fn.
+	ran, err := st.WithLeaderLock(ctx, key, func(context.Context) error {
+		t.Error("fn ran while another holder owned the lock")
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("contended WithLeaderLock: unexpected err %v", err)
+	}
+	if ran {
+		t.Fatal("contended WithLeaderLock: want ran=false (lock held), got true")
+	}
+	// A different key is independent and is granted.
+	if ran, err := st.WithLeaderLock(ctx, key+1, func(context.Context) error { return nil }); err != nil || !ran {
+		t.Fatalf("different-key WithLeaderLock: ran=%v err=%v", ran, err)
+	}
+
+	close(release) // let the holder finish and drop the lock
+	if err := <-done; err != nil {
+		t.Fatalf("holder WithLeaderLock: %v", err)
+	}
+	// Once released, the key is acquirable again.
+	if ran, err := st.WithLeaderLock(ctx, key, func(context.Context) error { return nil }); err != nil || !ran {
+		t.Fatalf("post-release WithLeaderLock: ran=%v err=%v", ran, err)
+	}
+}
