@@ -24,6 +24,7 @@ import (
 	"github.com/morandeirachema/pamv1/internal/metrics"
 	"github.com/morandeirachema/pamv1/internal/oidc"
 	"github.com/morandeirachema/pamv1/internal/policy"
+	"github.com/morandeirachema/pamv1/internal/ratelimit"
 	"github.com/morandeirachema/pamv1/internal/rotate"
 	"github.com/morandeirachema/pamv1/internal/session"
 	"github.com/morandeirachema/pamv1/internal/sshca"
@@ -209,7 +210,7 @@ type Server struct {
 	guacdRecordingPath string
 	guacdRDPSecurity   string
 	guacdIgnoreCert    bool
-	authLimiter        *rateLimiter
+	authLimiter        *ratelimit.Limiter
 	trustedProxyHops   int
 	sessions           *session.Registry
 	live               *session.Hub
@@ -250,7 +251,7 @@ type Server struct {
 	broker        *broker.Broker
 	agentVerifier agentid.Verifier
 	auditChain    *auditchain.Chain
-	brokerLimiter *rateLimiter // per-agent tool-call rate limit (Phase 13)
+	brokerLimiter *ratelimit.Limiter // per-agent tool-call rate limit (Phase 13)
 }
 
 // RuntimeConfig is the set of settings PUT /api/config can change without a
@@ -396,7 +397,7 @@ func New(st store.Store, v *vault.Vault, resolver *auth.Resolver, authn auth.Aut
 		guacdRecordingPath: opts.GuacdRecordingPath,
 		guacdRDPSecurity:   opts.GuacdRDPSecurity,
 		guacdIgnoreCert:    opts.GuacdIgnoreCert,
-		authLimiter:        newRateLimiter(opts.AuthRatePerMin),
+		authLimiter:        ratelimit.New(opts.AuthRatePerMin),
 		trustedProxyHops:   opts.TrustedProxyHops,
 		sessions:           opts.Sessions,
 		live:               opts.Live,

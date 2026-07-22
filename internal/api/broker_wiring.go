@@ -8,6 +8,7 @@ import (
 	"github.com/morandeirachema/pamv1/internal/agentid"
 	"github.com/morandeirachema/pamv1/internal/auditchain"
 	"github.com/morandeirachema/pamv1/internal/broker"
+	"github.com/morandeirachema/pamv1/internal/ratelimit"
 )
 
 // setupBroker constructs the AI-agent access broker when a policy engine is
@@ -28,7 +29,7 @@ func (s *Server) setupBroker(opts Options) error {
 		WithApproval(s.store, s.alerter, opts.BrokerTokenTTL).
 		WithArgCap(opts.BrokerMaxArgBytes).
 		WithRevalidator(s.revalidateAgent)
-	s.brokerLimiter = newRateLimiter(opts.BrokerRatePerMin)
+	s.brokerLimiter = ratelimit.New(opts.BrokerRatePerMin)
 	// Static agent keys are always accepted; a SPIFFE SVID verifier, when
 	// configured, is tried alongside them (Phase 13d).
 	verifier := agentid.MultiVerifier{agentid.NewStaticVerifier(s.store)}

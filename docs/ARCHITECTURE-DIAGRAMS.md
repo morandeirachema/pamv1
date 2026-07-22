@@ -65,6 +65,7 @@ flowchart LR
   subgraph n_Other["Other"]
     n_analytics[analytics]
     n_conjur[conjur]
+    n_ratelimit[ratelimit]
     n_sshca[sshca]
     n_ticket[ticket]
   end
@@ -87,6 +88,7 @@ flowchart LR
   n_api --> n_mfa
   n_api --> n_oidc
   n_api --> n_policy
+  n_api --> n_ratelimit
   n_api --> n_rotate
   n_api --> n_session
   n_api --> n_shamir
@@ -136,6 +138,7 @@ flowchart LR
   n_pgstore --> n_store
   n_proxy --> n_auth
   n_proxy --> n_logging
+  n_proxy --> n_ratelimit
   n_proxy --> n_session
   n_proxy --> n_sshca
   n_proxy --> n_store
