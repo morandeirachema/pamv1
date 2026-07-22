@@ -50,8 +50,9 @@ but don't trust it with real secrets.
 
 **Documentation** — living docs, kept in step with the code:
 
+- **[Sysadmin Guide — how it works](docs/SYSADMIN-GUIDE.md)** — start here: a script-oriented explanation of what pamv1 does, how the pieces fit, and copy-paste `curl`/`ssh` recipes for day-to-day operations. The mental model + runbook.
 - **[User Guide](docs/USER-GUIDE.md)** — for operators / auditors / approvers: signing in, connecting through the proxy, per-role abilities.
-- **[Administrator Guide](docs/ADMIN-GUIDE.md)** — deploy, configure, manage targets / credentials / users / roles, break-glass, logging & audit.
+- **[Administrator Guide](docs/ADMIN-GUIDE.md)** — the full reference: deploy, configure (every flag), manage targets / credentials / users / roles, break-glass, logging & audit.
 - **[Architecture — high level](docs/ARCHITECTURE-HIGH-LEVEL.md)** and **[low level](docs/ARCHITECTURE-LOW-LEVEL.md)** (the fullest map — read it first), plus **[code-derived diagrams](docs/ARCHITECTURE-DIAGRAMS.md)** (package graph, data model, REST surface — generated from source and CI-enforced current).
 - **[Ports & network-flow matrix](docs/PORTS-AND-FLOWS.md)** · **[backup & restore runbook](docs/BACKUP-AND-RESTORE.md)** · **[OT deployment guide](docs/OT-DEPLOYMENT.md)** · **[NIS2 compliance pack](docs/NIS2-COMPLIANCE.md)**.
 - **[Related PAM projects — open-source & commercial](docs/RELATED-PROJECTS.md)** — how pamv1 sits among the open-source projects (JumpServer, Teleport, Warpgate, Vault/OpenBao, step-ca, Guacamole …) and the commercial vendors (CyberArk, BeyondTrust, Delinea, Wallix …), including which commercial products are built on open-source cores · **[external-infra gaps](docs/EXTERNAL-INFRA-GAPS.md)** (what needs a real account/host to verify).

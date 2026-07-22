@@ -14,8 +14,10 @@ procedure, and read the logs and audit trail.
 > currently intended for **pre-production** use. It has not been security-audited.
 > Do not guard real production credentials with it yet.
 
-New here? Read the [concepts](#1-concepts) first, then jump to
-[deployment](#3-deployment). Operators/users should read the
+New here? If you want the **how‑it‑works mental model and a script‑oriented
+runbook** before this reference, start with the
+[Sysadmin Guide](SYSADMIN-GUIDE.md). Otherwise read the [concepts](#1-concepts)
+first, then jump to [deployment](#3-deployment). Operators/users should read the
 [User Guide](USER-GUIDE.md). For the big picture see the
 [high-level architecture](ARCHITECTURE-HIGH-LEVEL.md); for firewall rules see the
 [ports & flow matrix](PORTS-AND-FLOWS.md).
