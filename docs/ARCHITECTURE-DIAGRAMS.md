@@ -333,7 +333,7 @@ erDiagram
 
 ## 3. REST API surface
 
-The 92 routes registered on the API mux, with the capability or guard each enforces (see `internal/auth` for the role → capability matrix).
+The 94 routes registered on the API mux, with the capability or guard each enforces (see `internal/auth` for the role → capability matrix).
 
 | Method | Path | Guard |
 |---|---|---|
@@ -373,6 +373,8 @@ The 92 routes registered on the API mux, with the capability or guard each enfor
 | POST | `/api/discovery/scan` | CapManageTargets |
 | POST | `/api/identity/reconcile` | CapManageUsers |
 | POST | `/api/login` | public (rate-limited) |
+| GET | `/api/login-sessions` | CapManageUsers |
+| POST | `/api/login-sessions/revoke` | CapManageUsers |
 | POST | `/api/logout` | authenticated |
 | GET | `/api/me` | authenticated |
 | DELETE | `/api/mfa` | authenticated |
