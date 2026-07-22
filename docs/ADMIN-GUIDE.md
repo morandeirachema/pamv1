@@ -133,6 +133,14 @@ SOPS and Conjur both ship; SOPS stays the zero-dependency default. See
 The deployment runs non-root, read-only root filesystem, all capabilities
 dropped, under the restricted [Pod Security Standard](https://kubernetes.io/docs/concepts/security/pod-security-standards/). Recordings and the host key live on a writable `/data` volume. Readiness is gated on `/readyz` (DB reachable), liveness on `/healthz`.
 
+**Network segmentation.** `deploy/k8s/networkpolicy.yaml` is a default-deny
+`NetworkPolicy`: it allows ingress only on the app ports (8080/2222) and egress
+only to DNS, the PostgreSQL backend, and your target networks — so no other pod
+can reach the vault and the vault can't egress to the public internet. **Scope
+the `from`/`ipBlock` rules to your environment before applying** (the defaults use
+the RFC-1918 private ranges). In Helm it is a gated template — enable with
+`--set networkPolicy.enabled=true` and set `networkPolicy.egressTargetCIDRs`.
+
 Or with **Helm** (`deploy/helm/pamv1`) — configurable replicas, a PVC option, a
 Prometheus `ServiceMonitor`, and the same hardened pod security context:
 
@@ -165,8 +173,13 @@ terraform apply -var master_key=... -var api_key=... -var database_url=postgres:
 ### 3.6 Put it behind TLS
 
 Operators must reach the portal/API over **HTTPS** and the proxy over SSH only.
-Terminate TLS at an ingress/load balancer in front of `:8080`; never expose the
-plain-HTTP port off-host. Use `sslmode=verify-full` and, later, LDAPS for AD.
+Terminate TLS at an ingress/load balancer in front of `:8080`, or set
+`PAM_TLS_CERT`/`PAM_TLS_KEY` for native TLS; never expose the plain-HTTP port
+off-host. To make plaintext a startup error rather than a footgun, set
+`PAM_REQUIRE_HTTPS=true` (refuses to start without native TLS). When TLS is
+terminated by a trusted reverse proxy, leave `PAM_REQUIRE_HTTPS` off and set
+`PAM_TRUSTED_PROXY_HOPS` so per-IP auth throttling reads the real client IP from
+`X-Forwarded-For`. Use `sslmode=verify-full` and, later, LDAPS for AD.
 
 ---
 
@@ -183,12 +196,19 @@ All configuration is environment variables (12-factor). Full descriptions in
 | `PAM_KEK_TRANSIT_ADDR` / `_TOKEN` / `_KEY` | transit only | — | HashiCorp Vault Transit KEK (production). |
 | `PAM_KEK_AWS_KEY_ID` / `_AWS_REGION` | aws-kms only | — | AWS KMS KEK (production). |
 | `PAM_KEK_PKCS11_MODULE` / `_PIN` / `_KEY_LABEL` / `_TOKEN_LABEL` | pkcs11 only | — | On-prem HSM KEK — needs the `pkcs11`-tagged build (`deploy/docker/Dockerfile.pkcs11`). |
-| `PAM_API_KEY` | ✅ | — | Bootstrap admin key (X-API-Key / SSH password). |
+| `PAM_API_KEY` | ✅ | — | Bootstrap admin key (X-API-Key / SSH password). **Must be ≥16 chars** on a real database (rejected at startup otherwise). |
+| `PAM_ALLOW_WEAK_API_KEY` | | `false` | Override the 16-char `PAM_API_KEY` floor (demos only; the `memory` store is already exempt). |
 | `PAM_DATABASE_URL` | ✅ | — | `postgres://…` (use `sslmode=verify-full`) or `memory` for demo. |
 | `PAM_BREAK_GLASS_KEY_HASH` | | (off) | Hex SHA-256 of the sealed emergency key. |
 | `PAM_LISTEN_ADDR` | | `:8080` | HTTP portal/API bind. |
+| `PAM_REQUIRE_HTTPS` | | `false` | Refuse to start over plaintext HTTP unless native TLS (`PAM_TLS_CERT/KEY`) is set. Leave off only behind a trusted TLS-terminating proxy. |
+| `PAM_TRUSTED_PROXY_HOPS` | | `0` | Number of trusted reverse-proxy hops; makes the auth rate limiter read the real client IP from `X-Forwarded-For` (0 = key on RemoteAddr, spoof-proof). |
 | `PAM_SSH_ADDR` | | `:2222` | SSH proxy bind; `off` disables the proxy. |
+| `PAM_PROXY_AUTH_RATE_LIMIT` | | `10` | Failed-auth attempts per source IP per minute on the SSH (:2222) and DB (:5433) proxies (0 disables). Throttles guessing of `PAM_API_KEY`. |
 | `PAM_DB_ADDR` | | `off` | PostgreSQL session-proxy bind (Phase 15), e.g. `:5433`; `off` disables it. |
+| `PAM_DB_UPSTREAM_CA` | | (trust-any + warn) | PEM CA bundle to VERIFY the upstream PostgreSQL server certificate (fail-closed upstream TLS on the credential-bearing leg). |
+| `PAM_DB_UPSTREAM_TLS_VERIFY` | | `false` | Verify the upstream PostgreSQL certificate against the system roots (alternative to `PAM_DB_UPSTREAM_CA`). |
+| `PAM_REQUIRE_DB_CLIENT_TLS` | | `false` | Refuse to start the DB proxy without operator-leg TLS (so the PAM key is never sent to it in cleartext). |
 | `PAM_COMMAND_DENY_FILE` | | (off) | Regex denylist file for command control (Phase 16); blocks matching commands on exec/WinRM/SQL. |
 | `PAM_ANALYTICS_INTERVAL_MIN` | | `0` (off) | Threat-analytics worker interval (Phase 23); `0` leaves the read-only `GET /api/analytics/risk` endpoint on. See §9.7. |
 | `PAM_ANALYTICS_WINDOW_MIN` / `_AUTO_KILL` / `_BUSINESS_START` / `_BUSINESS_END` | | `60` / `false` / `7` / `20` | Risk-scoring window (also the re-alert cooldown), auto-kill of critical actors' sessions, and business hours for the off-hours signal. |
@@ -477,11 +497,21 @@ psql "host=pam.example port=5433 user=dbuser@appdb dbname=orders"
 ```
 
 The proxy runs the same authorization gates as the SSH proxy (role capability,
-per-target grants, protocol allowlist, and the 4-eyes/approval gate), then
+per-target grants, protocol allowlist, the 4-eyes/approval gate, **and the MFA
+enrollment gate** — an enroll-only session can't open a DB session either), then
 authenticates upstream with the vaulted secret — supporting **SCRAM-SHA-256**
-(PostgreSQL 14+ default), MD5, and cleartext, and best-effort upstream TLS. Set
-`PAM_TLS_CERT`/`PAM_TLS_KEY` to also encrypt the operator-facing leg; otherwise
-terminate TLS at the ingress (the PAM key would otherwise travel in cleartext).
+(PostgreSQL 14+ default, with the server signature verified), MD5, and cleartext.
+
+**Harden both legs of the proxy:**
+
+- *Upstream (target) leg* — set `PAM_DB_UPSTREAM_CA` (a pinned CA bundle) or
+  `PAM_DB_UPSTREAM_TLS_VERIFY=true` to **verify the database's TLS certificate**,
+  so the JIT-injected credential can't be harvested by a MITM. Left unset, the
+  upstream connection is trust-any (logged loudly at startup).
+- *Operator-facing leg* — set `PAM_TLS_CERT`/`PAM_TLS_KEY` to encrypt it (or
+  terminate TLS at the ingress); the PAM key would otherwise travel in cleartext.
+  Set `PAM_REQUIRE_DB_CLIENT_TLS=true` to refuse to start without it.
+
 Sessions appear in *Work with active sessions* (protocol `postgres`) and can be
 killed like any other. MySQL/MSSQL/Oracle are follow-on connectors on the same
 pattern.
@@ -499,6 +529,25 @@ curl -H "X-API-Key: $PAM_API_KEY" -X POST http://localhost:8080/api/users \
 curl -H "X-API-Key: $PAM_API_KEY" http://localhost:8080/api/users          # list (no tokens)
 curl -H "X-API-Key: $PAM_API_KEY" -X DELETE http://localhost:8080/api/users/1
 ```
+
+**Revoking active logins.** Deleting a user removes their local token, but
+directory (AD/SSO/OIDC) logins create short-lived *login sessions*, not user
+rows — so disabling someone upstream leaves their session valid until it expires.
+List and force-revoke those (admin / `CapManageUsers`):
+
+```bash
+# See who is currently logged in (never shows token hashes)
+curl -H "X-API-Key: $PAM_API_KEY" http://localhost:8080/api/login-sessions
+
+# Force-invalidate every active login session for a user (e.g. a compromised or
+# deprovisioned account) — takes effect immediately, not at TTL expiry
+curl -H "X-API-Key: $PAM_API_KEY" -X POST http://localhost:8080/api/login-sessions/revoke \
+  -d '{"username":"bob"}'
+# → {"username":"bob","revoked":2}
+```
+
+`POST /api/identity/reconcile` also revokes the login sessions of any directory
+user it finds disabled/absent, so a scheduled reconcile deprovisions logins too.
 
 ### Roles at a glance
 
@@ -869,8 +918,26 @@ export PAM_DATABASE_URL=postgres://…
 ./pam-server -rotate-kek   # → "rotated N secrets; set PAM_MASTER_KEY to the new key and restart"
 ```
 
-Then set `PAM_MASTER_KEY` to the new key and restart. With a KMS-backed KEK
-(`vault-transit`), rotate the key inside the KMS instead.
+Then set `PAM_MASTER_KEY` to the new key and restart. The completed rotation is
+recorded in the audit trail (`vault.kek_rotated`, with the old/new KEK ids and the
+secret count).
+
+`-rotate-kek` also **migrates between KEK providers** — the current KEK is read
+from the usual `PAM_KEK_*` / `PAM_MASTER_KEY`, and the target from the parallel
+`PAM_NEW_KEK_*` / `PAM_NEW_MASTER_KEY` set (provider defaults to `local`). For
+example, to migrate a local master key to AWS KMS:
+
+```bash
+export PAM_MASTER_KEY=<current-local-key>          # current KEK (local)
+export PAM_NEW_KEK_PROVIDER=aws-kms                 # target KEK (KMS)
+export PAM_NEW_KEK_AWS_KEY_ID=… PAM_NEW_KEK_AWS_REGION=…
+export PAM_DATABASE_URL=postgres://…
+./pam-server -rotate-kek
+# then run the server with PAM_KEK_PROVIDER=aws-kms + PAM_KEK_AWS_* and restart
+```
+
+Within a single Vault-Transit / KMS key, day-to-day rotation is handled by the
+KMS itself; use `-rotate-kek` to change the *version envelope* or migrate providers.
 
 ### On-prem HSM (PKCS#11 KEK)
 
@@ -1108,6 +1175,15 @@ scores in your environment.
 - **Least privilege on the network:** see the [ports & flow matrix](PORTS-AND-FLOWS.md) for the firewall/NetworkPolicy baseline. The database must be unreachable from operator and target zones.
 - **Upgrades that cross the vault format are breaking (pre-1.0).** The current token format is `v2:` with a per-credential AAD; there is no in-place migration from earlier ciphertext (older AAD, or the pre-GCM PKCS#11 wrap). A deployment that carries vaulted secrets across such a change must re-enter its credentials. Fresh installs are unaffected.
 - Transport/data hardening — native HTTPS, security headers, per-IP rate limiting, versioned migrations, and vault key rotation — shipped in [Phase 5](../ROADMAP.md#phase-5--hardening-database-vault-transport-); enforce `sslmode=verify-full` to Postgres at deploy time.
+- **Fail-closed controls to enable in production** (each off by default so the demo stays turnkey):
+  - `PAM_REQUIRE_HTTPS` / `PAM_REQUIRE_DB_CLIENT_TLS` — refuse to start without TLS on the API and DB-proxy operator legs.
+  - `PAM_DB_UPSTREAM_CA` (or `PAM_DB_UPSTREAM_TLS_VERIFY`) — verify the upstream PostgreSQL certificate so the injected DB credential can't be MITM'd; `PAM_SSH_KNOWN_HOSTS` does the same for SSH targets.
+  - `PAM_REQUIRE_RECORDING` — refuse a proxied session that can't be recorded.
+  - `PAM_PROXY_AUTH_RATE_LIMIT` (default on, 10/min) — throttles guessing of `PAM_API_KEY` on the SSH/DB proxies; `PAM_TRUSTED_PROXY_HOPS` keeps the API limiter accurate behind a reverse proxy.
+- **A strong `PAM_API_KEY` is enforced** (≥16 chars) on any real database; the bootstrap key is presented as the proxy password, so treat it like a root credential and rotate it.
+- **Secret delivery is fail-closed on the audit trail** — a reveal/checkout/app-secret is refused (503) and a proxied session is denied if the action can't be durably audited, so a secret is never handed out unrecorded.
+- **Directory deprovisioning** — disabling a user upstream doesn't end their live login until you revoke it; run `POST /api/identity/reconcile` on a schedule (it revokes disabled directory sessions) or `POST /api/login-sessions/revoke` on demand. See §7.
+- For the full self-audit — what was hardened, what's a documented trade-off, and what remains a future phase — see **[SECURITY-GAPS.md](SECURITY-GAPS.md)**.
 
 ## 11. Troubleshooting
 
@@ -1117,6 +1193,9 @@ scores in your environment.
 | `403 your role does not permit this action` | The identity's role lacks the capability — expected for non-admins. |
 | Proxy: `your role may not open sessions` | The token belongs to an `auditor`/`approver`; only `admin`/`user` can connect. |
 | Proxy: `upstream connection failed` | Target host/port wrong or unreachable, or the vaulted credential is invalid. |
+| Proxy: `too many attempts; try again shortly` | `PAM_PROXY_AUTH_RATE_LIMIT` throttled repeated bad auth from one IP — wait a minute, or raise the limit for a busy bastion IP. |
+| `503 audit log unavailable; secret access denied` | The audit store is down; secret delivery fails closed by design. Restore the database, then retry. |
+| `PAM_API_KEY must be at least 16 characters` at startup | Strengthen the key (or set `PAM_ALLOW_WEAK_API_KEY=true` for a demo). |
 | `PAM_MASTER_KEY is required` at startup | Env var unset — generate with `-genkey`. |
 | Portal shows empty panels for a non-admin | Expected: panels the role can't read stay empty (403s are tolerated). |
 
@@ -1126,6 +1205,7 @@ scores in your environment.
 
 | Date | Change |
 |---|---|
+| 2026-07-22 | **Security gap-analysis hardening pass** ([SECURITY-GAPS.md](SECURITY-GAPS.md)). Safe-scoped targets are now default-deny (a target in an empty safe is no longer open to all); the DB proxy enforces the MFA-enrollment gate; secret delivery and proxied sessions are **fail-closed on the audit trail**. New admin controls: `GET /api/login-sessions` + `POST /api/login-sessions/revoke`, and reconcile revokes disabled directory sessions (§7). New env: `PAM_REQUIRE_HTTPS`, `PAM_REQUIRE_DB_CLIENT_TLS`, `PAM_DB_UPSTREAM_CA`/`_TLS_VERIFY`, `PAM_PROXY_AUTH_RATE_LIMIT`, `PAM_TRUSTED_PROXY_HOPS`, `PAM_ALLOW_WEAK_API_KEY` (§4); `-rotate-kek` migrates between KEK providers via `PAM_NEW_KEK_*` (§8). Deploy: default-deny `NetworkPolicy` (§3.4), pinned image tags. See §10 |
 | 2026-07-21 | Phase 24: **application-secrets API** (Tier-4) — a Conjur-style path (`PAM_APP_SECRETS_ENABLED`) where a non-agent app retrieves the secrets it was explicitly granted with a bearer key (`GET /v1/app-secrets/{credential_id}`); default-deny, granting needs `reveal_secret`, every retrieval audited. See §7. The portal is now **keyboard-first** (mouse optional): focus lands on each screen's field, Esc goes back, ↑/↓ move subfile rows. |
 | 2026-07-21 | Phase 23: **privileged threat analytics** — explainable behavioral risk scoring over the audit trail (`GET /api/analytics/risk`, `CapReadAudit`); a background worker (`PAM_ANALYTICS_INTERVAL_MIN`) alerts on newly elevated high/critical actors and, with `PAM_ANALYTICS_AUTO_KILL`, terminates a critical actor's live sessions. See §9.7 |
 | 2026-07-21 | Phase 22: **Zero Standing Privilege** — an `ssh_ca` credential stores no secret; the proxy mints a short-lived SSH certificate just-in-time per session (`PAM_SSH_CA_KEY`, `PAM_SSH_CERT_TTL_MIN`). Install the CA on targets from `GET /api/ca/ssh`. See §6 → *Zero Standing Privilege* |

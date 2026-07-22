@@ -1,0 +1,46 @@
+{{- if .Values.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "pamv1.fullname" . }}-default-deny
+  labels:
+    {{- include "pamv1.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "pamv1.selectorLabels" . | nindent 6 }}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # App ports (API/portal + SSH proxy). Restrict `from` to your ingress
+    # controller / bastion CIDRs in production.
+    - ports:
+        - protocol: TCP
+          port: {{ .Values.service.httpPort }}
+        - protocol: TCP
+          port: {{ .Values.service.sshPort }}
+  egress:
+    # DNS.
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # PostgreSQL backend.
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- toYaml .Values.networkPolicy.postgresPodLabels | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: 5432
+    # Managed target networks (block public egress / exfiltration by default).
+    - to:
+        {{- range .Values.networkPolicy.egressTargetCIDRs }}
+        - ipBlock:
+            cidr: {{ . }}
+        {{- end }}
+{{- end }}

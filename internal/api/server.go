@@ -101,6 +101,10 @@ type Options struct {
 	// AuthRatePerMin limits authentication attempts per client IP per minute
 	// (0 disables rate limiting).
 	AuthRatePerMin int
+	// TrustedProxyHops is how many trusted reverse-proxy hops sit in front of the
+	// server; it selects the real client IP from X-Forwarded-For for rate limiting
+	// (0 = use RemoteAddr directly).
+	TrustedProxyHops int
 	// RevealDisabled makes credential reveal break-glass-only (proxy is the norm).
 	RevealDisabled bool
 	// Sessions is the live-session registry (shared with the proxy).
@@ -206,6 +210,7 @@ type Server struct {
 	guacdRDPSecurity   string
 	guacdIgnoreCert    bool
 	authLimiter        *rateLimiter
+	trustedProxyHops   int
 	sessions           *session.Registry
 	live               *session.Hub
 	breakGlassHash     []byte
@@ -392,6 +397,7 @@ func New(st store.Store, v *vault.Vault, resolver *auth.Resolver, authn auth.Aut
 		guacdRDPSecurity:   opts.GuacdRDPSecurity,
 		guacdIgnoreCert:    opts.GuacdIgnoreCert,
 		authLimiter:        newRateLimiter(opts.AuthRatePerMin),
+		trustedProxyHops:   opts.TrustedProxyHops,
 		sessions:           opts.Sessions,
 		live:               opts.Live,
 		breakGlassHash:     bgHash,
@@ -623,6 +629,8 @@ func (s *Server) routes() {
 	s.mux.Handle("POST /api/users", s.authz(auth.CapManageUsers, s.createUser))
 	s.mux.Handle("GET /api/users", s.authz(auth.CapManageUsers, s.listUsers))
 	s.mux.Handle("DELETE /api/users/{id}", s.authz(auth.CapManageUsers, s.deleteUser))
+	s.mux.Handle("GET /api/login-sessions", s.authz(auth.CapManageUsers, s.listLoginSessions))
+	s.mux.Handle("POST /api/login-sessions/revoke", s.authz(auth.CapManageUsers, s.revokeLoginSessions))
 	s.mux.Handle("POST /api/identity/reconcile", s.authz(auth.CapManageUsers, s.reconcileIdentities))
 
 	// Access certification / attestation campaigns (Phase 19): a periodic review
@@ -722,23 +730,31 @@ func (s *Server) authenticated(next http.HandlerFunc) http.Handler {
 			return
 		}
 		setActor(r.Context(), p.Name)
-		next(w, r.WithContext(withPrincipal(r.Context(), p)))
+		ctx := withPrincipal(r.Context(), p)
+		// Break-glass use is always loudly audited + alerted — including on the
+		// low-sensitivity endpoints any signed-in identity may call (/me, /logout,
+		// /mfa/*), so an emergency-key holder never acts entirely unrecorded.
+		s.noteBreakGlass(ctx, p, r)
+		next(w, r.WithContext(ctx))
 	})
 }
 
 // audit appends an audit event attributed to the actor in ctx, bumps the audit
 // (and, for rotations, rotation) metrics, and logs it. A store failure is logged
-// but not returned to the caller.
+// but not returned to the caller (best-effort; use mustAudit for secret paths).
 func (s *Server) audit(ctx context.Context, action, detail string) {
-	s.auditAs(ctx, actorFrom(ctx), action, detail)
+	_ = s.auditAs(ctx, actorFrom(ctx), action, detail)
 }
 
 // auditAs appends an audit event with an explicit actor, for events where the
 // actor is not the authenticated principal in ctx — notably failed logins, whose
-// actor is the attempted (unauthenticated) username.
-func (s *Server) auditAs(ctx context.Context, actor, action, detail string) {
+// actor is the attempted (unauthenticated) username. It returns the store error
+// so secret-use paths can fail closed (see mustAudit); non-secret callers ignore
+// it and remain best-effort.
+func (s *Server) auditAs(ctx context.Context, actor, action, detail string) error {
 	e := store.AuditEvent{Actor: actor, Action: action, Detail: detail}
-	if err := s.store.AppendAudit(ctx, &e); err != nil {
+	err := s.store.AppendAudit(ctx, &e)
+	if err != nil {
 		s.log.Error("audit append failed", "action", action, "err", err)
 	}
 	s.metrics.Audit()
@@ -746,6 +762,25 @@ func (s *Server) auditAs(ctx context.Context, actor, action, detail string) {
 		s.metrics.Rotation()
 	}
 	s.log.Info("audit", "actor", actor, "action", action, "detail", detail)
+	return err
+}
+
+// mustAudit records a secret-use audit event FAIL-CLOSED: the durable audit must
+// persist before the secret is delivered. If the append fails it writes a 503 and
+// returns false, so the caller aborts without handing out an unaudited secret —
+// upholding the invariant that every secret use appends an audit event. This is
+// the audit analogue of PAM_REQUIRE_RECORDING for the proxy.
+func (s *Server) mustAudit(w http.ResponseWriter, ctx context.Context, action, detail string) bool {
+	return s.mustAuditAs(w, ctx, actorFrom(ctx), action, detail)
+}
+
+// mustAuditAs is mustAudit with an explicit actor (e.g. an application identity).
+func (s *Server) mustAuditAs(w http.ResponseWriter, ctx context.Context, actor, action, detail string) bool {
+	if err := s.auditAs(ctx, actor, action, detail); err != nil {
+		writeError(w, http.StatusServiceUnavailable, "audit log unavailable; secret access denied")
+		return false
+	}
+	return true
 }
 
 // health is the liveness probe: it always reports ok while the process serves.

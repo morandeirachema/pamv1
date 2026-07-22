@@ -56,7 +56,7 @@ func (s *Server) authorizeAgentTarget(ctx context.Context, p *auth.Principal, na
 	if err != nil {
 		return nil, err
 	}
-	if !auth.CanConnectTarget(p, grants) {
+	if !auth.CanConnectTarget(p, grants, target.SafeID != nil) {
 		return nil, fmt.Errorf("agent not authorized for target %q", name)
 	}
 	if !broker.Approved(ctx) {
@@ -97,7 +97,7 @@ func (s *Server) authorizeAgentCredential(ctx context.Context, p *auth.Principal
 	if err != nil {
 		return nil, nil, err
 	}
-	if !auth.CanConnectTarget(p, grants) {
+	if !auth.CanConnectTarget(p, grants, target.SafeID != nil) {
 		return nil, nil, fmt.Errorf("agent not authorized for target %q", target.Name)
 	}
 	return cred, target, nil

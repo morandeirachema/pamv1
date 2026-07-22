@@ -198,13 +198,14 @@ func (s *Server) deleteTargetGrant(w http.ResponseWriter, r *http.Request) {
 }
 
 // authorizedForTarget reports whether the caller may connect to a target under
-// its access grants.
-func (s *Server) authorizedForTarget(ctx context.Context, targetID int64) (bool, error) {
-	grants, err := s.store.EffectiveTargetGrants(ctx, targetID)
+// its access grants. A safe-scoped target (target.SafeID set) is default-deny
+// when no grant matches; an ungated target is open to any connect-capable caller.
+func (s *Server) authorizedForTarget(ctx context.Context, target *store.Target) (bool, error) {
+	grants, err := s.store.EffectiveTargetGrants(ctx, target.ID)
 	if err != nil {
 		return false, err
 	}
-	return auth.CanConnectTarget(principalFrom(ctx), grants), nil
+	return auth.CanConnectTarget(principalFrom(ctx), grants, target.SafeID != nil), nil
 }
 
 // gateCredentialAccess enforces the per-target grant and four-eyes approval gates
@@ -212,7 +213,7 @@ func (s *Server) authorizedForTarget(ctx context.Context, targetID int64) (bool,
 // equally, reveal and checkout. It writes a 403 and returns false when the caller
 // may not reach the target. action names the audited denial (e.g. "credential.reveal").
 func (s *Server) gateCredentialAccess(w http.ResponseWriter, r *http.Request, target *store.Target, action string) bool {
-	if ok, err := s.authorizedForTarget(r.Context(), target.ID); err != nil {
+	if ok, err := s.authorizedForTarget(r.Context(), target); err != nil {
 		storeError(w, err)
 		return false
 	} else if !ok {

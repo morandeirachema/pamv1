@@ -148,7 +148,10 @@ func (s *Server) revealCredential(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "decryption failed")
 		return
 	}
-	s.audit(r.Context(), "credential.reveal", fmt.Sprintf("credential:%d target:%d user:%s", c.ID, c.TargetID, c.Username))
+	// Fail closed: the reveal must be durably audited before the secret leaves.
+	if !s.mustAudit(w, r.Context(), "credential.reveal", fmt.Sprintf("credential:%d target:%d user:%s", c.ID, c.TargetID, c.Username)) {
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"id":          c.ID,
 		"target_id":   c.TargetID,
@@ -207,7 +210,7 @@ func (s *Server) runWinRM(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, "winrm is not allowed by policy")
 		return
 	}
-	if ok, err := s.authorizedForTarget(r.Context(), target.ID); err != nil {
+	if ok, err := s.authorizedForTarget(r.Context(), target); err != nil {
 		storeError(w, err)
 		return
 	} else if !ok {

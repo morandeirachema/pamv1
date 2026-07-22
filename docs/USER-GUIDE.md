@@ -86,7 +86,8 @@ MFA code field to sign in; each works only once.
 
 If your organization **requires MFA**, your first sign-in gives you a limited
 session that can *only* set up MFA — enroll and confirm, then sign in again
-normally with your code.
+normally with your code. That limited session can't open any target session
+(SSH, WinRM, RDP **or** database) until you've completed enrollment.
 
 ## 4. Using the portal
 
@@ -226,6 +227,7 @@ is audited (`session.monitor`).
 | SSH: `your role may not open sessions` | You're an auditor/approver; only `user`/`admin` can connect. |
 | SSH: `unknown target "x"` | The target name in your SSH username doesn't exist — check spelling with your admin. |
 | SSH: `upstream connection failed` | pamv1 reached your token fine, but couldn't reach the target (down, or bad vaulted credential). Tell your admin. |
+| `too many attempts; try again shortly` | Repeated failed sign-ins from your address were rate-limited. Wait a minute and retry with the correct token. |
 | `command blocked by policy` (SSH exec / WinRM / SQL) | That specific command matched a command-control deny rule and was refused before reaching the target. The session continues; run something else or ask your admin. |
 | `psql`: `pamv1: authentication failed` | Your PAM token (the psql password) is wrong or deleted — check it, or ask for a new one. |
 | Portal panels are empty | Normal — your role can't read those panels. |

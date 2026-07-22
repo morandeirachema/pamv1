@@ -38,6 +38,14 @@ func (s *Server) appAuth(next appHandler) http.HandlerFunc {
 // the retrieval is audited (never the secret itself). This is the deliberate,
 // opt-in Conjur-style secret-delivery path for non-agent applications.
 func (s *Server) fetchAppSecret(w http.ResponseWriter, r *http.Request, app *store.AppKey) {
+	// Honor the global reveal-disabled kill switch: when an operator has turned off
+	// plaintext secret delivery, the application-secrets path is disabled too (it
+	// is a secret-delivery path like reveal/checkout/broker-reveal).
+	if s.rt().revealDisabled {
+		s.auditAs(r.Context(), "app:"+app.Name, "app.secret_denied", "reason:reveal-disabled-by-policy")
+		writeError(w, http.StatusForbidden, "secret delivery is disabled by policy")
+		return
+	}
 	credID, ok := idParam(w, r)
 	if !ok {
 		return
@@ -73,8 +81,11 @@ func (s *Server) fetchAppSecret(w http.ResponseWriter, r *http.Request, app *sto
 		writeError(w, http.StatusInternalServerError, "decryption failed")
 		return
 	}
-	s.auditAs(r.Context(), "app:"+app.Name, "app.secret_retrieved",
-		fmt.Sprintf("credential:%d target:%s user:%s", cred.ID, target.Name, cred.Username))
+	// Fail closed: the retrieval must be durably audited before the secret leaves.
+	if !s.mustAuditAs(w, r.Context(), "app:"+app.Name, "app.secret_retrieved",
+		fmt.Sprintf("credential:%d target:%s user:%s", cred.ID, target.Name, cred.Username)) {
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"credential_id": cred.ID,
 		"target":        target.Name,

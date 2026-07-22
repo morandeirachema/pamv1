@@ -84,6 +84,41 @@ func (s *Server) deleteUser(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// listLoginSessions returns all active password/SSO login sessions (never their
+// token hashes), so an admin can see who is logged in and revoke them. This is
+// distinct from GET /api/sessions, which lists live proxied target sessions.
+func (s *Server) listLoginSessions(w http.ResponseWriter, r *http.Request) {
+	sessions, err := s.store.ListSessions(r.Context())
+	if err != nil {
+		storeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, sessions)
+}
+
+// revokeLoginSessions force-invalidates every active login session for a username
+// — the admin control missing for directory (AD/SSO) logins, which create session
+// rows rather than user rows and so survive a directory disable until they expire.
+func (s *Server) revokeLoginSessions(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Username string `json:"username"`
+	}
+	if !readJSON(w, r, &in) {
+		return
+	}
+	if in.Username == "" {
+		writeError(w, http.StatusUnprocessableEntity, "username is required")
+		return
+	}
+	n, err := s.store.DeleteSessionsByUsername(r.Context(), in.Username)
+	if err != nil {
+		storeError(w, err)
+		return
+	}
+	s.audit(r.Context(), "session.revoked", fmt.Sprintf("user:%s sessions:%d", in.Username, n))
+	writeJSON(w, http.StatusOK, map[string]any{"username": in.Username, "revoked": n})
+}
+
 // capsForGrant resolves a built-in role name or an existing custom profile name
 // to the capability set it would confer on a user, or an error if the name is
 // neither. Used to bound what a caller may grant.

@@ -15,6 +15,10 @@ import (
 	"github.com/morandeirachema/pamv1/internal/store"
 )
 
+// defaultExportWindow bounds an open-ended audit export (no `since`) so it cannot
+// load the entire audit table into memory at once.
+const defaultExportWindow = 90 * 24 * time.Hour
+
 // exportAudit produces a tamper-evident audit slice for NIS2 incident reporting
 // (Art. 23 early-warning / notification duties). Query params:
 //
@@ -36,6 +40,15 @@ func (s *Server) exportAudit(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeError(w, http.StatusUnprocessableEntity, "until must be RFC3339")
 		return
+	}
+	// Bound the default window so an open-ended export can't buffer the entire
+	// audit table into memory (resource exhaustion). An auditor wanting a wider
+	// span passes an explicit `since`.
+	if until.IsZero() {
+		until = time.Now().UTC()
+	}
+	if since.IsZero() {
+		since = until.Add(-defaultExportWindow)
 	}
 	events, err := s.store.ExportAudit(r.Context(), since, until)
 	if err != nil {

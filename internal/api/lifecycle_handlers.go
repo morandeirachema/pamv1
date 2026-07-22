@@ -259,8 +259,14 @@ func (s *Server) checkoutCredential(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "decryption failed")
 		return
 	}
-	s.audit(r.Context(), "credential.checkout",
-		fmt.Sprintf("checkout:%d credential:%d target:%s until:%s", co.ID, cred.ID, target.Name, co.ExpiresAt.Format(time.RFC3339)))
+	// Fail closed: the checkout must be durably audited before the secret leaves.
+	// Roll the lease back if the audit can't be persisted, so the credential isn't
+	// blocked for the whole TTL by a failed (and therefore denied) checkout.
+	if !s.mustAudit(w, r.Context(), "credential.checkout",
+		fmt.Sprintf("checkout:%d credential:%d target:%s until:%s", co.ID, cred.ID, target.Name, co.ExpiresAt.Format(time.RFC3339))) {
+		_ = s.store.CheckinCheckout(r.Context(), co.ID, time.Now())
+		return
+	}
 	writeJSON(w, http.StatusCreated, map[string]any{
 		"checkout_id": co.ID, "credential_id": cred.ID, "target": target.Name,
 		"username": cred.Username, "secret": secret, "expires_at": co.ExpiresAt,

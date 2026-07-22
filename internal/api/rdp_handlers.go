@@ -64,7 +64,7 @@ func (s *Server) rdpTunnel(w http.ResponseWriter, r *http.Request) {
 		storeError(w, err)
 		return
 	}
-	if !auth.CanConnectTarget(principal, grants) {
+	if !auth.CanConnectTarget(principal, grants, target.SafeID != nil) {
 		writeError(w, http.StatusForbidden, "not authorized for this target")
 		return
 	}

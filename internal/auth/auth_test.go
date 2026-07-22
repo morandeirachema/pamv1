@@ -53,25 +53,51 @@ func TestCanConnectTarget(t *testing.T) {
 	user := &Principal{Name: "alice", Role: RoleUser}
 	other := &Principal{Name: "bob", Role: RoleUser}
 
-	// No grants → open to any connect-capable principal.
-	if !CanConnectTarget(user, nil) {
-		t.Fatal("no grants should be open")
+	// No grants on an ungated target → open to any connect-capable principal.
+	if !CanConnectTarget(user, nil, false) {
+		t.Fatal("no grants on an ungated target should be open")
 	}
 	grants := []store.TargetGrant{
 		{SubjectType: "user", Subject: "alice"},
 		{SubjectType: "role", Subject: "approver"},
 	}
-	if !CanConnectTarget(admin, grants) {
+	if !CanConnectTarget(admin, grants, false) {
 		t.Fatal("admin should always connect")
 	}
-	if !CanConnectTarget(user, grants) {
+	if !CanConnectTarget(user, grants, false) {
 		t.Fatal("granted user should connect")
 	}
-	if CanConnectTarget(other, grants) {
+	if CanConnectTarget(other, grants, false) {
 		t.Fatal("ungranted user must be denied")
 	}
-	if !CanConnectTarget(&Principal{Name: "x", Role: RoleApprover}, grants) {
+	if !CanConnectTarget(&Principal{Name: "x", Role: RoleApprover}, grants, false) {
 		t.Fatal("granted role should connect")
+	}
+}
+
+// TestCanConnectSafeScoped verifies that a target placed in a safe is
+// default-DENY when its effective grants yield no match — an empty safe must not
+// fall through to the ungated "open to all" behavior. Admins are still allowed.
+func TestCanConnectSafeScoped(t *testing.T) {
+	user := &Principal{Name: "alice", Role: RoleUser}
+	admin := &Principal{Name: "boss", Role: RoleAdmin}
+
+	// Safe-scoped target with no members/grants: closed to a normal user.
+	if CanConnectTarget(user, nil, true) {
+		t.Fatal("safe-scoped target with no grants must be default-deny")
+	}
+	// ...but an admin may always connect.
+	if !CanConnectTarget(admin, nil, true) {
+		t.Fatal("admin should connect to a safe-scoped target")
+	}
+	// A matching safe member is allowed.
+	grants := []store.TargetGrant{{SubjectType: "user", Subject: "alice"}}
+	if !CanConnectTarget(user, grants, true) {
+		t.Fatal("safe member should connect")
+	}
+	// A non-matching principal on a safe-scoped target is denied.
+	if CanConnectTarget(&Principal{Name: "bob", Role: RoleUser}, grants, true) {
+		t.Fatal("non-member must be denied on a safe-scoped target")
 	}
 }
 

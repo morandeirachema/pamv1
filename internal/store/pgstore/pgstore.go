@@ -1067,6 +1067,26 @@ func (s *PGStore) DeleteSession(ctx context.Context, tokenHashHex string) error 
 	return execExpectingRow(ctx, s.pool, `DELETE FROM sessions WHERE token_hash = $1`, tokenHashHex)
 }
 
+// ListSessions returns all non-expired login sessions, newest first.
+func (s *PGStore) ListSessions(ctx context.Context) ([]store.Session, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT id, username, role, roles, scope, token_hash, created_at, expires_at
+		 FROM sessions WHERE expires_at > now() ORDER BY created_at DESC`)
+	if err != nil {
+		return nil, err
+	}
+	return pgx.CollectRows(rows, scanSession)
+}
+
+// DeleteSessionsByUsername revokes every session for a username, returning the count.
+func (s *PGStore) DeleteSessionsByUsername(ctx context.Context, username string) (int, error) {
+	tag, err := s.pool.Exec(ctx, `DELETE FROM sessions WHERE username = $1`, username)
+	if err != nil {
+		return 0, err
+	}
+	return int(tag.RowsAffected()), nil
+}
+
 // UpsertMFAEnrollment creates or replaces a user's TOTP enrollment, populating CreatedAt.
 func (s *PGStore) UpsertMFAEnrollment(ctx context.Context, e *store.MFAEnrollment) error {
 	return s.pool.QueryRow(ctx,

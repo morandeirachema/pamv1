@@ -29,7 +29,9 @@ spec:
         seccompProfile: { type: RuntimeDefault }
       containers:
         - name: pam-server
-          image: ghcr.io/morandeirachema/pamv1:latest
+          # Pin to an immutable tag (or @sha256 digest) — a security appliance
+          # must not track a mutable :latest.
+          image: ghcr.io/morandeirachema/pamv1:0.10.0
           args: ["-healthcheck=false"]
           ports:
             - { containerPort: 8080, name: http }
