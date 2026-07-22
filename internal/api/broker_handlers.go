@@ -28,7 +28,7 @@ func (s *Server) agentAuth(next agentHandler) http.HandlerFunc {
 			return
 		}
 		// Per-agent rate limit (keyed by agent name) bounds tool-call volume.
-		if s.brokerLimiter != nil && !s.brokerLimiter.allow(id.AgentName) {
+		if s.brokerLimiter != nil && !s.brokerLimiter.Allow(id.AgentName) {
 			w.Header().Set("Retry-After", "60")
 			writeError(w, http.StatusTooManyRequests, "agent rate limit exceeded; try again shortly")
 			return

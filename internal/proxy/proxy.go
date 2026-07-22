@@ -30,6 +30,7 @@ import (
 
 	"github.com/morandeirachema/pamv1/internal/auth"
 	"github.com/morandeirachema/pamv1/internal/logging"
+	"github.com/morandeirachema/pamv1/internal/ratelimit"
 	"github.com/morandeirachema/pamv1/internal/session"
 	"github.com/morandeirachema/pamv1/internal/sshca"
 	"github.com/morandeirachema/pamv1/internal/store"
@@ -114,7 +115,7 @@ type Proxy struct {
 	live         *session.Hub
 	ca           *sshca.CertAuthority
 	certTTL      time.Duration
-	authLimiter  *authRateLimiter
+	authLimiter  *ratelimit.Limiter
 
 	bg sync.WaitGroup // background tasks (post-session rotation) to drain on shutdown
 
@@ -161,7 +162,7 @@ func New(st store.Store, v *vault.Vault, resolver *auth.Resolver, cfg Config) (*
 		live:         cfg.Live,
 		ca:           cfg.CA,
 		certTTL:      cfg.CertTTL,
-		authLimiter:  newAuthRateLimiter(cfg.AuthRatePerMin),
+		authLimiter:  ratelimit.New(cfg.AuthRatePerMin),
 		conns:        make(map[net.Conn]struct{}),
 	}
 	if p.certTTL <= 0 {
@@ -190,7 +191,7 @@ func New(st store.Store, v *vault.Vault, resolver *auth.Resolver, cfg Config) (*
 // the handshake.
 func (p *Proxy) authenticate(c ssh.ConnMetadata, password []byte) (*ssh.Permissions, error) {
 	// Throttle online guessing of the PAM key before doing any resolve work.
-	if !p.authLimiter.allow(remoteHost(c.RemoteAddr())) {
+	if !p.authLimiter.Allow(remoteHost(c.RemoteAddr())) {
 		remote := c.RemoteAddr().String()
 		p.log.Warn("authentication rate limited", "login", c.User(), "remote", remote)
 		p.audit(context.Background(), c.User(), "proxy.auth_rate_limited", "remote:"+remote)

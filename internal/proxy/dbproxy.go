@@ -35,6 +35,7 @@ import (
 
 	"github.com/morandeirachema/pamv1/internal/auth"
 	"github.com/morandeirachema/pamv1/internal/logging"
+	"github.com/morandeirachema/pamv1/internal/ratelimit"
 	"github.com/morandeirachema/pamv1/internal/session"
 	"github.com/morandeirachema/pamv1/internal/store"
 	"github.com/morandeirachema/pamv1/internal/vault"
@@ -86,7 +87,7 @@ type DBProxy struct {
 	guard        *CommandGuard
 	live         *session.Hub
 	chain        *recordChain
-	authLimiter  *authRateLimiter
+	authLimiter  *ratelimit.Limiter
 	upstreamTLS  *tls.Config
 
 	bg sync.WaitGroup // background tasks (post-session rotation) drained on shutdown
@@ -125,7 +126,7 @@ func NewDB(st store.Store, v *vault.Vault, resolver *auth.Resolver, cfg DBConfig
 		guard:        cfg.CommandGuard,
 		live:         cfg.Live,
 		chain:        newRecordChain(cfg.RecordingDir),
-		authLimiter:  newAuthRateLimiter(cfg.AuthRatePerMin),
+		authLimiter:  ratelimit.New(cfg.AuthRatePerMin),
 		upstreamTLS:  cfg.UpstreamTLS,
 		conns:        make(map[net.Conn]struct{}),
 	}
@@ -335,7 +336,7 @@ func (d *DBProxy) handleConn(ctx context.Context, nConn net.Conn) {
 		return
 	}
 	// Throttle online guessing of the PAM key before any resolve work.
-	if !d.authLimiter.allow(remoteHost(nConn.RemoteAddr())) {
+	if !d.authLimiter.Allow(remoteHost(nConn.RemoteAddr())) {
 		d.log.Warn("db authentication rate limited", "login", login, "remote", remote)
 		d.audit(ctx, login, "proxy.auth_rate_limited", "proto:postgres remote:"+remote)
 		d.fail(backend, "28P01", "pamv1: too many attempts; try again shortly")
