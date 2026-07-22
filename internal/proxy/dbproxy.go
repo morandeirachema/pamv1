@@ -172,7 +172,8 @@ func (d *DBProxy) Serve(ctx context.Context, ln net.Listener) error {
 				d.bg.Wait()
 				return nil
 			}
-			if ne, ok := err.(net.Error); ok && ne.Temporary() { //nolint:staticcheck // Temporary() is the only portable transient-accept signal
+			//lint:ignore SA1019 Temporary() is the only portable transient-accept signal; matches net/http's Serve backoff
+			if ne, ok := err.(net.Error); ok && ne.Temporary() {
 				if tempDelay == 0 {
 					tempDelay = 5 * time.Millisecond
 				} else {
@@ -284,7 +285,7 @@ func (d *DBProxy) handleConn(ctx context.Context, nConn net.Conn) {
 		if err != nil {
 			return
 		}
-		switch msg.(type) {
+		switch msg := msg.(type) {
 		case *pgproto3.SSLRequest:
 			if d.clientTLS != nil {
 				if _, err := conn.Write([]byte{'S'}); err != nil {
@@ -304,7 +305,7 @@ func (d *DBProxy) handleConn(ctx context.Context, nConn net.Conn) {
 				return
 			}
 		case *pgproto3.StartupMessage:
-			startup = msg.(*pgproto3.StartupMessage)
+			startup = msg
 		default:
 			return
 		}

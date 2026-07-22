@@ -291,7 +291,8 @@ func (p *Proxy) Serve(ctx context.Context, ln net.Listener) error {
 			// Retry a transient accept error (e.g. fd exhaustion, EMFILE) with
 			// capped exponential backoff instead of tearing the listener down —
 			// the same policy net/http's Server uses.
-			if ne, ok := err.(net.Error); ok && ne.Temporary() { //nolint:staticcheck // Temporary() is the only portable transient-accept signal
+			//lint:ignore SA1019 Temporary() is the only portable transient-accept signal; matches net/http's Serve backoff
+			if ne, ok := err.(net.Error); ok && ne.Temporary() {
 				if tempDelay == 0 {
 					tempDelay = 5 * time.Millisecond
 				} else {

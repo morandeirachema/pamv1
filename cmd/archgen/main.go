@@ -236,20 +236,26 @@ func dirHasGo(dir string) (bool, error) {
 }
 
 // packageImports returns the unique import paths of the non-test Go files in dir.
+// It parses each file directly (parser.ParseFile) rather than the deprecated
+// parser.ParseDir, which does not consider build tags.
 func packageImports(dir string) ([]string, error) {
-	fset := token.NewFileSet()
-	pkgs, err := parser.ParseDir(fset, dir, func(fi os.FileInfo) bool {
-		return !strings.HasSuffix(fi.Name(), "_test.go")
-	}, parser.ImportsOnly)
+	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil, err
 	}
+	fset := token.NewFileSet()
 	seen := map[string]bool{}
-	for _, pkg := range pkgs {
-		for _, file := range pkg.Files {
-			for _, imp := range file.Imports {
-				seen[strings.Trim(imp.Path.Value, `"`)] = true
-			}
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		file, err := parser.ParseFile(fset, filepath.Join(dir, name), nil, parser.ImportsOnly)
+		if err != nil {
+			return nil, err
+		}
+		for _, imp := range file.Imports {
+			seen[strings.Trim(imp.Path.Value, `"`)] = true
 		}
 	}
 	out := make([]string, 0, len(seen))

@@ -20,6 +20,18 @@ jobs:
         run: test -z "$(gofmt -l .)" || (gofmt -l . && exit 1)
       - name: vet
         run: go vet ./...
+      - name: staticcheck
+        # Catches bugs and deprecations go vet misses. @latest tracks the Go
+        # toolchain (a pinned older staticcheck may not parse a new Go release).
+        run: |
+          go install honnef.co/go/tools/cmd/staticcheck@latest
+          "$(go env GOPATH)/bin/staticcheck" ./...
+      - name: govulncheck
+        # Fails the build on a KNOWN vulnerability that our code actually reaches
+        # (in a dependency or the Go stdlib).
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          "$(go env GOPATH)/bin/govulncheck" ./...
       - name: build
         run: go build ./...
       - name: architecture diagrams up to date
