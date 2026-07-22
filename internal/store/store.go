@@ -574,6 +574,13 @@ type Store interface {
 	// Ping reports whether the backend is reachable (readiness probe).
 	Ping(ctx context.Context) error
 
+	// WithLeaderLock runs fn only if it can immediately acquire the advisory lock
+	// for key (a non-blocking try). It returns ran=false without calling fn when
+	// another process already holds the lock, so exactly one replica runs a periodic
+	// job per tick (leader election for the background workers). The single-process
+	// memstore always runs fn (ran=true). fn's error is returned unchanged.
+	WithLeaderLock(ctx context.Context, key int64, fn func(context.Context) error) (ran bool, err error)
+
 	// Close releases the backend's resources.
 	Close()
 }

@@ -1458,5 +1458,11 @@ func (m *Memstore) TakeOIDCState(_ context.Context, state string, now time.Time)
 // Ping always succeeds for the in-memory store.
 func (m *Memstore) Ping(_ context.Context) error { return nil }
 
+// WithLeaderLock always runs fn: the in-memory store is single-process, so there
+// is no other replica to coordinate with.
+func (m *Memstore) WithLeaderLock(ctx context.Context, _ int64, fn func(context.Context) error) (bool, error) {
+	return true, fn(ctx)
+}
+
 // Close is a no-op for the in-memory store.
 func (m *Memstore) Close() {}

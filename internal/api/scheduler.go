@@ -138,9 +138,19 @@ func (s *Server) invalidateExpiredCheckoutFor(ctx context.Context, credentialID 
 	return false, nil
 }
 
+// Advisory-lock keys for the background workers, so across HA replicas only one
+// runs each periodic job per tick (leader election). Distinct from the migration
+// ("pam_mig") and broker-chain ("pam_br") lock keys in pgstore.
+const (
+	lifecycleLockKey = int64(0x70616d5f6c6663) // "pam_lfc"
+	analyticsLockKey = int64(0x70616d5f616e61) // "pam_ana"
+)
+
 // RunLifecycleWorker runs the credential-lifecycle worker until ctx is cancelled:
 // on each tick it reconciles every credential (detecting drift) and rotates any
 // password credential older than pol.MaxAge. It is safe to call in a goroutine.
+// The pass runs under a leader lock so N replicas don't each rotate the same
+// credential concurrently.
 func (s *Server) RunLifecycleWorker(ctx context.Context, pol RotationPolicy) {
 	if pol.Interval <= 0 {
 		return
@@ -153,9 +163,17 @@ func (s *Server) RunLifecycleWorker(ctx context.Context, pol RotationPolicy) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			rep := s.runLifecycleOnce(systemContext(ctx), pol.MaxAge, time.Now())
-			s.log.Info("credential-lifecycle pass",
-				"checked", rep.Checked, "out_of_sync", rep.OutOfSync, "rotated", rep.Rotated)
+			ran, err := s.store.WithLeaderLock(systemContext(ctx), lifecycleLockKey, func(c context.Context) error {
+				rep := s.runLifecycleOnce(c, pol.MaxAge, time.Now())
+				s.log.Info("credential-lifecycle pass",
+					"checked", rep.Checked, "out_of_sync", rep.OutOfSync, "rotated", rep.Rotated)
+				return nil
+			})
+			if err != nil {
+				s.log.Warn("credential-lifecycle lock unavailable; skipping pass", "err", err)
+			} else if !ran {
+				s.log.Debug("credential-lifecycle pass skipped (another replica is leader)")
+			}
 		}
 	}
 }
