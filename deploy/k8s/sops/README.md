@@ -15,10 +15,14 @@ deploy/k8s/sops/
 └── README.md                   # this file
 ```
 
-The encryption rules live in the repo-root [`.sops.yaml`](../../../.sops.yaml): any file
-matching `deploy/k8s/sops/secrets*.yaml` gets its `data`/`stringData` values encrypted to the
-configured age recipient. SOPS also works with **AWS/GCP/Azure KMS, HashiCorp Vault and PGP**
-recipients — mix them in `.sops.yaml` for cloud KMS or multi-custodian setups.
+The encryption rules live in [`deploy/.sops.yaml`](../../.sops.yaml) (it governs the whole
+`deploy/` subtree — both `k8s/sops/secrets*.yaml` and `helm/**/secrets*.yaml`): any matching
+file gets its `data`/`stringData` values encrypted to the configured age recipient. SOPS also
+works with **AWS/GCP/Azure KMS, HashiCorp Vault and PGP** recipients — mix them in
+`deploy/.sops.yaml` for cloud KMS or multi-custodian setups. Because the config is not at the
+repo root, pass it explicitly with `--config deploy/.sops.yaml` when **encrypting** (decrypting
+needs no config — recipients are read from the sealed file's own metadata, so `apply.sh` and CI
+are unaffected).
 
 ## Try the example (learning)
 
@@ -42,20 +46,21 @@ SOPS_AGE_KEY_FILE=deploy/k8s/sops/age-example.key \
 age-keygen -o age.key
 grep 'public key' age.key            # copy the age1... recipient
 
-# 2. Put that recipient in .sops.yaml (replace the example one)
+# 2. Put that recipient in deploy/.sops.yaml (replace the example one)
 
 # 3. Author your secret from the plaintext template, then seal it in place
+#    (pass --config deploy/.sops.yaml since the config is not at the repo root)
 cp deploy/k8s/secret.example.yaml deploy/k8s/sops/secrets.sops.yaml
 $EDITOR deploy/k8s/sops/secrets.sops.yaml     # fill real values
-sops --encrypt --in-place deploy/k8s/sops/secrets.sops.yaml   # now safe to commit
+sops --config deploy/.sops.yaml --encrypt --in-place deploy/k8s/sops/secrets.sops.yaml
 
 # 4. Deploy — decrypt streams straight into kubectl, plaintext never hits disk
 SOPS_AGE_KEY_FILE=age.key ./deploy/k8s/sops/apply.sh deploy/k8s/sops/secrets.sops.yaml
 ```
 
-Edit a sealed file later with `sops deploy/k8s/sops/secrets.sops.yaml` (it decrypts into your
-editor and re-encrypts on save), and rotate recipients with
-`sops updatekeys deploy/k8s/sops/secrets.sops.yaml`.
+Edit a sealed file later with `sops --config deploy/.sops.yaml deploy/k8s/sops/secrets.sops.yaml`
+(it decrypts into your editor and re-encrypts on save), and rotate recipients with
+`sops --config deploy/.sops.yaml updatekeys deploy/k8s/sops/secrets.sops.yaml`.
 
 ## GitOps
 

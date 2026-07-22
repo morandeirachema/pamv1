@@ -1,7 +1,13 @@
 # SOPS (https://github.com/getsops/sops) creation rules for pamv1 (Phase 14).
 #
-# Any file matching a rule below is encrypted with the listed recipients when you
-# run `sops -e -i <file>`, and only the `data` / `stringData` *values* of a
+# This config lives at deploy/.sops.yaml (not the repo root), so its path_regex is
+# relative to deploy/ and you must pass it explicitly when encrypting:
+#   sops --config deploy/.sops.yaml -e -i deploy/k8s/sops/secrets.sops.yaml   # from the repo root
+#   (or: cd deploy && sops -e -i k8s/sops/secrets.sops.yaml)
+# Decryption needs no config (recipients are read from the sealed file's metadata).
+#
+# Any file matching a rule below is encrypted with the listed recipients, and only
+# the `data` / `stringData` *values* of a
 # Kubernetes Secret are sealed — `kind`, `metadata`, keys, etc. stay in cleartext
 # so the manifest is still reviewable and diff-able in git.
 #
@@ -13,11 +19,11 @@
 # the throwaway key deploy/k8s/sops/age-example.key — for learning only; never
 # deploy real secrets sealed to that key (its private half is public in this repo).
 creation_rules:
-  - path_regex: deploy/k8s/sops/secrets.*\.ya?ml$
+  - path_regex: k8s/sops/secrets.*\.ya?ml$
     encrypted_regex: ^(data|stringData)$
     # age recipients (comma-separated for multiple custodians / KMS fallback).
     age: age1pfn57mnl9gg6c5tu05tgaym2jk8kzgxnwf20hd008lzghsp6vyrqetlmny
 
-  - path_regex: deploy/helm/.*secrets.*\.ya?ml$
+  - path_regex: helm/.*secrets.*\.ya?ml$
     encrypted_regex: ^(PAM_.*|.*[Pp]assword)$
     age: age1pfn57mnl9gg6c5tu05tgaym2jk8kzgxnwf20hd008lzghsp6vyrqetlmny

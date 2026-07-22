@@ -49,7 +49,7 @@ verify end-to-end:
 | **AWS KMS KEK** | `PAM_KEK_AWS_*`, `vault/awskms.go` | mock `kmsAPI` | An AWS account + a KMS CMK + IAM | Data key wrap/unwrap via KMS with the `app=pamv1` encryption context |
 | **PKCS#11 HSM KEK** | `PAM_KEK_PKCS11_*`, `vault/pkcs11.go` (`pkcs11` build tag) | **SoftHSM2 in CI** | A real HSM/token (or SoftHSM2) | AES wrap/unwrap inside the token; the key never leaves the HSM |
 | **CyberArk Conjur secret sourcing** | `PAM_CONJUR_*`, `internal/conjur` | in-process fake Conjur | A Conjur appliance (+ authn-api-key host or Kubernetes authn-jwt) | Bootstrap `PAM_*` secrets are sourced at startup; fail-loud if unreachable |
-| **SOPS + age sealed secrets** | `deploy/k8s/sops/`, `.sops.yaml` | round-trip with a committed demo key | Real age/PGP/cloud-KMS recipients for operators | `sops -d \| kubectl apply` decrypts only for held keys; cloud-KMS recipients wired into the chart is a follow-on |
+| **SOPS + age sealed secrets** | `deploy/k8s/sops/`, `deploy/.sops.yaml` | round-trip with a committed demo key | Real age/PGP/cloud-KMS recipients for operators | `sops -d \| kubectl apply` decrypts only for held keys; cloud-KMS recipients wired into the chart is a follow-on |
 
 ---
 
