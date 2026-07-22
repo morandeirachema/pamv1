@@ -15,8 +15,10 @@ import (
 	"crypto/ed25519"
 	"crypto/sha256"
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/hex"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -121,8 +123,17 @@ func runHealthcheck() error {
 	if host == "" || host == "0.0.0.0" || host == "::" {
 		host = "127.0.0.1" // the server binds all interfaces; probe loopback
 	}
+	// Match the scheme the server actually serves: when native TLS is configured
+	// the server speaks HTTPS, so an http:// probe would mark a healthy TLS server
+	// unhealthy. The probe targets loopback for liveness only, so it does not verify
+	// the certificate (InsecureSkipVerify is safe here — it authenticates nothing).
+	scheme := "http"
 	client := &http.Client{Timeout: 3 * time.Second}
-	resp, err := client.Get("http://" + net.JoinHostPort(host, port) + "/healthz")
+	if os.Getenv("PAM_TLS_CERT") != "" && os.Getenv("PAM_TLS_KEY") != "" {
+		scheme = "https"
+		client.Transport = &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}} //nolint:gosec // loopback liveness probe only
+	}
+	resp, err := client.Get(scheme + "://" + net.JoinHostPort(host, port) + "/healthz")
 	if err != nil {
 		return err
 	}
@@ -187,22 +198,29 @@ func buildBroker(cfg *config.Config) (*policy.Engine, []byte, ed25519.PrivateKey
 	return engine, key, ed25519.NewKeyFromSeed(seed), nil
 }
 
-// runRotateKEK re-encrypts every vaulted secret from the current local master
-// key (PAM_MASTER_KEY) to a new one (PAM_NEW_MASTER_KEY). Run it offline, then
-// set PAM_MASTER_KEY to the new key and restart.
+// runRotateKEK re-encrypts every vaulted secret from the CURRENT KEK to a NEW one
+// and records the rotation in the audit trail. The current KEK is read from the
+// usual PAM_KEK_*/PAM_MASTER_KEY variables (any provider — local, vault-transit,
+// aws-kms, pkcs11); the new KEK from the parallel PAM_NEW_KEK_*/PAM_NEW_MASTER_KEY
+// set (provider defaults to "local", so the classic PAM_NEW_MASTER_KEY workflow
+// still works). This makes provider migration (e.g. local→aws-kms) and recovery
+// from a compromised KEK possible with the shipped tooling. Run it offline, then
+// point the live PAM_KEK_*/PAM_MASTER_KEY at the new KEK and restart.
 func runRotateKEK() error {
-	oldV, err := vault.New(os.Getenv("PAM_MASTER_KEY"))
+	oldKEK, err := vault.NewKEK(kekOptionsFromEnv(""))
 	if err != nil {
-		return fmt.Errorf("current key (PAM_MASTER_KEY): %w", err)
+		return fmt.Errorf("current KEK: %w", err)
 	}
-	newKey := os.Getenv("PAM_NEW_MASTER_KEY")
-	if newKey == "" {
-		return fmt.Errorf("PAM_NEW_MASTER_KEY is required (generate one with -genkey)")
+	newOpts := kekOptionsFromEnv("NEW_")
+	if newOpts.Provider == "local" && newOpts.MasterKey == "" {
+		return fmt.Errorf("PAM_NEW_MASTER_KEY is required for a local new KEK (generate one with -genkey), or set PAM_NEW_KEK_PROVIDER")
 	}
-	newV, err := vault.New(newKey)
+	newKEK, err := vault.NewKEK(newOpts)
 	if err != nil {
-		return fmt.Errorf("new key (PAM_NEW_MASTER_KEY): %w", err)
+		return fmt.Errorf("new KEK: %w", err)
 	}
+	oldV, newV := vault.NewWithKEK(oldKEK), vault.NewWithKEK(newKEK)
+
 	dbURL := os.Getenv("PAM_DATABASE_URL")
 	if dbURL == "" || dbURL == "memory" {
 		return fmt.Errorf("PAM_DATABASE_URL must point at a PostgreSQL database")
@@ -218,8 +236,38 @@ func runRotateKEK() error {
 	if err != nil {
 		return fmt.Errorf("rotation failed after %d secrets: %w", n, err)
 	}
-	fmt.Printf("rotated %d secrets; now set PAM_MASTER_KEY to the new key and restart\n", n)
+	// Record the completed rotation in the system-of-record.
+	_ = st.AppendAudit(ctx, &store.AuditEvent{
+		Actor:  "kek-rotation",
+		Action: "vault.kek_rotated",
+		Detail: fmt.Sprintf("from:%s to:%s secrets:%d", oldKEK.ID(), newKEK.ID(), n),
+	})
+	fmt.Printf("rotated %d secrets from KEK %q to %q; now point PAM_KEK_*/PAM_MASTER_KEY at the new KEK and restart\n", n, oldKEK.ID(), newKEK.ID())
 	return nil
+}
+
+// kekOptionsFromEnv reads a KEK option set from PAM_<prefix>KEK_* variables
+// (prefix "" for the current KEK, "NEW_" for the rotation target), so both sides
+// of a KEK rotation support every provider, not just the local master key.
+func kekOptionsFromEnv(prefix string) vault.KEKOptions {
+	env := func(suffix string) string { return os.Getenv("PAM_" + prefix + suffix) }
+	provider := env("KEK_PROVIDER")
+	if provider == "" {
+		provider = "local"
+	}
+	return vault.KEKOptions{
+		Provider:         provider,
+		MasterKey:        env("MASTER_KEY"),
+		TransitAddr:      env("KEK_TRANSIT_ADDR"),
+		TransitToken:     env("KEK_TRANSIT_TOKEN"),
+		TransitKey:       env("KEK_TRANSIT_KEY"),
+		AWSRegion:        env("KEK_AWS_REGION"),
+		AWSKMSKeyID:      env("KEK_AWS_KEY_ID"),
+		PKCS11Module:     env("KEK_PKCS11_MODULE"),
+		PKCS11Pin:        env("KEK_PKCS11_PIN"),
+		PKCS11KeyLabel:   env("KEK_PKCS11_KEY_LABEL"),
+		PKCS11TokenLabel: env("KEK_PKCS11_TOKEN_LABEL"),
+	}
 }
 
 // fatal prints err to stderr prefixed with "pam-server:" and exits with status 1.
@@ -571,6 +619,7 @@ func run() error {
 		GuacdRDPSecurity:    cfg.GuacdRDPSecurity,
 		GuacdIgnoreCert:     cfg.GuacdIgnoreCert,
 		AuthRatePerMin:      cfg.AuthRatePerMin,
+		TrustedProxyHops:    cfg.TrustedProxyHops,
 		RevealDisabled:      cfg.RevealDisabled,
 		BreakGlassHashHex:   cfg.BreakGlassKeyHash,
 		BreakGlassThreshold: cfg.BreakGlassThreshold,
@@ -675,6 +724,7 @@ func run() error {
 			Live:             liveHub,
 			CA:               sshCA,
 			CertTTL:          cfg.SSHCertTTL,
+			AuthRatePerMin:   cfg.ProxyAuthRatePerMin,
 		})
 		if err != nil {
 			return err
@@ -708,6 +758,26 @@ func run() error {
 			}
 			dbClientTLS = &tls.Config{MinVersion: tls.VersionTLS12, Certificates: []tls.Certificate{cert}}
 		}
+		if cfg.RequireDBClientTLS && dbClientTLS == nil {
+			return errors.New("PAM_REQUIRE_DB_CLIENT_TLS is set but no TLS is configured for the database proxy operator leg; set PAM_TLS_CERT and PAM_TLS_KEY")
+		}
+		// Upstream (target) TLS verification for the DB proxy's credential-bearing
+		// leg: a pinned CA bundle or verification against the system roots. Unset
+		// leaves the legacy trust-any-with-warning behavior.
+		var dbUpstreamTLS *tls.Config
+		if cfg.DBUpstreamCA != "" {
+			pem, rerr := os.ReadFile(cfg.DBUpstreamCA)
+			if rerr != nil {
+				return fmt.Errorf("db upstream ca: %w", rerr)
+			}
+			pool := x509.NewCertPool()
+			if !pool.AppendCertsFromPEM(pem) {
+				return fmt.Errorf("db upstream ca: no certificates found in %s", cfg.DBUpstreamCA)
+			}
+			dbUpstreamTLS = &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: pool}
+		} else if cfg.DBUpstreamTLSVerify {
+			dbUpstreamTLS = &tls.Config{MinVersion: tls.VersionTLS12}
+		}
 		dbx, err := proxy.NewDB(st, v, resolver, proxy.DBConfig{
 			RecordingDir:     cfg.RecordingDir,
 			Sessions:         sessions,
@@ -718,6 +788,8 @@ func run() error {
 			OnSessionEnd:     dbOnSessionEnd,
 			CommandGuard:     cmdGuard,
 			Live:             liveHub,
+			AuthRatePerMin:   cfg.ProxyAuthRatePerMin,
+			UpstreamTLS:      dbUpstreamTLS,
 		})
 		if err != nil {
 			return err
@@ -744,8 +816,16 @@ func run() error {
 	}
 
 	tlsEnabled := cfg.TLSCert != "" && cfg.TLSKey != ""
+	// Fail closed on plaintext transport when the operator demands HTTPS: the
+	// bootstrap key and revealed secrets travel over this channel, so refuse to
+	// start rather than silently serve them in the clear.
+	if cfg.RequireHTTPS && !tlsEnabled {
+		return errors.New("PAM_REQUIRE_HTTPS is set but native TLS is not configured; set PAM_TLS_CERT and PAM_TLS_KEY (or terminate TLS at a trusted proxy and unset PAM_REQUIRE_HTTPS)")
+	}
 	if tlsEnabled {
 		srv.TLSConfig = &tls.Config{MinVersion: tls.VersionTLS12}
+	} else {
+		log.Warn("serving the API/portal over PLAINTEXT HTTP; set PAM_TLS_CERT/KEY or PAM_REQUIRE_HTTPS, or terminate TLS at a trusted proxy")
 	}
 	go func() {
 		if tlsEnabled {
@@ -803,6 +883,9 @@ func buildAlerter(cfg *config.Config, log *slog.Logger) alert.Notifier {
 	}
 	var ns []alert.Notifier
 	if cfg.AlertWebhook != "" {
+		if !strings.HasPrefix(cfg.AlertWebhook, "https://") && !strings.HasPrefix(cfg.AlertWebhook, "http://127.0.0.1") {
+			log.Warn("alert webhook is not https; break-glass alerts will transit in cleartext", "url_scheme", "http")
+		}
 		ns = append(ns, alert.NewWebhook(cfg.AlertWebhook))
 		log.Info("alert channel enabled", "kind", "webhook")
 	}

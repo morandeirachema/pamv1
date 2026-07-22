@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 )
@@ -53,8 +54,47 @@ func (s *Server) reconcileIdentities(w http.ResponseWriter, r *http.Request) {
 			results = append(results, res)
 		}
 	}
-	s.audit(r.Context(), "identity.reconcile", fmt.Sprintf("checked:%d disabled:%d dry_run:%t", len(users), revoked, dryRun))
+	// Directory (AD/SSO) logins create login-session rows, not user rows, so the
+	// loop above never revokes them — a disabled directory user would otherwise
+	// keep a valid session until it expires. Walk the active login sessions, and
+	// for each distinct subject the directory reports disabled/absent, revoke it.
+	sessRevoked, sessChecked := s.reconcileSessions(r.Context(), dryRun)
+
+	s.audit(r.Context(), "identity.reconcile", fmt.Sprintf("checked:%d disabled:%d sessions_checked:%d sessions_revoked:%d dry_run:%t", len(users), revoked, sessChecked, sessRevoked, dryRun))
 	writeJSON(w, http.StatusOK, map[string]any{
 		"checked": len(users), "disabled": revoked, "dry_run": dryRun, "results": results,
+		"sessions_checked": sessChecked, "sessions_revoked": sessRevoked,
 	})
+}
+
+// reconcileSessions revokes active login sessions whose subject the directory
+// reports disabled or absent, so a centrally-deprovisioned directory user loses
+// their pamv1 session promptly instead of at TTL expiry. Returns (revoked,
+// distinctSubjectsChecked). Never revokes on a transient directory error.
+func (s *Server) reconcileSessions(ctx context.Context, dryRun bool) (revoked, checked int) {
+	sessions, err := s.store.ListSessions(ctx)
+	if err != nil {
+		return 0, 0
+	}
+	seen := make(map[string]bool)
+	for _, sess := range sessions {
+		if seen[sess.Username] {
+			continue
+		}
+		seen[sess.Username] = true
+		checked++
+		exists, enabled, derr := s.rt().directory.UserStatus(ctx, sess.Username)
+		if derr != nil || (exists && enabled) {
+			continue // uncertain or still-valid: never revoke
+		}
+		if dryRun {
+			revoked++
+			continue
+		}
+		if n, err := s.store.DeleteSessionsByUsername(ctx, sess.Username); err == nil && n > 0 {
+			revoked += n
+			s.audit(ctx, "session.revoked", "user:"+sess.Username+" reason:directory-disabled")
+		}
+	}
+	return revoked, checked
 }

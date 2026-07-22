@@ -154,16 +154,21 @@ func (r Role) Capabilities() []string {
 }
 
 // CanConnectTarget reports whether the principal may connect to a target given
-// its grants. A target with no grants is open to any connect-capable principal;
-// admins may always connect; otherwise a grant must match the user or its role.
-func CanConnectTarget(p *Principal, grants []store.TargetGrant) bool {
+// its effective grants (direct grants ∪ safe members) and whether the target is
+// placed in a safe. Admins may always connect. When no grant matches, an
+// *ungated* target (safeScoped=false) is open to any connect-capable principal,
+// but a *safe-scoped* target (safeScoped=true) is default-DENY — placing a target
+// in a safe restricts it to that safe's members, so an empty/unmatched grant set
+// must not fall through to "open". Otherwise a grant must match the user or role.
+func CanConnectTarget(p *Principal, grants []store.TargetGrant, safeScoped bool) bool {
 	for _, r := range p.effectiveRoles() {
 		if r == RoleAdmin {
 			return true
 		}
 	}
 	if len(grants) == 0 {
-		return true
+		// Ungated ⇒ open; safe-scoped-but-no-members ⇒ closed (containment).
+		return !safeScoped
 	}
 	for _, g := range grants {
 		if SubjectMatches(p, g.SubjectType, g.Subject) {

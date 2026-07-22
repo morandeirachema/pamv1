@@ -54,6 +54,31 @@ type Config struct {
 	TLSKey  string
 	// AuthRatePerMin limits auth attempts per client IP per minute (0 disables).
 	AuthRatePerMin int
+	// TrustedProxyHops is the number of trusted reverse-proxy hops in front of the
+	// API. 0 (default) keys the rate limiter on RemoteAddr; >0 takes the client IP
+	// from the last N X-Forwarded-For entries (the hops YOU control), so per-IP
+	// throttling still works behind a TLS-terminating proxy without trusting a
+	// spoofable header end-to-end.
+	TrustedProxyHops int
+	// ProxyAuthRatePerMin limits failed authentication attempts per client IP per
+	// minute on the SSH (:2222) and PostgreSQL (:5433) proxies, throttling online
+	// guessing of the operator-chosen PAM_API_KEY (0 disables).
+	ProxyAuthRatePerMin int
+	// RequireHTTPS refuses to start the API/portal over plaintext HTTP when native
+	// TLS (TLSCert/TLSKey) is not configured — fail-closed transport. Leave false
+	// only when TLS is terminated by a trusted reverse proxy or for local demos.
+	RequireHTTPS bool
+	// RequireDBClientTLS refuses to start the PostgreSQL session proxy without TLS
+	// on the operator-facing leg (TLSCert/TLSKey), so the operator's PAM key is
+	// never sent to the DB proxy in cleartext.
+	RequireDBClientTLS bool
+	// DBUpstreamCA is a PEM CA bundle used to VERIFY the upstream PostgreSQL
+	// server's TLS certificate on the database proxy's target leg. DBUpstreamTLSVerify
+	// verifies against the system roots instead. Either enables fail-closed upstream
+	// TLS so the JIT-injected DB credential can't be harvested by a MITM; unset
+	// keeps the legacy trust-any-with-warning behavior.
+	DBUpstreamCA        string
+	DBUpstreamTLSVerify bool
 	// RevealDisabled makes credential reveal break-glass-only.
 	RevealDisabled bool
 
@@ -280,6 +305,12 @@ func Load() (*Config, error) {
 		TLSCert:             os.Getenv("PAM_TLS_CERT"),
 		TLSKey:              os.Getenv("PAM_TLS_KEY"),
 		AuthRatePerMin:      integer("PAM_AUTH_RATE_LIMIT", 20),
+		TrustedProxyHops:    integer("PAM_TRUSTED_PROXY_HOPS", 0),
+		ProxyAuthRatePerMin: integer("PAM_PROXY_AUTH_RATE_LIMIT", 10),
+		RequireHTTPS:        boolean("PAM_REQUIRE_HTTPS", false),
+		RequireDBClientTLS:  boolean("PAM_REQUIRE_DB_CLIENT_TLS", false),
+		DBUpstreamCA:        os.Getenv("PAM_DB_UPSTREAM_CA"),
+		DBUpstreamTLSVerify: boolean("PAM_DB_UPSTREAM_TLS_VERIFY", false),
 		RevealDisabled:      boolean("PAM_REVEAL_DISABLED", false),
 		BreakGlassThreshold: integer("PAM_BREAK_GLASS_THRESHOLD", 0),
 		BreakGlassShares:    integer("PAM_BREAK_GLASS_SHARES", 5),
@@ -396,6 +427,13 @@ func Load() (*Config, error) {
 	}
 	if cfg.APIKey == "" {
 		errs = append(errs, "PAM_API_KEY is required")
+	} else if len(cfg.APIKey) < 16 && cfg.DatabaseURL != "memory" && !boolean("PAM_ALLOW_WEAK_API_KEY", false) {
+		// The bootstrap key is presented as the SSH/DB proxy password and grants
+		// admin; the proxies now throttle guessing, but a real (non-demo) deployment
+		// must not run on a short, human-chosen key. The in-memory demo store and an
+		// explicit PAM_ALLOW_WEAK_API_KEY escape hatch are exempt so the quickstart
+		// keeps working.
+		errs = append(errs, "PAM_API_KEY must be at least 16 characters (set PAM_ALLOW_WEAK_API_KEY=true to override, e.g. for demos)")
 	}
 	if cfg.DatabaseURL == "" {
 		errs = append(errs, `PAM_DATABASE_URL is required (postgres://... or "memory" for an ephemeral demo)`)

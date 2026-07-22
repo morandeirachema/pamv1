@@ -78,6 +78,10 @@ type Config struct {
 	CA *sshca.CertAuthority
 	// CertTTL is how long a minted ZSP certificate is valid (default 2m).
 	CertTTL time.Duration
+	// AuthRatePerMin throttles authentication attempts per source IP per minute,
+	// limiting online guessing of the PAM key presented as the SSH password
+	// (0 disables).
+	AuthRatePerMin int
 }
 
 // JumpConfig configures reaching SSH targets through an SSH bastion.
@@ -110,6 +114,7 @@ type Proxy struct {
 	live         *session.Hub
 	ca           *sshca.CertAuthority
 	certTTL      time.Duration
+	authLimiter  *authRateLimiter
 
 	bg sync.WaitGroup // background tasks (post-session rotation) to drain on shutdown
 
@@ -156,6 +161,7 @@ func New(st store.Store, v *vault.Vault, resolver *auth.Resolver, cfg Config) (*
 		live:         cfg.Live,
 		ca:           cfg.CA,
 		certTTL:      cfg.CertTTL,
+		authLimiter:  newAuthRateLimiter(cfg.AuthRatePerMin),
 		conns:        make(map[net.Conn]struct{}),
 	}
 	if p.certTTL <= 0 {
@@ -183,6 +189,13 @@ func New(st store.Store, v *vault.Vault, resolver *auth.Resolver, cfg Config) (*
 // connection permissions; the role check and target resolution happen after
 // the handshake.
 func (p *Proxy) authenticate(c ssh.ConnMetadata, password []byte) (*ssh.Permissions, error) {
+	// Throttle online guessing of the PAM key before doing any resolve work.
+	if !p.authLimiter.allow(remoteHost(c.RemoteAddr())) {
+		remote := c.RemoteAddr().String()
+		p.log.Warn("authentication rate limited", "login", c.User(), "remote", remote)
+		p.audit(context.Background(), c.User(), "proxy.auth_rate_limited", "remote:"+remote)
+		return nil, fmt.Errorf("pamv1: too many attempts; try again shortly")
+	}
 	principal, err := p.resolver.Resolve(context.Background(), string(password))
 	if err != nil {
 		remote := c.RemoteAddr().String()
@@ -204,6 +217,7 @@ func (p *Proxy) authenticate(c ssh.ConnMetadata, password []byte) (*ssh.Permissi
 		"login":     c.User(),
 		"principal": principal.Name,
 		"role":      string(principal.Role),
+		"roles":     auth.JoinRoles(principal.Roles),
 		"target":    targetName,
 		"cred_user": credUser,
 	}
@@ -438,7 +452,7 @@ func (p *Proxy) handleConn(ctx context.Context, nConn net.Conn) {
 		rejectAll(chans, ssh.Prohibited, "pamv1: authorization check failed")
 		return
 	}
-	if !auth.CanConnectTarget(&auth.Principal{Name: actor, Role: role}, grants) {
+	if !auth.CanConnectTarget(&auth.Principal{Name: actor, Role: role, Roles: auth.SplitRoles(ext["roles"])}, grants, target.SafeID != nil) {
 		p.log.Warn("session denied: target policy", "actor", actor, "target", target.Name, "remote", remote)
 		p.audit(ctx, actor, "session.denied", "target:"+target.Name+" reason:target-policy")
 		rejectAll(chans, ssh.Prohibited, "pamv1: not authorized for this target")
@@ -472,6 +486,23 @@ func (p *Proxy) handleConn(ctx context.Context, nConn net.Conn) {
 	}
 
 	// Every authorization gate has passed — obtain the upstream credential
+	// Fail closed: durably audit the session start BEFORE any secret is decrypted
+	// or a ZSP certificate is minted. If the audit store is unavailable we refuse
+	// rather than open an unaudited privileged session (the audit analogue of the
+	// fail-closed recording policy).
+	startMode := "interactive"
+	if ext["observe"] == "true" {
+		startMode = "observer"
+	}
+	startDetail := fmt.Sprintf("target:%s host:%s:%d cred_user:%s mode:%s", target.Name, target.Host, target.Port, cred.Username, startMode)
+	if target.Protocol != "ssh" {
+		startDetail += " protocol:" + target.Protocol
+	}
+	if err := appendAuditErr(ctx, p.store, p.log, actor, "session.start", startDetail); err != nil {
+		rejectAll(chans, ssh.ConnectionFailed, "pamv1: audit log unavailable; session refused")
+		return
+	}
+
 	// just-in-time. A Zero Standing Privilege ("ssh_ca") credential has no stored
 	// secret: the proxy mints a short-lived certificate at dial time instead
 	// (dialUpstream). Every other credential's secret is decrypted here — plaintext
@@ -521,8 +552,6 @@ func (p *Proxy) handleConn(ctx context.Context, nConn net.Conn) {
 	}
 	p.log.Info("session started", "actor", actor, "target", target.Name,
 		"host", fmt.Sprintf("%s:%d", target.Host, target.Port), "cred_user", cred.Username, "mode", mode)
-	p.audit(ctx, actor, "session.start",
-		fmt.Sprintf("target:%s host:%s:%d cred_user:%s mode:%s", target.Name, target.Host, target.Port, cred.Username, mode))
 	var sid string
 	if p.sessions != nil {
 		sid = p.sessions.Register(session.Info{
@@ -829,8 +858,6 @@ func (p *Proxy) serveWinRM(ctx context.Context, sconn *ssh.ServerConn, chans <-c
 		mode = "observer"
 	}
 	p.log.Info("winrm session started", "actor", actor, "target", target.Name, "mode", mode)
-	p.audit(ctx, actor, "session.start",
-		fmt.Sprintf("target:%s host:%s:%d cred_user:%s protocol:winrm mode:%s", target.Name, target.Host, target.Port, cred.Username, mode))
 	if p.sessions != nil {
 		sid := p.sessions.Register(session.Info{
 			Actor: actor, Target: target.Name, Protocol: "winrm", Remote: remote, Started: time.Now(),

@@ -71,6 +71,30 @@ func TestLoadRequiredVars(t *testing.T) {
 			t.Fatalf("Load() = %v, want PAM_API_KEY error", err)
 		}
 	})
+	t.Run("weak api key rejected on a real database", func(t *testing.T) {
+		setRequired(t)
+		t.Setenv("PAM_DATABASE_URL", "postgres://localhost/pam")
+		t.Setenv("PAM_API_KEY", "short") // < 16 chars
+		if _, err := Load(); err == nil || !strings.Contains(err.Error(), "PAM_API_KEY must be at least 16") {
+			t.Fatalf("Load() = %v, want weak PAM_API_KEY error", err)
+		}
+	})
+	t.Run("weak api key allowed in memory demo", func(t *testing.T) {
+		setRequired(t) // PAM_DATABASE_URL=memory
+		t.Setenv("PAM_API_KEY", "demo-key")
+		if _, err := Load(); err != nil {
+			t.Fatalf("Load() = %v, want nil (memory demo exempts the length floor)", err)
+		}
+	})
+	t.Run("weak api key allowed with explicit override", func(t *testing.T) {
+		setRequired(t)
+		t.Setenv("PAM_DATABASE_URL", "postgres://localhost/pam")
+		t.Setenv("PAM_API_KEY", "short")
+		t.Setenv("PAM_ALLOW_WEAK_API_KEY", "true")
+		if _, err := Load(); err != nil {
+			t.Fatalf("Load() = %v, want nil with PAM_ALLOW_WEAK_API_KEY=true", err)
+		}
+	})
 	t.Run("missing database url", func(t *testing.T) {
 		setRequired(t)
 		t.Setenv("PAM_DATABASE_URL", "")

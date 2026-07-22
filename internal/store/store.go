@@ -534,6 +534,13 @@ type Store interface {
 	GetSessionByTokenHash(ctx context.Context, tokenHashHex string) (*Session, error)
 	// DeleteSession removes the session with the given token hash, or ErrNotFound.
 	DeleteSession(ctx context.Context, tokenHashHex string) error
+	// ListSessions returns all non-expired login sessions (newest first), so an
+	// admin can see and revoke active logins.
+	ListSessions(ctx context.Context) ([]Session, error)
+	// DeleteSessionsByUsername revokes every login session for a username (e.g. a
+	// directory user disabled upstream, or a compromised account), returning how
+	// many were removed. It is idempotent — zero is not an error.
+	DeleteSessionsByUsername(ctx context.Context, username string) (int, error)
 
 	// UpsertMFAEnrollment creates or replaces a user's TOTP enrollment.
 	UpsertMFAEnrollment(ctx context.Context, e *MFAEnrollment) error

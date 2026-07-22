@@ -60,6 +60,13 @@ type DBConfig struct {
 	// Live receives each recorded statement keyed by session id, so a supervisor
 	// can watch the session live (Phase 16).
 	Live *session.Hub
+	// AuthRatePerMin throttles operator authentication attempts per source IP per
+	// minute, limiting online guessing of the PAM key (0 disables).
+	AuthRatePerMin int
+	// UpstreamTLS, when non-nil, VERIFIES the upstream PostgreSQL server's TLS
+	// certificate on the target leg (RootCAs / ServerName). nil keeps the legacy
+	// trust-any-with-warning behavior for the upstream connection.
+	UpstreamTLS *tls.Config
 }
 
 // DBProxy brokers PostgreSQL sessions with just-in-time credential injection.
@@ -79,6 +86,8 @@ type DBProxy struct {
 	guard        *CommandGuard
 	live         *session.Hub
 	chain        *recordChain
+	authLimiter  *authRateLimiter
+	upstreamTLS  *tls.Config
 
 	bg sync.WaitGroup // background tasks (post-session rotation) drained on shutdown
 
@@ -116,10 +125,15 @@ func NewDB(st store.Store, v *vault.Vault, resolver *auth.Resolver, cfg DBConfig
 		guard:        cfg.CommandGuard,
 		live:         cfg.Live,
 		chain:        newRecordChain(cfg.RecordingDir),
+		authLimiter:  newAuthRateLimiter(cfg.AuthRatePerMin),
+		upstreamTLS:  cfg.UpstreamTLS,
 		conns:        make(map[net.Conn]struct{}),
 	}
 	if d.clientTLS == nil {
 		d.log.Warn("database proxy operator leg is NOT encrypted (set PAM_TLS_CERT/KEY or terminate TLS at the ingress)")
+	}
+	if d.upstreamTLS == nil {
+		d.log.Warn("upstream PostgreSQL TLS is NOT verified (set PAM_DB_UPSTREAM_CA or PAM_DB_UPSTREAM_TLS_VERIFY to pin it)")
 	}
 	return d, nil
 }
@@ -319,6 +333,13 @@ func (d *DBProxy) handleConn(ctx context.Context, nConn net.Conn) {
 		d.fail(backend, "28000", "pamv1: password expected")
 		return
 	}
+	// Throttle online guessing of the PAM key before any resolve work.
+	if !d.authLimiter.allow(remoteHost(nConn.RemoteAddr())) {
+		d.log.Warn("db authentication rate limited", "login", login, "remote", remote)
+		d.audit(ctx, login, "proxy.auth_rate_limited", "proto:postgres remote:"+remote)
+		d.fail(backend, "28P01", "pamv1: too many attempts; try again shortly")
+		return
+	}
 	principal, err := d.resolver.Resolve(ctx, pw.Password)
 	if err != nil {
 		d.log.Warn("db authentication failed", "login", login, "remote", remote)
@@ -329,6 +350,14 @@ func (d *DBProxy) handleConn(ctx context.Context, nConn net.Conn) {
 	actor := principal.Name
 
 	// --- Authorization gates (mirror the SSH proxy; decrypt only after all pass) ---
+	// An enrollment-only session (MFA setup pending under PAM_MFA_REQUIRED) may not
+	// open sessions — mirror the SSH proxy and the HTTP authz middleware, so the
+	// mandatory-MFA policy is not bypassable via the database proxy.
+	if principal.EnrollOnly {
+		d.audit(ctx, actor, "db.session.denied", "login:"+login+" reason:mfa-enrollment-incomplete")
+		d.deny(ctx, backend, actor, login, "complete MFA enrollment first")
+		return
+	}
 	if !principal.Can(auth.CapConnect) {
 		d.deny(ctx, backend, actor, login, "your role may not open sessions")
 		return
@@ -353,7 +382,7 @@ func (d *DBProxy) handleConn(ctx context.Context, nConn net.Conn) {
 		d.fail(backend, "58000", "pamv1: authorization check failed")
 		return
 	}
-	if !auth.CanConnectTarget(principal, grants) {
+	if !auth.CanConnectTarget(principal, grants, target.SafeID != nil) {
 		d.deny(ctx, backend, actor, login, "not authorized for this target")
 		return
 	}
@@ -369,6 +398,14 @@ func (d *DBProxy) handleConn(ctx context.Context, nConn net.Conn) {
 			d.fail(backend, "28000", "pamv1: connection requires an approved access request")
 			return
 		}
+	}
+
+	// Fail closed: durably audit the session before any secret is decrypted or
+	// injected upstream. If the audit store is unavailable we refuse the session
+	// rather than open an unaudited privileged connection.
+	if err := appendAuditErr(ctx, d.store, d.log, actor, "db.session.start", fmt.Sprintf("target:%s db:%s cred_user:%s", target.Name, database, cred.Username)); err != nil {
+		d.fail(backend, "58000", "pamv1: audit log unavailable; session refused")
+		return
 	}
 
 	// Every gate passed — decrypt just-in-time. Plaintext exists only from here.
@@ -397,7 +434,6 @@ func (d *DBProxy) handleConn(ctx context.Context, nConn net.Conn) {
 	}
 
 	d.log.Info("db session started", "actor", actor, "target", target.Name, "db", database, "cred_user", cred.Username, "remote", remote)
-	d.audit(ctx, actor, "db.session.start", fmt.Sprintf("target:%s db:%s cred_user:%s", target.Name, database, cred.Username))
 
 	var rec *Recording
 	if r, rerr := newRecording(d.recordingDir, "pgsql-"+actor+"-"+target.Name+"-"+time.Now().UTC().Format("20060102-150405"), time.Now()); rerr == nil {
@@ -448,7 +484,7 @@ func (d *DBProxy) dialUpstream(ctx context.Context, target *store.Target, user, 
 	if err != nil {
 		return nil, err
 	}
-	tconn, err := maybeUpstreamTLS(conn, target.Host)
+	tconn, err := d.maybeUpstreamTLS(conn, target.Host)
 	if err != nil {
 		conn.Close()
 		return nil, fmt.Errorf("upstream tls: %w", err)
@@ -510,6 +546,11 @@ func (d *DBProxy) relay(ctx context.Context, backend *pgproto3.Backend, fe *pgpr
 					return // fail-closed: end the extended-protocol session
 				}
 				d.recordQuery(ctx, rec, actor, target, m.Query, sid)
+			case *pgproto3.FunctionCall:
+				// The deprecated fast-path call carries no SQL text, so it can't be
+				// command-filtered — but audit it so it can't silently evade the
+				// per-statement trail the Query/Parse paths provide.
+				d.recordQuery(ctx, rec, actor, target, fmt.Sprintf("[fastpath function_call oid=%d]", m.Function), sid)
 			case *pgproto3.Terminate:
 				fe.Send(msg)
 				_ = fe.Flush()
@@ -593,10 +634,15 @@ func (d *DBProxy) deny(ctx context.Context, backend *pgproto3.Backend, actor, lo
 
 // maybeUpstreamTLS offers SSL to the upstream PostgreSQL. If the server accepts
 // ('S') the connection is wrapped in TLS; if it declines ('N') the plaintext
-// connection continues. Verification is best-effort (ServerName set, but not
-// fail-closed) — the same trust-any-with-warning posture the SSH proxy uses for
-// unpinned upstream host keys; pin the target at the network layer.
-func maybeUpstreamTLS(conn net.Conn, host string) (net.Conn, error) {
+// connection continues.
+//
+// When an upstream TLS config is set (PAM_DB_UPSTREAM_CA / PAM_DB_UPSTREAM_TLS_VERIFY)
+// the server certificate is VERIFIED (fail-closed) so the JIT-injected DB
+// credential cannot be harvested by a MITM impersonating the target. When it is
+// unset the connection falls back to the legacy trust-any-with-warning posture
+// (a warning is logged at startup), mirroring the SSH proxy's unpinned host-key
+// behavior — but a verified config removes that gap entirely for the DB leg.
+func (d *DBProxy) maybeUpstreamTLS(conn net.Conn, host string) (net.Conn, error) {
 	// SSLRequest: int32 length 8, int32 request code 80877103.
 	if _, err := conn.Write([]byte{0x00, 0x00, 0x00, 0x08, 0x04, 0xd2, 0x16, 0x2f}); err != nil {
 		return nil, err
@@ -606,9 +652,23 @@ func maybeUpstreamTLS(conn net.Conn, host string) (net.Conn, error) {
 		return nil, err
 	}
 	if resp[0] != 'S' {
-		return conn, nil // upstream declines TLS; continue plaintext
+		// Upstream declined TLS. If verification was demanded, refuse rather than
+		// silently sending the vaulted credential over a plaintext link.
+		if d.upstreamTLS != nil {
+			return nil, errors.New("upstream declined TLS but PAM_DB_UPSTREAM verification is required")
+		}
+		return conn, nil
 	}
-	tconn := tls.Client(conn, &tls.Config{ServerName: host, InsecureSkipVerify: true}) //nolint:gosec // best-effort; upstream is pinned at the network layer
+	var cfg *tls.Config
+	if d.upstreamTLS != nil {
+		cfg = d.upstreamTLS.Clone()
+		if cfg.ServerName == "" {
+			cfg.ServerName = host
+		}
+	} else {
+		cfg = &tls.Config{ServerName: host, InsecureSkipVerify: true} //nolint:gosec // legacy trust-any; set PAM_DB_UPSTREAM_CA to verify
+	}
+	tconn := tls.Client(conn, cfg)
 	if err := tconn.Handshake(); err != nil {
 		return nil, err
 	}
@@ -724,8 +784,23 @@ func scramAuth(fe *pgproto3.Frontend, password string, mechanisms []string) erro
 	if e, isErr := msg.(*pgproto3.ErrorResponse); isErr {
 		return fmt.Errorf("scram rejected: %s", e.Message)
 	}
-	if _, ok := msg.(*pgproto3.AuthenticationSASLFinal); !ok {
+	final, ok := msg.(*pgproto3.AuthenticationSASLFinal)
+	if !ok {
 		return fmt.Errorf("expected SASLFinal, got %T", msg)
+	}
+	// Verify the server signature (SCRAM mutual authentication): recompute the
+	// expected ServerSignature and constant-time compare it with the server's
+	// v=… value. Skipping this — as the proxy previously did — forfeits mutual auth
+	// and lets a MITM/impostor upstream complete the handshake without proving it
+	// knows the password.
+	serverKey := hmacSHA256(saltedPassword, []byte("Server Key"))
+	expectedSig := hmacSHA256(serverKey, []byte(authMessage))
+	gotSig, err := base64.StdEncoding.DecodeString(parseSCRAM(string(final.Data))["v"])
+	if err != nil {
+		return fmt.Errorf("scram server signature: %w", err)
+	}
+	if !hmac.Equal(gotSig, expectedSig) {
+		return errors.New("scram: server signature mismatch (possible MITM upstream)")
 	}
 	return nil // AuthenticationOk follows and is consumed by the caller's loop
 }
@@ -800,10 +875,18 @@ func jitDecrypt(ctx context.Context, v *vault.Vault, target *store.Target, cred 
 
 // appendAudit writes an audit event, logging (not failing) on a store error.
 func appendAudit(ctx context.Context, st store.Store, log *slog.Logger, actor, action, detail string) {
+	_ = appendAuditErr(ctx, st, log, actor, action, detail)
+}
+
+// appendAuditErr is appendAudit that returns the store error, so a session that
+// must be audited before a secret is injected upstream can fail closed on it.
+func appendAuditErr(ctx context.Context, st store.Store, log *slog.Logger, actor, action, detail string) error {
 	e := store.AuditEvent{Actor: actor, Action: action, Detail: detail}
-	if err := st.AppendAudit(ctx, &e); err != nil {
+	err := st.AppendAudit(ctx, &e)
+	if err != nil {
 		log.Error("audit append failed", "action", action, "err", err)
 	}
+	return err
 }
 
 // recoverPanicLog logs and swallows a panic in a per-connection or per-session

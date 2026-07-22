@@ -215,6 +215,12 @@ func (s *Server) listBrokerAudit(w http.ResponseWriter, r *http.Request) {
 			limit = n
 		}
 	}
+	// Clamp so the HTTP listing can't request the entire chain in one response
+	// (limit<=0 makes the store return everything); chain verification has its own
+	// endpoints (/v1/audit/verify, /v1/audit/head).
+	if limit <= 0 || limit > 500 {
+		limit = 100
+	}
 	events, err := s.store.ListBrokerAudit(r.Context(), limit)
 	if err != nil {
 		storeError(w, err)

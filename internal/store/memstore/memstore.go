@@ -1290,6 +1290,36 @@ func (m *Memstore) DeleteSession(_ context.Context, tokenHashHex string) error {
 	return store.ErrNotFound
 }
 
+// ListSessions returns all non-expired login sessions, newest first.
+func (m *Memstore) ListSessions(_ context.Context) ([]store.Session, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	now := time.Now()
+	out := make([]store.Session, 0, len(m.sessions))
+	for _, s := range m.sessions {
+		if now.After(s.ExpiresAt) {
+			continue
+		}
+		out = append(out, s)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.After(out[j].CreatedAt) })
+	return out, nil
+}
+
+// DeleteSessionsByUsername revokes every session for a username, returning the count.
+func (m *Memstore) DeleteSessionsByUsername(_ context.Context, username string) (int, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	n := 0
+	for id, s := range m.sessions {
+		if s.Username == username {
+			delete(m.sessions, id)
+			n++
+		}
+	}
+	return n, nil
+}
+
 // UpsertMFAEnrollment creates or replaces a user's TOTP enrollment.
 func (m *Memstore) UpsertMFAEnrollment(_ context.Context, e *store.MFAEnrollment) error {
 	m.mu.Lock()

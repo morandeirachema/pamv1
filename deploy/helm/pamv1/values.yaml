@@ -26,6 +26,21 @@ ingress:
     enabled: true
     secretName: pamv1-tls
 
+# NetworkPolicy: default-deny to/from the vault pod, allowing only the app ports
+# in and DNS + PostgreSQL + your target networks out. Disabled by default because
+# egress rules must be scoped to YOUR environment; enable and tighten in prod.
+networkPolicy:
+  enabled: false
+  # CIDRs the proxy may reach (SSH/RDP/WinRM/PostgreSQL targets). Defaults to the
+  # RFC-1918 private ranges — narrow these to your real target networks.
+  egressTargetCIDRs:
+    - 10.0.0.0/8
+    - 172.16.0.0/12
+    - 192.168.0.0/16
+  # Label selector for the PostgreSQL backend pods to allow egress to.
+  postgresPodLabels:
+    cnpg.io/cluster: pamv1-pg
+
 # Non-secret configuration passed as environment variables (PAM_*).
 config:
   PAM_LOG_FORMAT: "json"

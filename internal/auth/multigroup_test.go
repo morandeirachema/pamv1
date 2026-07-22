@@ -39,7 +39,7 @@ func TestMultiGroupUnion(t *testing.T) {
 		t.Fatal("multi-group user gained manage_users it shouldn't have")
 	}
 	// A role:user grant is honored even though the display role is auditor.
-	if !auth.CanConnectTarget(p, []store.TargetGrant{{SubjectType: "role", Subject: "user"}}) {
+	if !auth.CanConnectTarget(p, []store.TargetGrant{{SubjectType: "role", Subject: "user"}}, true) {
 		t.Fatal("role:user grant not matched for a user+auditor member")
 	}
 	// A plain single-role principal (nil Roles) is unchanged: an auditor can't connect.

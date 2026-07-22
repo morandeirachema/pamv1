@@ -422,6 +422,13 @@ cancelled shutdown context so they are not dropped mid-drain.
 | `PAM_LOG_FORMAT` | `json` | logging (json/text) |
 | `PAM_TLS_CERT` / `PAM_TLS_KEY` | — | native HTTPS (TLS 1.2+) when both set |
 | `PAM_AUTH_RATE_LIMIT` | `20` | auth attempts / client IP / minute (0 disables) |
+| `PAM_TRUSTED_PROXY_HOPS` | `0` | trusted reverse-proxy hops; picks the client IP from `X-Forwarded-For` for rate limiting (0 = use RemoteAddr) |
+| `PAM_PROXY_AUTH_RATE_LIMIT` | `10` | failed-auth throttle / source IP / minute on the SSH (:2222) and DB (:5433) proxies (0 disables) |
+| `PAM_REQUIRE_HTTPS` | `false` | refuse to start the API/portal without native TLS (fail-closed transport) |
+| `PAM_REQUIRE_DB_CLIENT_TLS` | `false` | refuse to start the DB proxy without operator-leg TLS |
+| `PAM_DB_UPSTREAM_CA` | — | PEM CA bundle to VERIFY the upstream PostgreSQL cert (fail-closed upstream TLS) |
+| `PAM_DB_UPSTREAM_TLS_VERIFY` | `false` | verify the upstream PostgreSQL cert against the system roots |
+| `PAM_ALLOW_WEAK_API_KEY` | `false` | override the 16-char `PAM_API_KEY` floor (demos only; ignored for `memory`) |
 | `PAM_REVEAL_DISABLED` | `false` | make credential reveal break-glass-only |
 | `PAM_BREAK_GLASS_THRESHOLD` / `_SHARES` | `0` / `5` | quorum M / N (M≥2 enables unseal) |
 | `PAM_BREAK_GLASS_TTL_MIN` | `15` | break-glass session lifetime (minutes) |
@@ -430,7 +437,7 @@ cancelled shutdown context so they are not dropped mid-drain.
 | `PAM_ALERT_EMAIL_SMTP` / `_FROM` / `_TO` / `_USER` / `_PASS` | — | SMTP alert channel (comma-separated `_TO`) |
 | `PAM_KEK_PROVIDER` | `local` | vault KEK: `local` \| `vault-transit` \| `aws-kms` \| `pkcs11` |
 | `PAM_KEK_TRANSIT_ADDR` / `_TOKEN` / `_KEY` | — | HashiCorp Vault Transit KEK (production; `https://` required off-loopback) |
-| `PAM_NEW_MASTER_KEY` | — | target key for the `-rotate-kek` maintenance run |
+| `PAM_NEW_MASTER_KEY` / `PAM_NEW_KEK_*` | — | target KEK for the `-rotate-kek` run (any provider; `PAM_NEW_KEK_PROVIDER` etc. mirror `PAM_KEK_*`, enabling local→KMS migration) |
 | `PAM_KEK_AWS_KEY_ID` / `_AWS_REGION` | — | AWS KMS KEK (`aws-kms` provider) |
 | `PAM_KEK_PKCS11_MODULE` / `_PIN` / `_KEY_LABEL` / `_TOKEN_LABEL` | — | on-prem HSM KEK (`pkcs11` provider; **only in the `pkcs11`-tagged build**) |
 | `PAM_LDAP_URL` | — (disabled) | AD/LDAP login; `ldaps://…` enables `/api/login` |
@@ -496,7 +503,7 @@ secrets. Format `json` (SIEM) or `text` (humans); collect from stdout.
 `access.request` · `access.approve` · `access.deny` · `access.denied` · `access.decision_denied` · `audit.export` · `identity.reconcile` · `user.revoked` ·
 `mfa.enroll` · `mfa.confirm` · `mfa.disable` · `mfa.recovery_generated` ·
 `mfa.recovery_used` · `winrm.run` · `winrm.error` · `ssh.exec` · `rdp.connect` · `rdp.end` ·
-`rdp.error` · `authz.denied` · `login.failed` · `proxy.auth_failed` · `breakglass.access` · `session.start` ·
+`rdp.error` · `authz.denied` · `login.failed` · `proxy.auth_failed` · `proxy.auth_rate_limited` · `session.revoked` · `vault.kek_rotated` · `breakglass.access` · `session.start` ·
 `session.record` · `session.record_failed` · `session.end` · `session.denied` · `session.error` · `session.cert_issued` ·
 `analytics.risk_flagged` · `analytics.auto_response` ·
 `db.session.start` · `db.session.end` · `db.session.denied` · `db.session.error` · `db.query` ·
@@ -517,12 +524,19 @@ events are also written to the separate tamper-evident `broker_audit_events` cha
 2. All key/secret comparisons use `crypto/subtle.ConstantTimeCompare`.
 3. Vault AAD on decrypt must equal AAD on encrypt (`store.CredentialAAD`).
 2a. Per-target authorization: connect paths (proxy/WinRM/RDP) must pass
-   `auth.CanConnectTarget` — a target with grants admits only matching
-   users/roles (admins always; ungranted targets are open).
+   `auth.CanConnectTarget(p, grants, safeScoped)` — a target with grants admits
+   only matching users/roles (admins always). An **ungated** target (not in a
+   safe) is open to any connect-capable principal; a **safe-scoped** target
+   (`Target.SafeID` set) is default-DENY when no grant matches, so safe
+   membership actually contains it. Pass `target.SafeID != nil` at every call.
 3a. Envelope encryption: per-secret data keys are wrapped by the KEK and zeroed
    after use; the base64 `PAM_MASTER_KEY` (local KEK) is dev/test only —
    production uses a KMS-backed KEK.
-4. Every code path that reveals or uses a secret appends an audit event.
+4. Every code path that reveals or uses a secret appends an audit event, and the
+   secret-delivery paths do so **fail-closed**: reveal / checkout / app-secret use
+   `mustAudit`/`mustAuditAs` (HTTP 503 if the durable write fails), and both
+   proxies audit `session.start` *before* decryption via `appendAuditErr` (session
+   refused if it fails). Only non-secret events remain best-effort.
 4a. TOTP secrets are stored vault-encrypted (AAD `mfa:<user>`), returned only
    once at enrollment, and compared in constant time (`crypto/subtle`). Recovery
    codes are stored only as SHA-256 hashes, shown once, and single-use.
@@ -575,6 +589,7 @@ events are also written to the separate tamper-evident `broker_audit_events` cha
 
 | Date | Change |
 |---|---|
+| 2026-07-22 | **Security gap-analysis hardening pass** (see `docs/SECURITY-GAPS.md`). Authorization: `auth.CanConnectTarget` now takes `safeScoped` — a target in a safe with no matching grant is default-DENY (was open); all 5 call sites pass `target.SafeID != nil`. The DB proxy now rejects MFA enroll-only sessions (was a `PAM_MFA_REQUIRED` bypass for postgres targets) and reconstructs the full multi-group principal for the SSH grant check (`ext["roles"]`). Audit: secret-delivery is fail-closed — `mustAudit`/`mustAuditAs` (reveal/checkout/app-secret → 503) and `appendAuditErr` (both proxies audit `session.start` before decryption). Break-glass is now audited on the `authenticated` middleware (`/me`, `/logout`, `/mfa/*`). Transport: `PAM_DB_UPSTREAM_CA`/`_TLS_VERIFY` verify the upstream PostgreSQL cert fail-closed; SCRAM server-signature is verified; `PAM_REQUIRE_HTTPS`/`PAM_REQUIRE_DB_CLIENT_TLS` refuse plaintext; PostgreSQL `FunctionCall` fast-path is audited. Brute-force: `PAM_PROXY_AUTH_RATE_LIMIT` throttles SSH/DB proxy auth; `PAM_TRUSTED_PROXY_HOPS` makes the API limiter XFF-aware. Sessions: admin `GET /api/login-sessions` + `POST /api/login-sessions/revoke` (`CapManageUsers`), and identity reconcile revokes directory-disabled sessions (store gains `ListSessions`/`DeleteSessionsByUsername`). `-rotate-kek` supports any KEK provider via `PAM_NEW_KEK_*` and audits `vault.kek_rotated`; `PAM_API_KEY` has a 16-char floor (non-demo, `PAM_ALLOW_WEAK_API_KEY` override); healthcheck matches the TLS scheme. IaC: default-deny NetworkPolicy (k8s + gated Helm), pinned `:latest` images. New audit vocab `proxy.auth_rate_limited`/`session.revoked`/`vault.kek_rotated`; new env vars listed in §4. Tests added for each; `go test -race`, `vet`, `gofmt` green |
 | 2026-07-22 | Repo root decluttered: the Docker/compose/env files moved to `deploy/docker/` (`Dockerfile`, `Dockerfile.pkcs11`, `docker-compose.yml`, `.env.example`; compose `build.context` still the repo root) and the SOPS config to `deploy/.sops.yaml` (regexes relative to `deploy/`; encrypt with `--config deploy/.sops.yaml`, decrypt/CI unaffected). CI/release workflows, `.dockerignore` and all docs updated. The root now holds only `go.mod`/`go.sum`, `README*`, `ROADMAP.md`, `LICENSE`, `CLAUDE.md`, `.dockerignore`, `.gitignore`. No code change |
 | 2026-07-21 | Phase 24 console: a 5250 screen for the application-secrets API — menu 15 *Work with application secrets* (mint/revoke apps, one-time token) + per-app *Work with secret grants* (grant/revoke credentials), keyboard-first, tolerating the API being disabled. No new routes/schema (uses the Phase 24 API) |
 | 2026-07-21 | Phase 24 (Tier-4 application-secrets API) + **keyboard-first portal**. New store types `AppKey`/`AppSecretGrant` (migration `0017`: `app_keys`, `app_secret_grants`, both FKs cascade) + store methods (`CreateAppKey`/`GetAppKeyByTokenHash`/`ListAppKeys`/`DeleteAppKey`/`GrantAppSecret`/`ListAppSecretGrants`/`DeleteAppSecretGrant`/`AppMayAccessCredential`). Opt-in via `PAM_APP_SECRETS_ENABLED`: `appAuth` resolves an application bearer key (SHA-256-hash lookup, disabled = 401), `GET /v1/app-secrets/{id}` returns a **granted** credential's secret JIT (default-deny → `app.secret_denied`/403; `ssh_ca` → 422), admin routes `POST/GET/DELETE /v1/apps[...]` (`CapManageUsers`) and grants `POST/DELETE /v1/apps/{id}/grants[...]` (`CapRevealSecret` — you can only delegate a secret you could reveal). New audit vocab `app.create`/`revoke`/`grant`/`grant_revoked`/`secret_retrieved`/`secret_denied`. **Portal keyboard-first** (`web/static/index.html`): `render()` focuses each screen's primary field (`focusPrimary`), Esc = back/cancel, ↑/↓ move between subfile option cells, a persistent `.khint` documents the shortcuts — look unchanged. Store contract + end-to-end API tests |
