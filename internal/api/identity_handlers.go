@@ -95,6 +95,8 @@ func (s *Server) reconcileSessions(ctx context.Context, dryRun bool) (revoked, c
 			revoked += n
 			s.audit(ctx, "session.revoked", "user:"+sess.Username+" reason:directory-disabled")
 		}
+		// A disabled directory user should lose in-flight target sessions too.
+		s.killUserSessions(ctx, sess.Username, "directory-disabled")
 	}
 	return revoked, checked
 }

@@ -178,14 +178,14 @@ func (s *Server) deleteTargetGrant(w http.ResponseWriter, r *http.Request) {
 		storeError(w, err)
 		return
 	}
-	found := false
-	for _, g := range grants {
-		if g.ID == gid {
-			found = true
+	var revoked *store.TargetGrant
+	for i := range grants {
+		if grants[i].ID == gid {
+			revoked = &grants[i]
 			break
 		}
 	}
-	if !found {
+	if revoked == nil {
 		writeError(w, http.StatusNotFound, "grant not found for this target")
 		return
 	}
@@ -194,6 +194,17 @@ func (s *Server) deleteTargetGrant(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.audit(r.Context(), "grant.delete", fmt.Sprintf("target:%d grant:%d", tid, gid))
+	// Cut any in-flight session the revoked *user* holds to this target (their
+	// sessions to other still-authorized targets are left running). A revoked
+	// *role* grant only affects new connections — the registry doesn't carry each
+	// session actor's role set, so role-grant sessions aren't matched here.
+	if revoked.SubjectType == "user" && s.sessions != nil {
+		if t, terr := s.store.GetTarget(r.Context(), tid); terr == nil {
+			if killed := s.sessions.KillByActorTarget(revoked.Subject, t.Name); killed > 0 {
+				s.audit(r.Context(), "session.killed", fmt.Sprintf("user:%s target:%s count:%d reason:grant-revoked", revoked.Subject, t.Name, killed))
+			}
+		}
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 

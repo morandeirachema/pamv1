@@ -97,6 +97,25 @@ func (r *Registry) KillByActor(actor string) int {
 	return len(kills)
 }
 
+// KillByActorTarget terminates every live session an actor holds to a specific
+// target and returns how many were killed. It backs kill-on-revoke: when a user's
+// grant to one target is removed, their in-flight session to that target is cut,
+// while their sessions to other still-authorized targets are left running.
+func (r *Registry) KillByActorTarget(actor, target string) int {
+	r.mu.Lock()
+	var kills []func()
+	for _, e := range r.m {
+		if e.info.Actor == actor && e.info.Target == target && e.kill != nil {
+			kills = append(kills, e.kill)
+		}
+	}
+	r.mu.Unlock()
+	for _, k := range kills {
+		k()
+	}
+	return len(kills)
+}
+
 // randID returns a random 16-hex-character session id.
 func randID() string {
 	b := make([]byte, 8)

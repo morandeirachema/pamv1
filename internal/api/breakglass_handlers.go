@@ -46,9 +46,12 @@ func (u *unsealState) add(share []byte, now time.Time) ([][]byte, bool) {
 		if bytes.Equal(s, share) {
 			return copyShares(u.shares), true // idempotent re-submit
 		}
-		// Shamir shares carry a distinct x-coordinate (first byte) and share one
-		// length; a collision or mismatch marks a garbage/poison share.
-		if s[0] == share[0] || len(s) != len(share) {
+		// Shamir shares carry a distinct x-coordinate in their LAST byte (see
+		// shamir.Split/Combine) and share one length; a mismatched length or a
+		// repeated x-coordinate marks a garbage/poison share. (Checking the wrong
+		// byte here would spuriously reject two valid shares whose leading y-byte
+		// happened to collide.)
+		if len(s) != len(share) || s[len(s)-1] == share[len(share)-1] {
 			return copyShares(u.shares), false
 		}
 	}
