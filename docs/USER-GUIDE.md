@@ -198,6 +198,19 @@ You run SQL as the vaulted database account without ever learning its password;
 **every statement you run is audited**. `5433` is the database-proxy port (ask
 your admin; it's off unless enabled).
 
+### Connecting to a Windows desktop (RDP)
+
+For a `windows` target with the **RDP** protocol you don't need any client — the
+desktop opens **inside the portal**. In *Work with Targets*, type option **`7`**
+next to the target and press Enter. The green title bar shows which host you're
+on; the Windows desktop renders in the browser. Press **`Ctrl+Alt+Q`** to
+disconnect and return to the list.
+
+As everywhere in pamv1, the password is injected for you — it reaches the RDP
+broker, never your browser — and the session is audited (and may be watched live
+by a supervisor). This needs your admin to have enabled RDP (a `guacd` broker);
+if option 7 does nothing, the target isn't RDP or RDP isn't enabled.
+
 ### Automating the password prompt
 
 For scripts, an SSH client can read the password non-interactively (e.g. with
@@ -243,6 +256,7 @@ is audited (`session.monitor`).
 
 | Date | Change |
 |---|---|
+| 2026-07-23 | **RDP in the portal:** documented option **7** on an RDP target — the Windows desktop now renders in the browser (`Ctrl+Alt+Q` disconnects), no client needed. §5 |
 | 2026-07-23 | Completed the main-menu table (items 12–15); noted that revoking access now ends live sessions (troubleshooting + header); aligned with the doc set |
 | 2026-07-21 | Portal is now **keyboard-first** (mouse optional): the cursor lands on each screen's field, **Esc** goes back, **↑/↓** move between list rows |
 | 2026-07-21 | Phase 22: some targets now use **Zero Standing Privilege** — there is no stored password; pamv1 signs a short-lived certificate just for your session. You connect exactly as before |

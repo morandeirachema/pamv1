@@ -2,6 +2,7 @@
 package api
 
 import (
+	"bufio"
 	"context"
 	"crypto/ed25519"
 	"encoding/hex"
@@ -503,6 +504,22 @@ func (w *statusWriter) Flush() {
 	}
 }
 
+// Hijack forwards to the underlying writer so the WebSocket handler (the RDP
+// tunnel) can take over the connection. The embedded http.ResponseWriter
+// interface does not promote Hijack, so without this the access-log wrapper
+// would fail every WebSocket upgrade with 501. The status is recorded as 101
+// (Switching Protocols) for the log line.
+func (w *statusWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	hj, ok := w.ResponseWriter.(http.Hijacker)
+	if !ok {
+		return nil, nil, http.ErrNotSupported
+	}
+	if w.status == 0 {
+		w.status = http.StatusSwitchingProtocols
+	}
+	return hj.Hijack()
+}
+
 // withAccessLog logs one line per HTTP request (method, path, status, bytes,
 // duration, actor, remote). Health probes are skipped to avoid noise.
 func (s *Server) withAccessLog(next http.Handler) http.Handler {
@@ -536,6 +553,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /readyz", s.readyz)          // readiness (store reachable)
 	s.mux.HandleFunc("GET /metrics", s.metricsHandler) // Prometheus exposition
 	s.mux.HandleFunc("GET /{$}", web.Index)
+	s.mux.HandleFunc("GET /static/guacamole-common.min.js", web.GuacamoleJS) // vendored RDP viewer client
 
 	// Authentication endpoints are rate-limited per client IP.
 	s.mux.Handle("POST /api/login", s.rateLimit(http.HandlerFunc(s.login))) // public: this IS authentication
@@ -575,7 +593,8 @@ func (s *Server) routes() {
 	s.mux.Handle("DELETE /api/safes/{id}/members/{mid}", s.authz(auth.CapReadInventory, s.deleteSafeMember))
 
 	s.mux.Handle("POST /api/targets/{id}/winrm", s.authz(auth.CapConnect, s.runWinRM))
-	s.mux.HandleFunc("GET /api/targets/{id}/rdp", s.rdpTunnel) // WebSocket; auths via query token
+	s.mux.Handle("POST /api/rdp-token", s.authz(auth.CapConnect, s.rdpToken)) // mint a short-lived WS token for the viewer
+	s.mux.HandleFunc("GET /api/targets/{id}/rdp", s.rdpTunnel)                // WebSocket; auths via query token
 
 	// Zero Standing Privilege (Phase 22): publish the SSH CA public key so an
 	// operator can install it in a target's TrustedUserCAKeys. 404 when ZSP is off.

@@ -39,6 +39,15 @@ func TestIndexNonceCSP(t *testing.T) {
 			t.Errorf("CSP missing %q: %s", dir, csp)
 		}
 	}
+	// The RDP viewer paints guacd's PNG instructions (data: URIs) onto a canvas and
+	// dynamic-import()s the same-origin Guacamole client, so img-src must allow
+	// data:/blob: and script-src must allow 'self' — without these the viewer is
+	// silently blank. Guard them so a CSP tightening cannot regress the viewer.
+	for _, dir := range []string{"img-src 'self' data: blob:", "script-src 'nonce-", "'self'"} {
+		if !strings.Contains(csp, dir) {
+			t.Errorf("CSP missing RDP-viewer directive %q: %s", dir, csp)
+		}
+	}
 
 	if csp2, _ := get(); csp == csp2 {
 		t.Fatal("CSP nonce was reused across requests")

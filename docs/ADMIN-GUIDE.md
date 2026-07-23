@@ -479,12 +479,26 @@ PAM_GUACD_IGNORE_CERT=true     # dev only — skip RDP server-cert verification
 ```
 
 Create the target with `protocol=rdp`, port `3389`, and a credential. The
-WebSocket endpoint `GET /api/targets/{id}/rdp?token=<session-token>` decrypts the
+WebSocket endpoint `GET /api/targets/{id}/rdp?token=<token>` decrypts the
 credential just-in-time, injects it into the guacd handshake, and tunnels the
-Guacamole protocol to the browser (`rdp.connect` / `rdp.end` in the audit). The
-in-browser display uses the [guacamole-common-js](https://guacamole.apache.org/doc/gug/writing-you-own-guacamole-app.html)
-client — bundling that viewer into the portal is the remaining step; the tunnel
-itself is usable by any Guacamole-compatible client today.
+Guacamole protocol to the browser (`rdp.connect` / `rdp.end` in the audit).
+
+**The in-portal viewer is built in.** The portal vendors the Apache Guacamole
+JavaScript client ([guacamole-common-js](https://guacamole.apache.org/), served
+same-origin from `/static/guacamole-common.min.js`; see the repo `NOTICE`) and
+renders the desktop on a canvas:
+
+- An operator opens *Work with Targets*, types option **7** on an RDP target, and
+  the viewer fills the screen; `Ctrl+Alt+Q` disconnects.
+- The browser first `POST`s `/api/rdp-token` (requires **connect**) for a
+  **60-second** token — browsers can't set headers on a WebSocket handshake, so
+  this keeps the operator's long-lived key out of the URL. Minting is audited as
+  `rdp.token`.
+- The credential still only ever reaches guacd; the browser receives pixels.
+
+The tunnel remains usable by any Guacamole-compatible client too. For the full
+verification procedure (automated tests + a manual runbook) see
+[RDP-TESTING.md](RDP-TESTING.md).
 
 ### Database targets (PostgreSQL)
 
@@ -1266,6 +1280,7 @@ scores in your environment.
 
 | Date | Change |
 |---|---|
+| 2026-07-23 | **In-portal RDP viewer.** The portal now vendors the Apache Guacamole JS client (`/static/guacamole-common.min.js`, see `NOTICE`) and renders RDP on a canvas — *Work with Targets* → option **7**, `Ctrl+Alt+Q` to disconnect. Adds `POST /api/rdp-token` (short-lived WS token, audited `rdp.token`) and widens the portal CSP for the canvas (`img-src data: blob:`, `script-src 'self'`). Verification: [RDP-TESTING.md](RDP-TESTING.md). See §5 → *RDP*. |
 | 2026-07-23 | **Bundled guacd (RDP broker).** The Docker compose runs a hardened `guacd` service (`PAM_GUACD_ADDR=guacd:4822` wired in); the raw K8s manifests add `deploy/k8s/guacd.yaml` (Deployment + ClusterIP + NetworkPolicy); the Helm chart adds it under `guacd.enabled=true`. Internal-only in every case. See §5 → *RDP*. |
 | 2026-07-23 | Doc-quality pass: added a contents index; de-staled §1 Concepts (Windows/PostgreSQL targets, DB proxy, custom profiles) and the `protocol`/`secret_type` type-lists; standardized on "PAM token"; fixed undefined `$TOKEN` in examples; header currency |
 | 2026-07-23 | **Signed audit checkpoints.** With `PAM_AUDIT_SIGN_SEED` (+ `PAM_AUDIT_HMAC_KEY`), `GET /api/audit/head` returns an ed25519-signed checkpoint so an auditor can detect **tail truncation** the HMAC chain alone can't. Archive checkpoints out-of-band. See §9.2 |

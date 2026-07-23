@@ -48,7 +48,7 @@ internal/
     storetest/ # shared store-conformance suite (memstore + live pgstore)
   api/         # REST handlers, authz middleware, user administration
   proxy/       # SSH + PostgreSQL gateways, JIT injection, recording, cmdguard
-  web/         # embedded AS/400 portal (static/index.html)
+  web/         # embedded AS/400 portal (static/index.html) + vendored RDP viewer (guacamole-common.min.js)
 ```
 
 ## 2. Package contracts
@@ -206,9 +206,19 @@ endpoints arrive with the OT/approval phase).
   through Apache Guacamole. Authorizes via a `token` query param (browsers can't
   set WS headers), resolves the `protocol=rdp` target, decrypts the credential
   **just-in-time**, and `guacd.Connect` performs the Guacamole handshake injecting
-  the credential (`internal/guacd`) — it reaches guacd, never the browser. Then it
-  bridges the WebSocket ↔ guacd stream. Enabled by `PAM_GUACD_ADDR`; audited
-  `rdp.connect`/`rdp.end`. The browser viewer (guacamole-common-js) is the last mile.
+  the credential (`internal/guacd`) — it reaches guacd, never the browser. It then
+  emits the **tunnel prelude** guacamole-common-js requires — an internal
+  tunnel-UUID instruction, then a re-emitted `ready` (the handshake consumed
+  guacd's own `ready` to learn the connection id) — and bridges the WebSocket ↔
+  guacd stream. Enabled by `PAM_GUACD_ADDR`; audited `rdp.connect`/`rdp.end`.
+- **RDP token** (`POST /api/rdp-token`, needs `CapConnect`): mints a short-lived
+  (60s) session token via `issueSessionTTL` so the in-portal viewer keeps the
+  operator's long-lived key out of the WebSocket URL. Audited `rdp.token`. The
+  browser viewer is the vendored guacamole-common-js served by `web`
+  (`GET /static/guacamole-common.min.js`); the portal opens it from *Work with
+  Targets* option 7 and renders to a canvas. WebSocket upgrade rides the
+  access-log middleware, so `statusWriter` forwards `http.Hijacker` (a missing
+  `Hijack` had broken every upgrade with 501).
 
 - **Credential lifecycle** (`lifecycle_handlers.go` + `internal/rotate`, Phase 7,
   needs `CapManageCredentials`): rotation and reconciliation run over the same
@@ -523,7 +533,7 @@ secrets. Format `json` (SIEM) or `text` (humans); collect from stdout.
 `credential.checkout` · `credential.checkin` · `credential.checkout_denied` · `credential.checkin_rotate_failed` · `credential.decrypt_failed` · `discovery.scan` ·
 `access.request` · `access.approve` · `access.deny` · `access.denied` · `access.decision_denied` · `audit.export` · `identity.reconcile` · `user.revoked` ·
 `mfa.enroll` · `mfa.confirm` · `mfa.disable` · `mfa.recovery_generated` ·
-`mfa.recovery_used` · `winrm.run` · `winrm.error` · `ssh.exec` · `rdp.connect` · `rdp.end` ·
+`mfa.recovery_used` · `winrm.run` · `winrm.error` · `ssh.exec` · `rdp.token` · `rdp.connect` · `rdp.end` ·
 `rdp.error` · `authz.denied` · `login.failed` · `proxy.auth_failed` · `proxy.auth_rate_limited` · `session.revoked` · `session.killed` · `vault.kek_rotated` · `breakglass.access` · `session.start` ·
 `session.record` · `session.record_failed` · `session.record_limit` · `session.end` · `session.denied` · `session.error` · `session.cert_issued` ·
 `analytics.risk_flagged` · `analytics.auto_response` ·
@@ -592,7 +602,7 @@ events are also written to the separate tamper-evident `broker_audit_events` cha
 - `api` (WinRM): JIT injection (fake runner receives the vaulted secret), non-Windows target rejected, `CapConnect` required, transcript recorded + audited.
 - `winrm`: basic and NTLM client construction (NTLM must not mutate library defaults).
 - `guacd`: instruction encode (byte vs code-point length), and handshake against a mock guacd asserting the **JIT credential injection** into `connect` (+ unknown args empty).
-- `api` (RDP): tunnel disabled without guacd (404), no/invalid token 401, non-connect role 403, non-rdp target 422 (pre-WebSocket checks).
+- `api` (RDP): tunnel disabled without guacd (404), no/invalid token 401, non-connect role 403, non-rdp target 422 (pre-WebSocket checks); `guacamolePrelude` wire-format; a full WebSocket round-trip against a fake guacd (`TestRDPTunnelEndToEnd`) asserting the prelude, the injected secret in guacd's `connect`, and both piping directions; `rdp-token` gating (`TestRDPTokenRequiresConnect`).
 - `oidc`: Exchange with a real RSA-signed token (valid), and rejects bad signature / wrong issuer / wrong audience / nonce mismatch / expired; PKCE + auth URL.
 - `api` (OIDC): full flow (start redirect → callback with a signed token → session → admin role enforced), bad-state error redirect, not-configured 404.
 - `auth` (Entra/chain): Entra app-role & group login, multi-group role **union** (`TestMatchedRoles`/`TestMultiGroupUnion`), bad password, no mapped role (mock token endpoint); chain resolves via a later source and rejects when none match.
@@ -610,6 +620,7 @@ events are also written to the separate tamper-evident `broker_audit_events` cha
 
 | Date | Change |
 |---|---|
+| 2026-07-23 | **In-portal RDP viewer + a latent WebSocket-upgrade fix.** The `web` package now embeds and serves the vendored Apache Guacamole JS client (`GET /static/guacamole-common.min.js`, unmodified ESM build, Apache-2.0 — see repo `NOTICE`), and the portal renders RDP on a canvas (*Work with Targets* option 7; `Ctrl+Alt+Q` to disconnect). New `POST /api/rdp-token` mints a 60s session token (`issueSessionTTL`) so the viewer keeps the operator's long-lived key out of the WS URL (audited `rdp.token`, new vocab). The tunnel handler now emits the tunnel prelude guacamole-common-js needs (`guacamolePrelude`: an internal tunnel-UUID instruction, then a re-emitted `ready`). Portal CSP widened for the canvas: `img-src 'self' data: blob:`, `media-src …`, `script-src … 'self'` (for the same-origin dynamic `import()`). **Bug fixed while testing:** the access-log `statusWriter` did not forward `http.Hijacker`, so *every* WebSocket upgrade (including the pre-existing RDP tunnel) failed with 501 through the middleware — added `statusWriter.Hijack`. New tests: prelude wire-format, `TestRDPTunnelEndToEnd` (full WS round-trip vs a fake guacd), token gating. Verification runbook: `docs/RDP-TESTING.md` |
 | 2026-07-23 | **Resource-exhaustion limits.** Concurrent-session caps — `PAM_MAX_SESSIONS_PER_USER` / `PAM_MAX_SESSIONS_TOTAL` (0 = unlimited) enforced by `session.Registry.AllowNew` before either proxy decrypts a secret (per-replica). Per-recording size cap — `PAM_MAX_RECORDING_MB` (0 = unlimited); `Recording.Write` returns `errRecordingLimit` once exceeded, so the session is terminated (`session.record_limit`) rather than run unrecorded. Refused sessions audit `session.denied reason:session-limit` (SSH) / `db.session.denied` (DB). Registry + recording unit tests |
 | 2026-07-23 | Doc-quality pass: §1 package tree completed (added `ratelimit`, `conjur`, `ticket`, `auditchain`, the broker cluster `agentid`/`policy`/`broker`/`mcp`, `storetest`); §2.2 refreshed to the current migration high-water mark (`0018`) and full table list + advisory-lock keys; header currency |
 | 2026-07-23 | **Kill in-flight sessions on revocation + break-glass share-check fix.** Revoking a login (`POST /api/login-sessions/revoke`), disabling a directory user (reconcile), or deleting a user's target grant now terminates their matching live proxied sessions via the session registry (`KillByActor` / new `KillByActorTarget`; role-grant deletions still only affect new connections, and the registry is per-replica). New audit action `session.killed`. Also fixed a real bug found while testing: the break-glass quorum share collector checked the *first* byte as the Shamir x-coordinate, but `shamir.Split`/`Combine` put it in the *last* byte — this spuriously rejected ~1/256 of valid share sets (flaky unseal) and weakened poison detection |

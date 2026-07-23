@@ -48,6 +48,14 @@
   form.inline { display: inline; }
   label { display: block; }
   .indent { margin-left: 4ch; }
+  /* In-portal RDP viewer overlay (Guacamole canvas). */
+  .rdpwrap { position: fixed; inset: 0; z-index: 50; background: #050705;
+    display: flex; flex-direction: column; }
+  .rdpbar { flex: 0 0 auto; padding: 4px 12px; border-bottom: 1px solid #123c1f;
+    display: flex; justify-content: space-between; gap: 12px; white-space: nowrap; }
+  .rdpview { flex: 1 1 auto; overflow: auto; display: flex;
+    justify-content: center; align-items: flex-start; background: #000; }
+  .rdpview canvas { image-rendering: pixelated; }
 </style>
 </head>
 <body>
@@ -76,6 +84,12 @@
   let viewCred = null, grantsTarget = 0, newUser = null, mfaInfo = null, mfaEnroll = null, recoveryCodes = [], discovered = null, reconcileReport = null;
   let profiles = [], configItems = [], configNote = "", effCfg = null, iacText = "", iacFormat = "";
   let liveTimer = null;
+
+  // The Apache Guacamole client (vendored) powers the in-portal RDP viewer. It is
+  // loaded lazily so the ~75KB module never delays first paint of the console;
+  // Guac stays null until the import resolves (RDP is user-initiated long after).
+  let Guac = null, rdpActive = false;
+  import("/static/guacamole-common.min.js").then((m) => { Guac = m.default; }).catch(() => { Guac = null; });
 
   const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   const pad = (s, n) => esc(String(s ?? "")).padEnd(n);
@@ -190,6 +204,67 @@
     } catch (e) { say("CPF9999: " + e.message, true); render(); }
   }
 
+  // openRDP mints a short-lived token, then launches the in-portal RDP viewer for
+  // an rdp-protocol target. The credential is injected server-side at the guacd
+  // handshake; the browser only ever receives the rendered display.
+  async function openRDP(t) {
+    if (t.protocol !== "rdp") { say("CPF0002: TARGET " + String(t.name).toUpperCase() + " IS NOT RDP.", true); render(); return; }
+    if (!Guac) { say("RDP VIEWER IS STILL LOADING — TRY AGAIN.", true); render(); return; }
+    let tok;
+    try { tok = (await api("POST", "/api/rdp-token")).token; }
+    catch (e) { say("CPF9999: " + e.message, true); render(); return; }
+    startRDP(t, tok);
+  }
+
+  // startRDP builds the fullscreen viewer overlay, wires the Guacamole client to
+  // the WebSocket tunnel, and forwards keyboard/mouse. Ctrl+Alt+Q disconnects —
+  // caught in the capture phase so it never reaches the remote host.
+  function startRDP(t, tok) {
+    const wrap = document.createElement("div"); wrap.className = "rdpwrap";
+    const bar = document.createElement("div"); bar.className = "rdpbar";
+    bar.innerHTML = `<span><span class="white">RDP</span> ${esc(t.name)} <span class="cyan">${esc(t.host)}:${esc(t.port || 3389)}</span></span>` +
+      `<span class="amber">Ctrl+Alt+Q = disconnect</span>`;
+    const view = document.createElement("div"); view.className = "rdpview";
+    wrap.appendChild(bar); wrap.appendChild(view); document.body.appendChild(wrap);
+    rdpActive = true;
+
+    const w = Math.max(640, Math.min(view.clientWidth || 1024, 4096));
+    const h = Math.max(480, Math.min((window.innerHeight - 30) || 768, 4096));
+    const tunnel = new Guac.WebSocketTunnel("/api/targets/" + t.id + "/rdp");
+    const client = new Guac.Client(tunnel);
+    const display = client.getDisplay();
+    view.appendChild(display.getElement());
+
+    const mouse = new Guac.Mouse(display.getElement());
+    mouse.onmousedown = mouse.onmouseup = mouse.onmousemove = (state) => client.sendMouseState(state);
+    const keyboard = new Guac.Keyboard(document);
+    keyboard.onkeydown = (sym) => client.sendKeyEvent(1, sym);
+    keyboard.onkeyup = (sym) => client.sendKeyEvent(0, sym);
+
+    let closed = false;
+    const teardown = () => {
+      if (closed) return; closed = true; rdpActive = false;
+      document.removeEventListener("keydown", capture, true);
+      keyboard.onkeydown = keyboard.onkeyup = null;
+      try { keyboard.reset(); } catch (e) {}
+      try { client.disconnect(); } catch (e) {}
+      wrap.remove();
+      say("RDP SESSION TO " + String(t.name).toUpperCase() + " CLOSED.");
+      render(); focusPrimary();
+    };
+    const capture = (ev) => {
+      if (ev.ctrlKey && ev.altKey && (ev.key === "q" || ev.key === "Q")) {
+        ev.preventDefault(); ev.stopImmediatePropagation(); teardown();
+      }
+    };
+    document.addEventListener("keydown", capture, true);
+    client.onerror = (st) => { say("CPF9999: RDP — " + String((st && st.message) || "error").toUpperCase(), true); teardown(); };
+    tunnel.onerror = (st) => { say("CPF9999: RDP TUNNEL — " + String((st && st.message) || "error").toUpperCase(), true); teardown(); };
+    client.onstatechange = (state) => { if (state === 5) teardown(); }; // 5 = DISCONNECTED
+
+    client.connect("token=" + encodeURIComponent(tok) + "&width=" + w + "&height=" + h);
+  }
+
   function render() {
     ({
       signon() {
@@ -285,9 +360,10 @@ ${fkeys("F3=Sign off   F5=Refresh")}`;
       targets() {
         back = "main";
         const canManage = can("manage_targets");
+        const canConnect = can("connect");
         term.innerHTML = `${head("PAMWRKTGT", "Work with Targets")}
 Type options, press Enter.
-  <span class="cyan">${canManage ? "4=Delete   5=Work with grants" : "(read-only role)"}</span>
+  <span class="cyan">${[canManage ? "4=Delete" : "", canManage ? "5=Work with grants" : "", canConnect ? "7=Open RDP (rdp targets)" : "", !canManage && !canConnect ? "(read-only role)" : ""].filter(Boolean).join("   ")}</span>
 
 <form id="f-list"><table>
 <tr><th>Opt</th><th>ID</th><th>Name</th><th>Host</th><th>Port</th><th>OS</th><th>Proto</th><th>Approval</th></tr>
@@ -302,6 +378,7 @@ ${fkeys(`F3=Exit   F5=Refresh${canManage ? "   F6=Add target" : ""}   F12=Cancel
               const o = optVal(ev.target, t.id);
               if (o === "4") { await api("DELETE", `/api/targets/${t.id}`); say(`TARGET ${String(t.name).toUpperCase()} DELETED.`); }
               else if (o === "5") { return openGrants(t.id); }
+              else if (o === "7") { return openRDP(t); }
               else if (o) { say("CPF0002: OPTION " + o.toUpperCase() + " NOT VALID.", true); }
             }
             await openTargets();
@@ -1020,6 +1097,9 @@ ${fkeys("F3=Exit   F12=Cancel")}`;
   const adders = { targets: () => go("targetadd"), creds: () => go("credadd"), grants: () => go("grantadd"), users: () => go("useradd"), requests: () => go("requestadd"), profiles: () => go("profileadd"), config: () => go("configset"), apps: () => go("appadd"), appgrants: () => go("appgrantadd") };
 
   window.addEventListener("keydown", async (ev) => {
+    // While the RDP viewer is open it owns the keyboard (its own capture-phase
+    // listener handles the Ctrl+Alt+Q disconnect); leave portal navigation inert.
+    if (rdpActive) return;
     const k = ev.key;
     // Arrow keys move between subfile option cells (5250-style row navigation), so
     // a whole list of rows is operable without the mouse.

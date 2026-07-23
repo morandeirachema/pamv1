@@ -327,10 +327,14 @@ over the PostgreSQL wire protocol:
   handshake; guacd makes the actual RDP connection and can record server-side. The
   credential reaches guacd, never the browser. guacd ships as a service in the
   Docker compose and Kubernetes deploys (`PAM_GUACD_ADDR` is wired for you), or
-  point it at your own daemon. **Caveat:** the server-side WebSocket tunnel
-  (`GET /api/targets/{id}/rdp`) is done, but the in‑portal RDP *viewer* (the
-  browser‑side Guacamole renderer) is **not yet vendored** — so there is a working
-  tunnel but no rendered RDP screen in the 5250 portal yet.
+  point it at your own daemon. The **in‑portal viewer is built in**: the portal
+  vendors the Apache Guacamole JavaScript client and renders the desktop on a
+  canvas. An operator opens a session from *Work with Targets* → option **7**;
+  the browser first `POST`s `/api/rdp-token` for a 60‑second token (so no
+  long‑lived key rides the WebSocket URL), then connects the tunnel
+  (`GET /api/targets/{id}/rdp`). `Ctrl+Alt+Q` disconnects. The one part that
+  still needs a real host to exercise is the pixels themselves — see
+  [RDP-TESTING.md](RDP-TESTING.md) for the full verification procedure.
 
 ## 6. Day-to-day operations (the runbook)
 

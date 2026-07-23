@@ -1,0 +1,24 @@
+pamv1
+Copyright 2025-2026 the pamv1 authors
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+
+--------------------------------------------------------------------------------
+Third-party components bundled in this repository
+--------------------------------------------------------------------------------
+
+Apache Guacamole JavaScript client (guacamole-common-js), version 1.5.0
+  - Vendored, unmodified, as: internal/web/static/guacamole-common.min.js
+    (the ESM build from the npm package's dist/esm/guacamole-common.min.js).
+  - Powers the in-portal RDP viewer: it renders the Guacamole protocol stream
+    that the co-deployed guacd daemon produces onto an HTML canvas.
+  - Copyright The Apache Software Foundation.
+  - Licensed under the Apache License, Version 2.0:
+    https://www.apache.org/licenses/LICENSE-2.0
+  - Project:  https://guacamole.apache.org/
+    Source:   https://github.com/apache/guacamole-client
+    Package:  https://www.npmjs.com/package/guacamole-common-js
+
+The bundled guacd daemon (Docker image guacamole/guacd, Apache-2.0) is pulled at
+deploy time and is not vendored in this repository; see deploy/docker and
+deploy/k8s.

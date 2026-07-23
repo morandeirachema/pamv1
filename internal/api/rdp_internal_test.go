@@ -1,6 +1,40 @@
 package api
 
-import "testing"
+import (
+	"encoding/hex"
+	"testing"
+)
+
+// TestGuacamolePrelude locks the exact wire bytes guacamole-common-js needs before
+// the render stream: the internal (empty-opcode) tunnel-UUID instruction that
+// opens the tunnel, then the re-emitted `ready` that moves the client to
+// CONNECTED. If either drifts, the browser viewer silently hangs.
+func TestGuacamolePrelude(t *testing.T) {
+	got := guacamolePrelude("abc", "$conn-1")
+	if len(got) != 2 {
+		t.Fatalf("prelude has %d instructions, want 2", len(got))
+	}
+	if string(got[0]) != "0.,3.abc;" {
+		t.Fatalf("tunnel-UUID instruction = %q, want %q", got[0], "0.,3.abc;")
+	}
+	if string(got[1]) != "5.ready,7.$conn-1;" {
+		t.Fatalf("ready instruction = %q, want %q", got[1], "5.ready,7.$conn-1;")
+	}
+}
+
+// TestTunnelUUID checks the tunnel id is a fresh 16-byte hex string each call.
+func TestTunnelUUID(t *testing.T) {
+	a, b := tunnelUUID(), tunnelUUID()
+	if a == "" || b == "" {
+		t.Fatal("tunnelUUID returned empty (RNG failure?)")
+	}
+	if a == b {
+		t.Fatal("tunnelUUID must be unique per call")
+	}
+	if _, err := hex.DecodeString(a); err != nil || len(a) != 32 {
+		t.Fatalf("tunnelUUID = %q, want 32 hex chars", a)
+	}
+}
 
 // TestRDPExtraSecureDefault verifies the default (unconfigured) RDP parameters
 // neither disable certificate verification nor force an insecure security mode.

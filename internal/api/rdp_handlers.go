@@ -2,6 +2,8 @@ package api
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -14,6 +16,35 @@ import (
 	"github.com/morandeirachema/pamv1/internal/session"
 	"github.com/morandeirachema/pamv1/internal/store"
 )
+
+// rdpTokenTTL bounds the lifetime of a browser RDP WebSocket token. It is short
+// because the token travels in the WS URL (browsers cannot set request headers on
+// a WebSocket handshake), where it can leak via proxy/access logs.
+const rdpTokenTTL = 60 * time.Second
+
+// rdpToken mints a short-lived session token for the in-portal RDP viewer. The
+// caller is already authenticated (X-API-Key) and holds CapConnect; the minted
+// token inherits their identity but expires within rdpTokenTTL, and rdpTunnel
+// re-checks every authorization when the WebSocket connects. This keeps the
+// operator's long-lived token out of the WS URL. Requires CapConnect.
+func (s *Server) rdpToken(w http.ResponseWriter, r *http.Request) {
+	if s.guacdAddr == "" {
+		writeError(w, http.StatusNotFound, "RDP is not configured")
+		return
+	}
+	p := principalFrom(r.Context())
+	if p == nil {
+		writeError(w, http.StatusUnauthorized, "unauthenticated")
+		return
+	}
+	token, sess, err := s.issueSessionTTL(r.Context(), p, "", rdpTokenTTL)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not mint RDP token")
+		return
+	}
+	s.audit(r.Context(), "rdp.token", "actor:"+p.Name)
+	writeJSON(w, http.StatusOK, map[string]any{"token": token, "expires_at": sess.ExpiresAt})
+}
 
 // rdpTunnel bridges a browser WebSocket to a guacd RDP session for a Windows
 // target. The credential is decrypted just-in-time and injected into the guacd
@@ -144,7 +175,45 @@ func (s *Server) rdpTunnel(w http.ResponseWriter, r *http.Request) {
 		defer s.sessions.Remove(sid)
 	}
 
+	// guacamole-common-js's tunnel needs an internal UUID instruction to consider
+	// the tunnel open, then the client waits for `ready` to reach the CONNECTED
+	// state. The server-side handshake already consumed guacd's own `ready` to
+	// learn gconn.ID, so synthesize both here — matching what a real Guacamole
+	// servlet relays — before piping guacd's render stream to the browser.
+	uuid := tunnelUUID()
+	if uuid == "" {
+		uuid = gconn.ID // RNG failed; any non-empty tunnel id will do
+	}
+	for _, inst := range guacamolePrelude(uuid, gconn.ID) {
+		if err := ws.Write(ctx, websocket.MessageText, inst); err != nil {
+			return
+		}
+	}
+
 	bridgeGuacd(ctx, ws, gconn)
+}
+
+// tunnelUUID returns a random identifier for the Guacamole tunnel handshake. The
+// value is opaque to the WebSocket transport (guacamole-common-js only stores
+// it), so a random hex string suffices; "" signals the system RNG failed.
+func tunnelUUID() string {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		return ""
+	}
+	return hex.EncodeToString(b)
+}
+
+// guacamolePrelude builds the two instructions guacamole-common-js expects before
+// the render stream: the internal (empty-opcode) tunnel-UUID instruction that
+// marks the tunnel open, then a `ready` carrying the guacd connection id that
+// advances Guacamole.Client to CONNECTED. Encoded in the Guacamole wire format,
+// they read "0.,<len>.<uuid>;" and "5.ready,<len>.<connID>;".
+func guacamolePrelude(uuid, connID string) [][]byte {
+	return [][]byte{
+		[]byte(guacd.Instruction{Args: []string{uuid}}.Encode()),
+		[]byte(guacd.Instruction{Opcode: "ready", Args: []string{connID}}.Encode()),
+	}
 }
 
 // bridgeGuacd pipes Guacamole protocol text between the browser WebSocket and
