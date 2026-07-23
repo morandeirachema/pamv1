@@ -109,10 +109,34 @@ curl -s -X POST -H "X-API-Key: demo-key" http://localhost:8080/api/rdp-token   #
 curl -s -o /dev/null -w '%{http_code}\n' -X POST http://localhost:8080/api/rdp-token  # -> 401
 ```
 
-## 4. Full end-to-end (needs a real RDP host)
+## 4. Full end-to-end — the rendered pixels
 
-The rendered screen — the only part the automated tests cannot cover — needs a
-reachable Windows/xrdp host. See [EXTERNAL-INFRA-GAPS.md](EXTERNAL-INFRA-GAPS.md).
+The rendered screen is the only part the automated tests cannot cover. Two ways
+to see it:
+
+### 4a. The bundled demo (no Windows host needed)
+
+A compose file ships a real **xrdp Linux desktop** as an RDP target alongside
+guacd and pam-server, with the pamv1 target auto-seeded — so you can watch a
+desktop paint end to end on any Docker host:
+
+```bash
+cd deploy/docker
+docker compose -f docker-compose.rdp-demo.yml up --build
+# then open http://localhost:8080
+#   sign on: leave Password blank, enter the access token  demo-api-key-pamv1
+#   Work with Targets → type 7 next to "demo-rdp" → Enter → an XFCE desktop renders
+#   Ctrl+Alt+Q disconnects
+```
+
+It's **demo-only** (throwaway master key, weak creds, an unhardened root xrdp
+target — never deploy it). If the desktop never paints, set
+`PAM_GUACD_RDP_SECURITY=rdp` on the `pam` service and re-up. Then run the
+verification checklist in §4b against `demo-rdp`.
+
+### 4b. Against your own Windows/xrdp host
+
+See [EXTERNAL-INFRA-GAPS.md](EXTERNAL-INFRA-GAPS.md).
 
 1. Add an **rdp** target (`os_type: windows`, port `3389`) and a credential.
 2. Ensure `PAM_GUACD_ADDR` is set and the operator's role has **connect**.

@@ -1,0 +1,77 @@
+# End-to-end demo of the in-portal RDP viewer: a real xrdp Linux desktop, guacd,
+# and pam-server, with a pamv1 RDP target auto-seeded. This proves the rendered
+# pixels without needing a Windows host.
+#
+#   cd deploy/docker
+#   docker compose -f docker-compose.rdp-demo.yml up --build
+#   # then open http://localhost:8080
+#   #   sign on: leave Password blank, enter the access token below
+#   #   Work with Targets → type 7 next to "demo-rdp" → Enter
+#   #   → an XFCE desktop renders in the portal. Ctrl+Alt+Q disconnects.
+#
+# DEMO ONLY — throwaway master key, a weak API key, and an unhardened root xrdp
+# target with a well-known password. Never deploy this compose file.
+name: pamv1-rdp-demo
+
+services:
+  # A real RDP server (XFCE over xrdp). Only guacd reaches it — no published port.
+  rdp-target:
+    build: ./rdp-target
+    restart: unless-stopped
+
+  # The Guacamole proxy daemon that makes the actual RDP connection.
+  guacd:
+    image: guacamole/guacd:1.5.5
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+
+  # pam-server: portal + API + the RDP tunnel. In-memory store (ephemeral).
+  pam:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      guacd:
+        condition: service_started
+      rdp-target:
+        condition: service_started
+    environment:
+      PAM_MASTER_KEY: ${PAM_MASTER_KEY:-jcYmzQm54gtAJE_-haa4ZiF9Mec94PSrWVRBM7ePDtg}
+      PAM_API_KEY: ${PAM_API_KEY:-demo-api-key-pamv1}
+      PAM_DATABASE_URL: memory
+      PAM_GUACD_ADDR: guacd:4822
+      PAM_GUACD_IGNORE_CERT: "true"   # xrdp presents a self-signed cert (demo only)
+      # If the desktop never paints, force a mode: PAM_GUACD_RDP_SECURITY=rdp (or nla/tls).
+      PAM_SSH_ADDR: "off"
+      PAM_LOG_LEVEL: info
+    ports:
+      - "8080:8080"
+
+  # One-shot: wait for pam, then create the RDP target + its credential.
+  seed:
+    image: curlimages/curl:8.11.1
+    depends_on:
+      pam:
+        condition: service_started
+    restart: "no"
+    environment:
+      KEY: ${PAM_API_KEY:-demo-api-key-pamv1}
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        until curl -sf http://pam:8080/readyz >/dev/null; do echo "waiting for pam-server..."; sleep 1; done
+        TID=$$(curl -s -X POST -H "X-API-Key: $$KEY" -H "Content-Type: application/json" \
+          -d '{"name":"demo-rdp","host":"rdp-target","port":3389,"os_type":"linux","protocol":"rdp"}' \
+          http://pam:8080/api/targets | sed -n 's/.*"id":\([0-9][0-9]*\).*/\1/p')
+        echo "created target id=$$TID"
+        curl -s -X POST -H "X-API-Key: $$KEY" -H "Content-Type: application/json" \
+          -d "{\"target_id\":$$TID,\"username\":\"demo\",\"secret\":\"Demo-RDP-Pass1!\"}" \
+          http://pam:8080/api/credentials >/dev/null
+        echo "SEEDED. Open http://localhost:8080, sign on with the access token, then Work with Targets → option 7 on demo-rdp."
