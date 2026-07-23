@@ -456,11 +456,18 @@ disable basic auth — set `PAM_WINRM_AUTH=ntlm` for NTLMv2.
 ### RDP (via Apache Guacamole)
 
 pamv1 brokers RDP through [Apache Guacamole](https://guacamole.apache.org/)'s
-`guacd` daemon so the operator sees the desktop but never the password. Run guacd
-(e.g. the `guacamole/guacd` container) reachable from pam-server and set:
+`guacd` daemon so the operator sees the desktop but never the password — pamv1 is
+a **client** of guacd, not a Guacamole server.
+
+**guacd now ships with the deploys.** The Docker compose (`deploy/docker/`) runs a
+hardened `guacd` service and wires `PAM_GUACD_ADDR=guacd:4822` for you; the raw
+Kubernetes manifests include `deploy/k8s/guacd.yaml` (`kubectl apply -f deploy/k8s/`
+picks it up); and the Helm chart adds it when you set `guacd.enabled=true`. In all
+cases guacd is **internal-only** (no external port) and reached on `:4822`. To use
+your own daemon instead, point `PAM_GUACD_ADDR` at it:
 
 ```bash
-PAM_GUACD_ADDR=127.0.0.1:4822
+PAM_GUACD_ADDR=guacd:4822       # bundled; or host:port of your own guacd
 ```
 
 By default guacd **verifies the RDP server certificate** and negotiates the
@@ -1259,6 +1266,7 @@ scores in your environment.
 
 | Date | Change |
 |---|---|
+| 2026-07-23 | **Bundled guacd (RDP broker).** The Docker compose runs a hardened `guacd` service (`PAM_GUACD_ADDR=guacd:4822` wired in); the raw K8s manifests add `deploy/k8s/guacd.yaml` (Deployment + ClusterIP + NetworkPolicy); the Helm chart adds it under `guacd.enabled=true`. Internal-only in every case. See §5 → *RDP*. |
 | 2026-07-23 | Doc-quality pass: added a contents index; de-staled §1 Concepts (Windows/PostgreSQL targets, DB proxy, custom profiles) and the `protocol`/`secret_type` type-lists; standardized on "PAM token"; fixed undefined `$TOKEN` in examples; header currency |
 | 2026-07-23 | **Signed audit checkpoints.** With `PAM_AUDIT_SIGN_SEED` (+ `PAM_AUDIT_HMAC_KEY`), `GET /api/audit/head` returns an ed25519-signed checkpoint so an auditor can detect **tail truncation** the HMAC chain alone can't. Archive checkpoints out-of-band. See §9.2 |
 | 2026-07-23 | **Tamper-evident primary audit trail** (opt-in). Set `PAM_AUDIT_HMAC_KEY` (base64 32 bytes) to HMAC-chain the whole `audit_events` table, not just broker events; any edit/reorder/delete is detectable via `GET /api/audit/verify`. Additive, non-breaking (unset = plain table). See §4 and §9.2 |

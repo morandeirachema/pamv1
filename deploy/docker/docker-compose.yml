@@ -42,6 +42,24 @@ services:
       - pamdata:/data
     restart: "no"
 
+  # Apache Guacamole proxy daemon: pamv1 speaks the guacd protocol to it to
+  # broker RDP (JIT-injecting the credential into the handshake; it never reaches
+  # the browser). Internal only — its port is NOT published to the host, so only
+  # pam-server on the internal bridge can reach it. guacd itself connects out to
+  # the RDP targets (:3389).
+  guacd:
+    image: guacamole/guacd:1.5.5
+    restart: unless-stopped
+    read_only: true                        # only /tmp (tmpfs) is writable
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 256m
+    pids_limit: 256
+
   pam:
     build:
       context: ../..                       # the repo root (source + root .dockerignore)
@@ -52,6 +70,8 @@ services:
         condition: service_healthy
       pam-init:
         condition: service_completed_successfully
+      guacd:
+        condition: service_started
     environment:
       # Local demo only: the db has no TLS, and its port is not published to the
       # host, so traffic stays on the internal bridge. Production must point this
@@ -62,6 +82,7 @@ services:
       PAM_BREAK_GLASS_KEY_HASH: ${PAM_BREAK_GLASS_KEY_HASH:-}
       PAM_SSH_HOST_KEY: /data/ssh_host_key
       PAM_RECORDING_DIR: /data/recordings
+      PAM_GUACD_ADDR: guacd:4822          # RDP brokering via the bundled guacd
     ports:
       - "127.0.0.1:8080:8080"   # portal + REST API
       - "127.0.0.1:2222:2222"   # SSH session proxy

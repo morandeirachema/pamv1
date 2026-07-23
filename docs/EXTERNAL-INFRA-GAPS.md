@@ -63,7 +63,7 @@ to exercise fully:
 |---|---|---|---|---|
 | **WinRM command execution (JIT)** | `POST /api/targets/{id}/winrm`, `internal/winrm` | fake `Runner` | A Windows host with WinRM (basic or NTLM) | Command runs with the vaulted credential; caller never sees the secret |
 | **NTLM / Kerberos WinRM auth** | `PAM_WINRM_AUTH` | client-construction test | An AD-joined Windows host (+ a KDC for Kerberos) | NTLMv2 auth to a domain host. **Kerberos WinRM is deferred** — needs a KDC + AD-joined host |
-| **RDP via Apache Guacamole** | `PAM_GUACD_ADDR`, `internal/guacd` | mock guacd handshake | A `guacd` daemon + an RDP host | JIT credential reaches guacd, never the browser; server-side recording |
+| **RDP via Apache Guacamole** | `PAM_GUACD_ADDR`, `internal/guacd` | mock guacd handshake | An RDP host (a `guacd` daemon now **ships** with the Docker/K8s/Helm deploys; bring your own or use the bundled one) | JIT credential reaches guacd, never the browser; server-side recording |
 | **Browser RDP viewer** — *deferred* | Phase 4 | — none (server tunnel tested) | Vendored guacamole-common-js + a browser + guacd + RDP host | The last-mile in-portal display. Server-side tunnel is done; the JS renderer is not vendored |
 | **SSH jump host / bastion** | `PAM_SSH_JUMP_*` | in-process (via proxy tests) | A real bastion for production topology | `direct-tcpip` tunnel to targets only reachable via the bastion |
 | **Credential rotation (SSH/WinRM)** | `internal/rotate` | in-process sshd; fake WinRM | Real Linux/Windows hosts | Password/`ssh_key` actually changes on the target; the old secret stops working |

@@ -45,6 +45,8 @@ spec:
               value: /data/ssh_host_key
             - name: PAM_RECORDING_DIR
               value: /data/recordings
+            - name: PAM_GUACD_ADDR          # RDP brokering via the bundled guacd
+              value: guacd:4822
           volumeMounts:
             - name: data
               mountPath: /data
