@@ -1,5 +1,7 @@
 # pamv1 — Related PAM Projects (open-source & commercial landscape)
 
+> 🟢 **Living document** — updated in the same change as the code, without a separate ask (see the [docs hub](README.md)).
+
 > How pamv1 sits in the wider Privileged Access Management landscape — both the
 > **open-source** projects and the **commercial** products (including the many
 > commercial offerings that are built on, or "follow", open-source cores). pamv1

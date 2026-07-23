@@ -1,5 +1,7 @@
 # pamv1 — Security Gaps (findings, fixes, and remaining work)
 
+> 🟢 **Living document** — updated in the same change as the code, without a separate ask (see the [docs hub](README.md)).
+
 > **Purpose.** This is a self-audit of pamv1 against the security posture expected
 > of a Privileged Access Management system. It records every gap found in a
 > read-only review of the codebase, whether each was **fixed**, **mitigated**, or

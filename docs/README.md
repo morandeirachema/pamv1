@@ -4,6 +4,17 @@
 > `Last updated · Reflects Phases 0–N` line and, where it tracks change, a
 > change-log table at the foot. New to the project? Read the
 > [main README](../README.md) first, then follow your audience path below.
+>
+> 🟢 **These are living documents — updated in the same change as the code, automatically.**
+> Whenever a change touches structure, packages, schema, wire formats, env vars, the
+> audit vocabulary, deploy manifests, ports/flows, or user-visible behavior, the affected
+> living documents (and the two shareable overview artifacts, below) are updated in the
+> **same** change — no separate approval step, no waiting to be asked. The full set is
+> **every file listed under [Every document](#every-document)** plus `ROADMAP.md`, the root
+> `README.md` / `README.es.md`, and the living overview artifacts
+> ([English](https://claude.ai/code/artifact/a1b34e5b-cd84-4fc7-8389-ebb1897495f7) ·
+> [Español](https://claude.ai/code/artifact/b9f19443-5ad1-42d2-955f-e43ca17ac542)).
+> `ARCHITECTURE-DIAGRAMS.md` is **code-generated** (`go run ./cmd/archgen`, CI-enforced) — never hand-edited.
 
 > ⚠️ **Alpha · for learning purposes.** pamv1 has not been security-audited and is
 > not production-ready.

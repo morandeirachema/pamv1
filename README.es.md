@@ -5,6 +5,9 @@
 > Acceso Privilegiado (PAM). **No** ha sido auditado en seguridad y **no** está listo para
 > producción — no lo uses para custodiar credenciales privilegiadas reales. Úsalo para
 > aprender, experimentar y contribuir.
+>
+> 🟢 **Documento vivo** — se actualiza en el mismo cambio que el código, sin pedir permiso
+> aparte (ver la política en el [centro de documentación](docs/README.md)).
 
 [![CI](https://github.com/morandeirachema/pamv1/actions/workflows/ci.yml/badge.svg)](https://github.com/morandeirachema/pamv1/actions/workflows/ci.yml)
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
