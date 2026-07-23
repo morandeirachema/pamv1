@@ -1,5 +1,7 @@
 # pamv1 — External Infrastructure & Accounts Checklist
 
+> 🟢 **Living document** — updated in the same change as the code, without a separate ask (see the [docs hub](README.md)).
+
 > **Purpose.** pamv1 follows a hard rule: *every phase is fully functional and
 > tested end-to-end without faking the security-critical path.* Where a feature
 > can only be **verified honestly against a real external system or a paid

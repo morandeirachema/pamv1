@@ -4,6 +4,8 @@ Guiding principle: **fully functional at every step**. Each phase ships somethin
 
 Status: ✅ done · 🚧 in progress · ⬜ planned
 
+> 🟢 **Living document** — updated in the same change as the code, without a separate ask (see the [docs hub](docs/README.md)).
+
 **Phases 0–24 are shipped** — through the CyberArk/Wallix-style console, the AI-agent
 access broker (MCP + SPIFFE), SOPS-encrypted secrets, the four **Tier-1
 competitive-coverage gaps** closed (a PostgreSQL session proxy, supervised sessions
@@ -22,7 +24,6 @@ full catalogue is in **[docs/EXTERNAL-INFRA-GAPS.md](docs/EXTERNAL-INFRA-GAPS.md
 the headline deferrals are:
 
 - **Optional Kerberos bind** (Phase 3b) — needs a KDC.
-- **Browser RDP viewer** (Phase 4) — needs the vendored guacamole-common-js renderer + a real browser/guacd/RDP host (the server-side tunnel is done and tested).
 - **Kerberos WinRM auth** (Phase 4) — needs a KDC + an AD-joined host.
 - **Serial (RS-232 / terminal-server) connectors** (Phase 8) — needs serial hardware.
 - **The remaining three Tier-3 gaps** — connector/plugin breadth, cloud CIEM, and web/SaaS session proxying — each need a real device, cloud account, or browser/SaaS console to build honestly.
@@ -86,8 +87,8 @@ The flagship: users connect *through* pamv1, never holding the credential.
 - [x] **WinRM command execution with JIT credentials** (`internal/winrm`): `POST /api/targets/{id}/winrm` decrypts the target's credential only at run time, executes over WinRM, records the transcript (SHA-256 in the audit), returns stdout/stderr/exit — the caller never sees the secret
 - [x] AD-joined target support: uses domain service accounts stored in the vault (the credential username may be `DOMAIN\\user` or UPN)
 - [x] **NTLM WinRM auth** (`PAM_WINRM_AUTH=ntlm`) — NTLMv2 transport, which AD-joined hosts usually require
-- [x] **RDP brokering via Apache Guacamole `guacd`** (`internal/guacd` + `GET /api/targets/{id}/rdp` WebSocket tunnel): the credential is injected just-in-time into the guacd handshake — it reaches guacd, never the browser (`PAM_GUACD_ADDR`)
-- [ ] Browser RDP viewer: bundle guacamole-common-js and add a portal display (server-side tunnel is done and tested) — **infra-bound**: needs the vendored JS renderer plus a real browser + guacd + RDP host to verify end to end
+- [x] **RDP brokering via Apache Guacamole `guacd`** (`internal/guacd` + `GET /api/targets/{id}/rdp` WebSocket tunnel): the credential is injected just-in-time into the guacd handshake — it reaches guacd, never the browser (`PAM_GUACD_ADDR`). **guacd itself now ships** in the Docker/K8s/Helm deploys (internal-only)
+- [x] **Browser RDP viewer**: the portal vendors guacamole-common-js and renders the desktop on a canvas (*Work with Targets* option 7; `Ctrl+Alt+Q` to disconnect), fronted by a short-lived `POST /api/rdp-token`. Verified by a full WebSocket round-trip test against a fake guacd — only the *rendered pixels* still need a real Windows host (see [docs/RDP-TESTING.md](docs/RDP-TESTING.md))
 - [x] guacd server-side session recording for RDP (`PAM_GUACD_RECORDING_PATH`; recording name in the `rdp.connect` audit)
 - [ ] Kerberos WinRM auth — **infra-bound**: needs a KDC + an AD-joined Windows host to verify
 - [x] **Interactive WinRM shell through the SSH proxy** (`PAM_PROXY_WINRM`): `ssh <cred>@<winrm-target>@pam` opens a command loop — each line runs as a WinRM command (JIT credential), output streams back and is recorded. (A command loop, not a stateful PowerShell — working directory/variables don't persist across lines; a WinRS streaming shell is a follow-on needing a real host to verify.)
