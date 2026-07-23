@@ -473,6 +473,9 @@ cancelled shutdown context so they are not dropped mid-drain.
 | `PAM_ALLOWED_PROTOCOLS` | — (all) | OT: comma-separated protocol allowlist (e.g. `ssh,winrm`) enforced at create + connect |
 | `PAM_REQUIRE_APPROVAL` | `false` | OT: gate every target behind an approved access request (4-eyes) |
 | `PAM_REQUIRE_RECORDING` | `false` | refuse a proxied session if its recording cannot be created (fail-closed audit) |
+| `PAM_MAX_SESSIONS_PER_USER` | `0` (∞) | cap concurrent live proxied sessions per actor (checked before decrypt; per-replica) |
+| `PAM_MAX_SESSIONS_TOTAL` | `0` (∞) | cap concurrent live proxied sessions across all actors (per-replica) |
+| `PAM_MAX_RECORDING_MB` | `0` (∞) | cap a single session recording's output (MB); a session that exceeds it is terminated (`session.record_limit`) rather than run unrecorded |
 | `PAM_APPROVAL_WINDOW_MIN` | `60` | how long an approved access request stays valid |
 | `PAM_CHECKOUT_TTL_MIN` | `30` | credential checkout lease lifetime (minutes) |
 | `PAM_OT_AIRGAP` | `false` | disable all outbound calls (alert webhooks) for air-gapped sites |
@@ -522,7 +525,7 @@ secrets. Format `json` (SIEM) or `text` (humans); collect from stdout.
 `mfa.enroll` · `mfa.confirm` · `mfa.disable` · `mfa.recovery_generated` ·
 `mfa.recovery_used` · `winrm.run` · `winrm.error` · `ssh.exec` · `rdp.connect` · `rdp.end` ·
 `rdp.error` · `authz.denied` · `login.failed` · `proxy.auth_failed` · `proxy.auth_rate_limited` · `session.revoked` · `session.killed` · `vault.kek_rotated` · `breakglass.access` · `session.start` ·
-`session.record` · `session.record_failed` · `session.end` · `session.denied` · `session.error` · `session.cert_issued` ·
+`session.record` · `session.record_failed` · `session.record_limit` · `session.end` · `session.denied` · `session.error` · `session.cert_issued` ·
 `analytics.risk_flagged` · `analytics.auto_response` ·
 `db.session.start` · `db.session.end` · `db.session.denied` · `db.session.error` · `db.query` ·
 `command.blocked` · `session.monitor` ·
@@ -607,6 +610,7 @@ events are also written to the separate tamper-evident `broker_audit_events` cha
 
 | Date | Change |
 |---|---|
+| 2026-07-23 | **Resource-exhaustion limits.** Concurrent-session caps — `PAM_MAX_SESSIONS_PER_USER` / `PAM_MAX_SESSIONS_TOTAL` (0 = unlimited) enforced by `session.Registry.AllowNew` before either proxy decrypts a secret (per-replica). Per-recording size cap — `PAM_MAX_RECORDING_MB` (0 = unlimited); `Recording.Write` returns `errRecordingLimit` once exceeded, so the session is terminated (`session.record_limit`) rather than run unrecorded. Refused sessions audit `session.denied reason:session-limit` (SSH) / `db.session.denied` (DB). Registry + recording unit tests |
 | 2026-07-23 | Doc-quality pass: §1 package tree completed (added `ratelimit`, `conjur`, `ticket`, `auditchain`, the broker cluster `agentid`/`policy`/`broker`/`mcp`, `storetest`); §2.2 refreshed to the current migration high-water mark (`0018`) and full table list + advisory-lock keys; header currency |
 | 2026-07-23 | **Kill in-flight sessions on revocation + break-glass share-check fix.** Revoking a login (`POST /api/login-sessions/revoke`), disabling a directory user (reconcile), or deleting a user's target grant now terminates their matching live proxied sessions via the session registry (`KillByActor` / new `KillByActorTarget`; role-grant deletions still only affect new connections, and the registry is per-replica). New audit action `session.killed`. Also fixed a real bug found while testing: the break-glass quorum share collector checked the *first* byte as the Shamir x-coordinate, but `shamir.Split`/`Combine` put it in the *last* byte — this spuriously rejected ~1/256 of valid share sets (flaky unseal) and weakened poison detection |
 | 2026-07-23 | **Signed audit checkpoints (tail-truncation detection).** The primary-audit HMAC chain catches edits/reorders/mid-deletions but not tail truncation. Added `GET /api/audit/head` (`CapReadAudit`), which returns an ed25519-signed checkpoint over `(last_id, head)` — an auditor stores it and later detects truncation, mirroring the broker chain. New `PAM_AUDIT_SIGN_SEED` (base64 32-byte ed25519 seed; requires `PAM_AUDIT_HMAC_KEY`, fail-loud). New store method `GetAuditHead`; the signing helper `auditchain.SignCheckpoint` is now shared by the broker and primary chains. 501 when unconfigured |

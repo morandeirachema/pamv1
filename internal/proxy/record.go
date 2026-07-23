@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"hash"
 	"io"
 	"os"
@@ -13,6 +14,11 @@ import (
 	"sync"
 	"time"
 )
+
+// errRecordingLimit is returned by Recording.Write once a session's recording has
+// reached its configured byte cap, so the caller tears the session down rather
+// than continue it unrecorded (a runaway session can't fill the recording disk).
+var errRecordingLimit = errors.New("proxy: session recording size limit reached")
 
 // encodePEM serializes a PEM block to its textual (memory) encoding.
 func encodePEM(b *pem.Block) []byte { return pem.EncodeToMemory(b) }
@@ -59,20 +65,23 @@ func (c *recordChain) append(fileSHAHex string) string {
 // hashing the same bytes, so the audit trail can store a tamper-evident
 // SHA-256 of the recording. Safe for concurrent Write.
 type Recording struct {
-	path   string
-	f      *os.File
-	enc    *json.Encoder
-	hasher hash.Hash
-	start  time.Time
+	path     string
+	f        *os.File
+	enc      *json.Encoder
+	hasher   hash.Hash
+	start    time.Time
+	maxBytes int64 // 0 = unlimited
 
-	mu sync.Mutex
-	n  int64
+	mu      sync.Mutex
+	n       int64
+	limited bool
 }
 
 // newRecording creates a .cast file under dir (named from a sanitized title),
 // writes the asciicast v2 header and returns a Recording that hashes every byte
-// it writes so its contents can be verified later.
-func newRecording(dir, title string, now time.Time) (*Recording, error) {
+// it writes so its contents can be verified later. maxBytes caps the recorded
+// output (0 = unlimited): once exceeded, Write returns errRecordingLimit.
+func newRecording(dir, title string, now time.Time, maxBytes int64) (*Recording, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, err
 	}
@@ -90,7 +99,7 @@ func newRecording(dir, title string, now time.Time) (*Recording, error) {
 		"timestamp": now.Unix(),
 		"title":     title,
 	}
-	r := &Recording{path: path, f: f, enc: enc, hasher: hasher, start: now}
+	r := &Recording{path: path, f: f, enc: enc, hasher: hasher, start: now, maxBytes: maxBytes}
 	if err := enc.Encode(header); err != nil {
 		f.Close()
 		return nil, err
@@ -98,15 +107,24 @@ func newRecording(dir, title string, now time.Time) (*Recording, error) {
 	return r, nil
 }
 
-// Write records p as an asciicast "o" (output) event.
+// Write records p as an asciicast "o" (output) event. Once the byte cap
+// (maxBytes) is exceeded it records the final frame and then returns
+// errRecordingLimit, so the caller can end the session rather than run it
+// unrecorded.
 func (r *Recording) Write(p []byte) (int, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.limited {
+		return 0, errRecordingLimit
+	}
 	ev := []any{time.Since(r.start).Seconds(), "o", string(p)}
 	if err := r.enc.Encode(ev); err != nil {
 		return 0, err
 	}
 	r.n += int64(len(p))
+	if r.maxBytes > 0 && r.n >= r.maxBytes {
+		r.limited = true
+	}
 	return len(p), nil
 }
 

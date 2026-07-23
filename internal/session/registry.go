@@ -28,12 +28,48 @@ type entry struct {
 
 // Registry is a thread-safe set of live sessions.
 type Registry struct {
-	mu sync.Mutex
-	m  map[string]entry
+	mu          sync.Mutex
+	m           map[string]entry
+	maxPerActor int // 0 = unlimited
+	maxTotal    int // 0 = unlimited
 }
 
 // NewRegistry returns an empty, ready-to-use session registry.
 func NewRegistry() *Registry { return &Registry{m: make(map[string]entry)} }
+
+// SetLimits configures the concurrent-session caps: at most perActor live
+// sessions for a single actor and maxTotal across all actors (0 = unlimited).
+// Call once at startup before serving.
+func (r *Registry) SetLimits(perActor, maxTotal int) {
+	r.mu.Lock()
+	r.maxPerActor, r.maxTotal = perActor, maxTotal
+	r.mu.Unlock()
+}
+
+// AllowNew reports whether a new session for actor is within the concurrent-session
+// caps. It is a pre-flight check the proxies run BEFORE decrypting/dialing, so a
+// refused session never touches a secret; the tiny window before Register is
+// acceptable for a resource limit. Note the registry is per-replica, so the cap
+// is per-replica in an HA deployment.
+func (r *Registry) AllowNew(actor string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.maxTotal > 0 && len(r.m) >= r.maxTotal {
+		return false
+	}
+	if r.maxPerActor > 0 {
+		n := 0
+		for _, e := range r.m {
+			if e.info.Actor == actor {
+				n++
+			}
+		}
+		if n >= r.maxPerActor {
+			return false
+		}
+	}
+	return true
+}
 
 // Register records a session and returns its id; kill terminates it when called
 // (e.g. closes the underlying connection).

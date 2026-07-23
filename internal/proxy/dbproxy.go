@@ -68,6 +68,8 @@ type DBConfig struct {
 	// certificate on the target leg (RootCAs / ServerName). nil keeps the legacy
 	// trust-any-with-warning behavior for the upstream connection.
 	UpstreamTLS *tls.Config
+	// MaxRecordingBytes caps a session recording's output (0 = unlimited).
+	MaxRecordingBytes int64
 }
 
 // DBProxy brokers PostgreSQL sessions with just-in-time credential injection.
@@ -89,6 +91,7 @@ type DBProxy struct {
 	chain        *recordChain
 	authLimiter  *ratelimit.Limiter
 	upstreamTLS  *tls.Config
+	maxRecBytes  int64
 
 	bg sync.WaitGroup // background tasks (post-session rotation) drained on shutdown
 
@@ -128,6 +131,7 @@ func NewDB(st store.Store, v *vault.Vault, resolver *auth.Resolver, cfg DBConfig
 		chain:        newRecordChain(cfg.RecordingDir),
 		authLimiter:  ratelimit.New(cfg.AuthRatePerMin),
 		upstreamTLS:  cfg.UpstreamTLS,
+		maxRecBytes:  cfg.MaxRecordingBytes,
 		conns:        make(map[net.Conn]struct{}),
 	}
 	if d.clientTLS == nil {
@@ -402,6 +406,13 @@ func (d *DBProxy) handleConn(ctx context.Context, nConn net.Conn) {
 		}
 	}
 
+	// Concurrent-session cap: refuse before decrypting any secret.
+	if d.sessions != nil && !d.sessions.AllowNew(actor) {
+		d.audit(ctx, actor, "db.session.denied", "target:"+target.Name+" reason:session-limit")
+		d.fail(backend, "53300", "pamv1: too many concurrent sessions")
+		return
+	}
+
 	// Fail closed: durably audit the session before any secret is decrypted or
 	// injected upstream. If the audit store is unavailable we refuse the session
 	// rather than open an unaudited privileged connection.
@@ -438,7 +449,7 @@ func (d *DBProxy) handleConn(ctx context.Context, nConn net.Conn) {
 	d.log.Info("db session started", "actor", actor, "target", target.Name, "db", database, "cred_user", cred.Username, "remote", remote)
 
 	var rec *Recording
-	if r, rerr := newRecording(d.recordingDir, "pgsql-"+actor+"-"+target.Name+"-"+time.Now().UTC().Format("20060102-150405"), time.Now()); rerr == nil {
+	if r, rerr := newRecording(d.recordingDir, "pgsql-"+actor+"-"+target.Name+"-"+time.Now().UTC().Format("20060102-150405"), time.Now(), d.maxRecBytes); rerr == nil {
 		rec = r
 	} else {
 		d.audit(ctx, actor, "session.record_failed", "proto:postgres target:"+target.Name+" err:"+rerr.Error())
