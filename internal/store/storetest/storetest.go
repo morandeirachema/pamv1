@@ -52,6 +52,15 @@ func RunAuditChainContract(t *testing.T, st store.Store) {
 	if err != nil || !ok || brokeAt != 0 {
 		t.Fatalf("VerifyAuditChain(intact): ok=%v brokeAt=%d err=%v", ok, brokeAt, err)
 	}
+
+	// GetAuditHead returns the most recent chained event (for signed checkpoints).
+	head, err := st.GetAuditHead(ctx)
+	if err != nil || head == nil {
+		t.Fatalf("GetAuditHead: head=%v err=%v", head, err)
+	}
+	if head.ID != events[2].ID || !bytes.Equal(head.HMAC, events[2].HMAC) {
+		t.Fatalf("GetAuditHead returned id=%d, want the last appended event id=%d", head.ID, events[2].ID)
+	}
 }
 
 // RunStoreContract exercises the full Store interface against an empty st,

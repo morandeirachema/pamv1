@@ -462,6 +462,7 @@ func run() error {
 	// Optional tamper-evident chaining of the primary audit trail. When set, the
 	// key must decode to exactly KeySize bytes — fail loud rather than silently run
 	// unchained.
+	var auditSignKey ed25519.PrivateKey
 	if cfg.AuditHMACKey != "" {
 		ak, derr := base64.StdEncoding.DecodeString(cfg.AuditHMACKey)
 		if derr != nil || len(ak) != auditchain.KeySize {
@@ -469,6 +470,17 @@ func run() error {
 		}
 		st.EnableAuditChain(ak)
 		log.Info("primary audit trail is tamper-evident (HMAC-chained)")
+		// Optional ed25519 signing key for truncation-detecting checkpoints.
+		if cfg.AuditSignSeed != "" {
+			seed, serr := base64.StdEncoding.DecodeString(cfg.AuditSignSeed)
+			if serr != nil || len(seed) != ed25519.SeedSize {
+				return fmt.Errorf("PAM_AUDIT_SIGN_SEED must be base64 of %d bytes", ed25519.SeedSize)
+			}
+			auditSignKey = ed25519.NewKeyFromSeed(seed)
+			log.Info("audit-chain checkpoints are signed (GET /api/audit/head)")
+		}
+	} else if cfg.AuditSignSeed != "" {
+		return fmt.Errorf("PAM_AUDIT_SIGN_SEED requires PAM_AUDIT_HMAC_KEY (checkpoints need the chain)")
 	}
 
 	// Phase 12: overlay DB-persisted configuration onto the env-derived config
@@ -648,6 +660,7 @@ func run() error {
 		AllowedProtocols:    splitAndTrim(cfg.AllowedProtocols),
 		Directory:           directory,
 		Reconfigure:         reconfigure,
+		AuditSignKey:        auditSignKey,
 		BrokerPolicy:        brokerPolicy,
 		BrokerAuditKey:      brokerAuditKey,
 		BrokerAuditSignKey:  brokerSignKey,

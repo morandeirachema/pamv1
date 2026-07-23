@@ -92,7 +92,9 @@ is a phase each, out of scope for a security *fix*:
   sessions), not just broker events. Set `PAM_AUDIT_HMAC_KEY` (base64 32 bytes) to
   activate chaining; verify with `GET /api/audit/verify`. The migration is additive
   and unset leaves the plain table, so it's non-breaking. This was the top deferred
-  item; it is now closed.
+  item; it is now closed. **Tail-truncation detection** is also covered: set
+  `PAM_AUDIT_SIGN_SEED` and archive the ed25519-signed checkpoints from
+  `GET /api/audit/head` out-of-band.
 - **Session-recording playback** (recordings are written to disk; no API/portal
   replays them), **JIT ephemeral account provisioning** on targets, **FIDO2/
   WebAuthn**, **CIEM / cloud-IAM brokering**, **Kubernetes secret/SA delivery**,
