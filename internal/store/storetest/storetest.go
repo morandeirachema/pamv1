@@ -6,13 +6,53 @@
 package storetest
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
 	"github.com/morandeirachema/pamv1/internal/store"
 )
+
+// testAuditKey is a fixed 32-byte HMAC key for the audit-chain contract.
+func testAuditKey() []byte {
+	k := make([]byte, 32)
+	for i := range k {
+		k[i] = byte(i + 1)
+	}
+	return k
+}
+
+// RunAuditChainContract verifies the tamper-evident primary-audit chain against a
+// store: enabling it links each appended event to the previous one's HMAC, and
+// the chain verifies intact. Tamper *detection* is store-specific (it needs to
+// mutate a stored row) and lives in each store's own tests.
+func RunAuditChainContract(t *testing.T, st store.Store) {
+	t.Helper()
+	ctx := context.Background()
+	st.EnableAuditChain(testAuditKey())
+
+	var events []store.AuditEvent
+	for i := 0; i < 3; i++ {
+		e := store.AuditEvent{Actor: "alice", Action: "credential.reveal", Detail: fmt.Sprintf("credential:%d", i)}
+		if err := st.AppendAudit(ctx, &e); err != nil {
+			t.Fatalf("AppendAudit(chained): %v", err)
+		}
+		if len(e.HMAC) == 0 {
+			t.Fatalf("event %d: chain HMAC was not set", i)
+		}
+		events = append(events, e)
+	}
+	if !bytes.Equal(events[1].PrevHash, events[0].HMAC) || !bytes.Equal(events[2].PrevHash, events[1].HMAC) {
+		t.Fatal("audit chain not linked: an event's prev_hash != the previous event's hmac")
+	}
+	ok, brokeAt, err := st.VerifyAuditChain(ctx)
+	if err != nil || !ok || brokeAt != 0 {
+		t.Fatalf("VerifyAuditChain(intact): ok=%v brokeAt=%d err=%v", ok, brokeAt, err)
+	}
+}
 
 // RunStoreContract exercises the full Store interface against an empty st,
 // asserting the shared semantics (IDs populated, sentinel errors, expiry,

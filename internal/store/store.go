@@ -4,7 +4,11 @@
 package store
 
 import (
+	"bytes"
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"time"
@@ -186,6 +190,37 @@ type AuditEvent struct {
 	Actor  string    `json:"actor"`
 	Action string    `json:"action"`
 	Detail string    `json:"detail"`
+	// PrevHash and HMAC form the optional tamper-evident hash chain over the
+	// primary audit trail, activated when an audit HMAC key is configured
+	// (EnableAuditChain). HMAC = HMAC-SHA256(key, prev_hash || canonical(event)),
+	// so editing, reordering, or deleting any event breaks the chain from that
+	// point. PrevHash is derivable (the previous row's HMAC) and not exposed; both
+	// are nil when the chain is not enabled.
+	PrevHash []byte `json:"-"`
+	HMAC     []byte `json:"hmac,omitempty"`
+}
+
+// AuditCanonical serializes the integrity-relevant fields of an audit event
+// (actor, action, detail) into a stable, length-prefixed byte string. The
+// timestamp and id are excluded — like the broker chain — so a clock skew or an
+// id gap can't spuriously break verification; ordering is captured by the chain.
+func AuditCanonical(e *AuditEvent) []byte {
+	var b bytes.Buffer
+	for _, s := range []string{e.Actor, e.Action, e.Detail} {
+		var n [8]byte
+		binary.BigEndian.PutUint64(n[:], uint64(len(s)))
+		b.Write(n[:])
+		b.WriteString(s)
+	}
+	return b.Bytes()
+}
+
+// AuditMAC computes an event's chain HMAC over prev || canonical(event).
+func AuditMAC(key, prev []byte, e *AuditEvent) []byte {
+	m := hmac.New(sha256.New, key)
+	m.Write(prev)
+	m.Write(AuditCanonical(e))
+	return m.Sum(nil)
 }
 
 // User is a local identity with a role. The access token is stored only as a
@@ -426,8 +461,18 @@ type Store interface {
 	// ListCheckouts lists checkouts; activeOnly limits to unreturned, unexpired ones.
 	ListCheckouts(ctx context.Context, activeOnly bool, now time.Time) ([]Checkout, error)
 
-	// AppendAudit appends an audit event, populating its ID and TS.
+	// AppendAudit appends an audit event, populating its ID and TS. When an audit
+	// HMAC key has been configured (EnableAuditChain), the event is linked into the
+	// tamper-evident chain (prev_hash/hmac) as part of the same atomic append.
 	AppendAudit(ctx context.Context, e *AuditEvent) error
+	// EnableAuditChain turns on tamper-evident chaining of the primary audit trail
+	// using the given HMAC key (KeySize bytes). Passing nil/empty disables it (the
+	// default). Call once at startup, before serving.
+	EnableAuditChain(key []byte)
+	// VerifyAuditChain recomputes the chain over every audit event in order and
+	// reports whether it is intact. brokeAtID is the id of the first event whose
+	// HMAC does not match (0 when ok). It errors if the chain is not enabled.
+	VerifyAuditChain(ctx context.Context) (ok bool, brokeAtID int64, err error)
 	// ListAudit returns the most recent audit events, newest first.
 	ListAudit(ctx context.Context, limit int) ([]AuditEvent, error)
 	// ExportAudit returns every audit event with since <= ts < until, ordered

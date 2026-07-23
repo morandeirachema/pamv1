@@ -4,7 +4,9 @@
 package pgstore
 
 import (
+	"bytes"
 	"context"
+	"crypto/hmac"
 	"errors"
 	"log/slog"
 	"strings"
@@ -24,8 +26,9 @@ const (
 )
 
 type PGStore struct {
-	pool *pgxpool.Pool
-	log  *slog.Logger
+	pool     *pgxpool.Pool
+	log      *slog.Logger
+	auditKey []byte // set ⇒ chain the primary audit trail (EnableAuditChain)
 }
 
 // Open connects to the Postgres database at url, verifies connectivity, applies
@@ -546,13 +549,76 @@ func (s *PGStore) SetApprovalState(ctx context.Context, id int64, approvedBy, st
 		id, approvedBy, status, approver, decidedAt)
 }
 
-// AppendAudit inserts an audit event, populating its ID and TS.
+// auditChainLockKey serializes chained audit appends across every process sharing
+// this database, so the hash chain over audit_events cannot fork. Distinct from
+// the migration/broker/leader lock keys.
+const auditChainLockKey = int64(0x70616d5f61756463) // "pam_audc"
+
+// EnableAuditChain turns on tamper-evident chaining of the primary audit trail.
+func (s *PGStore) EnableAuditChain(key []byte) { s.auditKey = key }
+
+// AppendAudit inserts an audit event, populating its ID and TS. With an audit key
+// configured it links the event into the tamper-evident chain in the same
+// transaction, under an advisory lock so concurrent writers can't fork the chain.
 func (s *PGStore) AppendAudit(ctx context.Context, e *store.AuditEvent) error {
-	return s.pool.QueryRow(ctx,
-		`INSERT INTO audit_events (actor, action, detail)
-		 VALUES ($1, $2, $3) RETURNING id, ts`,
-		e.Actor, e.Action, e.Detail,
-	).Scan(&e.ID, &e.TS)
+	if len(s.auditKey) == 0 {
+		return s.pool.QueryRow(ctx,
+			`INSERT INTO audit_events (actor, action, detail)
+			 VALUES ($1, $2, $3) RETURNING id, ts`,
+			e.Actor, e.Action, e.Detail,
+		).Scan(&e.ID, &e.TS)
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, auditChainLockKey); err != nil {
+		return err
+	}
+	var prev []byte
+	if err := tx.QueryRow(ctx,
+		`SELECT hmac FROM audit_events WHERE hmac IS NOT NULL ORDER BY id DESC LIMIT 1`).Scan(&prev); err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return err
+	}
+	e.PrevHash = prev
+	e.HMAC = store.AuditMAC(s.auditKey, prev, e)
+	if err := tx.QueryRow(ctx,
+		`INSERT INTO audit_events (actor, action, detail, prev_hash, hmac)
+		 VALUES ($1, $2, $3, $4, $5) RETURNING id, ts`,
+		e.Actor, e.Action, e.Detail, e.PrevHash, e.HMAC,
+	).Scan(&e.ID, &e.TS); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+// VerifyAuditChain recomputes the chain over every chained audit event in id
+// order and reports the first id whose HMAC does not match (0 when intact).
+func (s *PGStore) VerifyAuditChain(ctx context.Context) (bool, int64, error) {
+	if len(s.auditKey) == 0 {
+		return false, 0, errors.New("pgstore: audit chain not enabled")
+	}
+	rows, err := s.pool.Query(ctx,
+		`SELECT id, actor, action, detail, prev_hash, hmac
+		 FROM audit_events WHERE hmac IS NOT NULL ORDER BY id ASC`)
+	if err != nil {
+		return false, 0, err
+	}
+	defer rows.Close()
+	var prev []byte
+	for rows.Next() {
+		var e store.AuditEvent
+		if err := rows.Scan(&e.ID, &e.Actor, &e.Action, &e.Detail, &e.PrevHash, &e.HMAC); err != nil {
+			return false, 0, err
+		}
+		want := store.AuditMAC(s.auditKey, prev, &e)
+		if !hmac.Equal(want, e.HMAC) || !bytes.Equal(prev, e.PrevHash) {
+			return false, e.ID, nil
+		}
+		prev = e.HMAC
+	}
+	return true, 0, rows.Err()
 }
 
 // ListAudit returns the most recent audit events, newest first; limit is clamped
