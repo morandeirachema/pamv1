@@ -86,6 +86,10 @@ func fakeGuacd(t *testing.T, connectCh chan<- []string, inputCh chan<- string) s
 		}
 		conn.Write([]byte(guacd.Instruction{Opcode: "ready", Args: []string{"$test-conn"}}.Encode()))
 		conn.Write([]byte(guacd.Instruction{Opcode: "sync", Args: []string{"0"}}.Encode())) // post-ready render stream
+		// A single instruction far larger than the old 8 KB copy buffer — a stand-in
+		// for a real screen paint. The bridge must deliver it as ONE WebSocket message;
+		// the old raw-chunk copy split it and broke the browser tunnel.
+		conn.Write([]byte(guacd.Instruction{Opcode: "blob", Args: []string{"0", strings.Repeat("A", bigBlobLen)}}.Encode()))
 		if inst, err := readFakeInst(r); err == nil {
 			inputCh <- inst.op
 		}
@@ -93,6 +97,10 @@ func fakeGuacd(t *testing.T, connectCh chan<- []string, inputCh chan<- string) s
 	}()
 	return ln.Addr().String()
 }
+
+// bigBlobLen is the payload size of the fake guacd's large post-ready instruction,
+// chosen well above the 8192-byte read chunking that used to split instructions.
+const bigBlobLen = 20000
 
 // TestRDPTunnelEndToEnd drives the whole browser-facing path against a fake guacd:
 // it mints a short-lived token, opens the WebSocket, and proves (1) the tunnel
@@ -154,6 +162,15 @@ func TestRDPTunnelEndToEnd(t *testing.T) {
 	if third := readFrame(); !strings.Contains(third, "sync") {
 		t.Fatalf("third frame = %q, want the piped guacd render stream (sync)", third)
 	}
+	// (3a') Instruction framing: a >8 KB instruction must arrive as ONE whole
+	// WebSocket message (the vendored client rejects a message ending mid-instruction).
+	wantBlob := guacd.Instruction{Opcode: "blob", Args: []string{"0", strings.Repeat("A", bigBlobLen)}}.Encode()
+	if fourth := readFrame(); fourth != wantBlob {
+		if len(fourth) < len(wantBlob) {
+			t.Fatalf("large instruction split across WebSocket messages: got a %d-byte frame, want the whole %d-byte instruction", len(fourth), len(wantBlob))
+		}
+		t.Fatalf("fourth frame did not match the large instruction (len got=%d want=%d)", len(fourth), len(wantBlob))
+	}
 
 	// (2) JIT injection: the vaulted secret reached guacd, positioned as the password.
 	select {
@@ -196,5 +213,29 @@ func TestRDPTokenRequiresConnect(t *testing.T) {
 	}
 	if status, data := do(t, srv, "POST", "/api/rdp-token", testAPIKey, nil); status != 200 {
 		t.Fatalf("admin minting an RDP token should be 200, got %d: %s", status, data)
+	}
+}
+
+// TestRDPTokenIsTunnelScoped proves a minted RDP token — which travels in the WS
+// URL and can leak via logs — is usable only at the tunnel: the API middleware
+// refuses it, so it cannot read inventory, act, or re-mint itself.
+func TestRDPTokenIsTunnelScoped(t *testing.T) {
+	srv, _ := newTestServerOpts(t, nil, api.Options{GuacdAddr: "127.0.0.1:4822"})
+	_, data := do(t, srv, "POST", "/api/rdp-token", testAPIKey, nil)
+	tok, _ := jsonMap(t, data)["token"].(string)
+	if tok == "" {
+		t.Fatalf("no rdp token: %s", data)
+	}
+	// The token is refused on a normal authz endpoint (would be 200 for the admin key)...
+	if status, _ := do(t, srv, "GET", "/api/targets", tok, nil); status != 403 {
+		t.Fatalf("RDP token on GET /api/targets should be 403 (tunnel-only), got %d", status)
+	}
+	// ...on an `authenticated` endpoint...
+	if status, _ := do(t, srv, "GET", "/api/me", tok, nil); status != 403 {
+		t.Fatalf("RDP token on GET /api/me should be 403 (tunnel-only), got %d", status)
+	}
+	// ...and it cannot re-mint a fresh token to escape the TTL.
+	if status, _ := do(t, srv, "POST", "/api/rdp-token", tok, nil); status != 403 {
+		t.Fatalf("RDP token re-minting should be 403 (tunnel-only), got %d", status)
 	}
 }

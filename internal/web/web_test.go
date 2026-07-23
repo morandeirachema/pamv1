@@ -41,12 +41,16 @@ func TestIndexNonceCSP(t *testing.T) {
 	}
 	// The RDP viewer paints guacd's PNG instructions (data: URIs) onto a canvas and
 	// dynamic-import()s the same-origin Guacamole client, so img-src must allow
-	// data:/blob: and script-src must allow 'self' — without these the viewer is
-	// silently blank. Guard them so a CSP tightening cannot regress the viewer.
-	for _, dir := range []string{"img-src 'self' data: blob:", "script-src 'nonce-", "'self'"} {
-		if !strings.Contains(csp, dir) {
-			t.Errorf("CSP missing RDP-viewer directive %q: %s", dir, csp)
-		}
+	// data:/blob: and script-src must allow 'self' (in ADDITION to the nonce) —
+	// without these the viewer is silently blank. Guard them so a CSP tightening
+	// cannot regress the viewer.
+	if !strings.Contains(csp, "img-src 'self' data: blob:") {
+		t.Errorf("CSP missing RDP-viewer img-src (data:/blob:): %s", csp)
+	}
+	// Assert the nonce AND 'self' both sit in script-src, so dropping 'self' (which
+	// would block the dynamic import and blank the viewer) actually fails this test.
+	if !regexp.MustCompile(`script-src 'nonce-[A-Za-z0-9+/=]+' 'self'`).MatchString(csp) {
+		t.Errorf("script-src must carry both the nonce and 'self': %s", csp)
 	}
 
 	if csp2, _ := get(); csp == csp2 {

@@ -206,19 +206,30 @@ endpoints arrive with the OT/approval phase).
   through Apache Guacamole. Authorizes via a `token` query param (browsers can't
   set WS headers), resolves the `protocol=rdp` target, decrypts the credential
   **just-in-time**, and `guacd.Connect` performs the Guacamole handshake injecting
-  the credential (`internal/guacd`) — it reaches guacd, never the browser. It then
-  emits the **tunnel prelude** guacamole-common-js requires — an internal
-  tunnel-UUID instruction, then a re-emitted `ready` (the handshake consumed
-  guacd's own `ready` to learn the connection id) — and bridges the WebSocket ↔
-  guacd stream. Enabled by `PAM_GUACD_ADDR`; audited `rdp.connect`/`rdp.end`.
+  the credential (`internal/guacd`) — it reaches guacd, never the browser. It
+  gates on `session.Registry.AllowNew` (the same `PAM_MAX_SESSIONS_*` cap the SSH
+  and PostgreSQL proxies enforce) **before** decrypting the secret, then emits the
+  **tunnel prelude** guacamole-common-js requires — an internal tunnel-UUID
+  instruction, then a re-emitted `ready` (the handshake consumed guacd's own
+  `ready` to learn the connection id) — and bridges the WebSocket ↔ guacd stream.
+  The bridge forwards **one whole Guacamole instruction per WebSocket message**
+  (`guacd.Conn.NextInstruction`): guacamole-common-js parses each message
+  independently and rejects a partial one, so a raw byte-stream copy would split a
+  large screen paint and break the viewer. Enabled by `PAM_GUACD_ADDR`; audited
+  `rdp.connect`/`rdp.end`.
 - **RDP token** (`POST /api/rdp-token`, needs `CapConnect`): mints a short-lived
-  (60s) session token via `issueSessionTTL` so the in-portal viewer keeps the
-  operator's long-lived key out of the WebSocket URL. Audited `rdp.token`. The
-  browser viewer is the vendored guacamole-common-js served by `web`
-  (`GET /static/guacamole-common.min.js`); the portal opens it from *Work with
-  Targets* option 7 and renders to a canvas. WebSocket upgrade rides the
-  access-log middleware, so `statusWriter` forwards `http.Hijacker` (a missing
-  `Hijack` had broken every upgrade with 501).
+  (60s) **RDP-tunnel-scoped** session token (`auth.SessionScopeRDP`) so the viewer
+  keeps the operator's long-lived key out of the WebSocket URL. The token resolves
+  to a `TunnelOnly` principal that the `authz`/`authenticated` middleware refuse
+  (403), so a copy leaked from a proxy/access log cannot call any other endpoint
+  or re-mint itself; only `rdpTunnel` (which resolves its own principal) accepts
+  it. A break-glass caller instead gets a break-glass-scoped token so the tunnel
+  still fires the loud `breakglass.access` audit and bypasses the approval gate.
+  Audited `rdp.token` (detail `ttl:60s`). The browser viewer is the vendored
+  guacamole-common-js served by `web` (`GET /static/guacamole-common.min.js`); the
+  portal opens it from *Work with Targets* option 7 and renders to a canvas.
+  WebSocket upgrade rides the access-log middleware, so `statusWriter` forwards
+  `http.Hijacker` (a missing `Hijack` had broken every upgrade with 501).
 
 - **Credential lifecycle** (`lifecycle_handlers.go` + `internal/rotate`, Phase 7,
   needs `CapManageCredentials`): rotation and reconciliation run over the same
@@ -620,6 +631,7 @@ events are also written to the separate tamper-evident `broker_audit_events` cha
 
 | Date | Change |
 |---|---|
+| 2026-07-23 | **RDP viewer review fixes (server side).** The tunnel bridge now forwards **one whole Guacamole instruction per WebSocket message** (new `guacd.Conn.NextInstruction`) instead of raw 8 KB byte chunks — the old copy split large screen paints and the vendored client rejected the partial message, so the viewer broke on the first real paint. `POST /api/rdp-token` now mints an **RDP-tunnel-scoped** token (`auth.SessionScopeRDP` → `Principal.TunnelOnly`, refused by `authz`/`authenticated`) so a token leaked from the WS URL can't hit other endpoints or re-mint; break-glass callers keep a break-glass-scoped token so the loud audit + approval bypass still fire. `rdpTunnel` now enforces `session.Registry.AllowNew` (the `PAM_MAX_SESSIONS_*` caps) before decrypting, like the SSH/DB proxies. Tests extended: a >8 KB instruction must arrive as one frame, and an RDP token is 403 on `/api/targets`, `/api/me`, and re-mint |
 | 2026-07-23 | **In-portal RDP viewer + a latent WebSocket-upgrade fix.** The `web` package now embeds and serves the vendored Apache Guacamole JS client (`GET /static/guacamole-common.min.js`, unmodified ESM build, Apache-2.0 — see repo `NOTICE`), and the portal renders RDP on a canvas (*Work with Targets* option 7; `Ctrl+Alt+Q` to disconnect). New `POST /api/rdp-token` mints a 60s session token (`issueSessionTTL`) so the viewer keeps the operator's long-lived key out of the WS URL (audited `rdp.token`, new vocab). The tunnel handler now emits the tunnel prelude guacamole-common-js needs (`guacamolePrelude`: an internal tunnel-UUID instruction, then a re-emitted `ready`). Portal CSP widened for the canvas: `img-src 'self' data: blob:`, `media-src …`, `script-src … 'self'` (for the same-origin dynamic `import()`). **Bug fixed while testing:** the access-log `statusWriter` did not forward `http.Hijacker`, so *every* WebSocket upgrade (including the pre-existing RDP tunnel) failed with 501 through the middleware — added `statusWriter.Hijack`. New tests: prelude wire-format, `TestRDPTunnelEndToEnd` (full WS round-trip vs a fake guacd), token gating. Verification runbook: `docs/RDP-TESTING.md` |
 | 2026-07-23 | **Resource-exhaustion limits.** Concurrent-session caps — `PAM_MAX_SESSIONS_PER_USER` / `PAM_MAX_SESSIONS_TOTAL` (0 = unlimited) enforced by `session.Registry.AllowNew` before either proxy decrypts a secret (per-replica). Per-recording size cap — `PAM_MAX_RECORDING_MB` (0 = unlimited); `Recording.Write` returns `errRecordingLimit` once exceeded, so the session is terminated (`session.record_limit`) rather than run unrecorded. Refused sessions audit `session.denied reason:session-limit` (SSH) / `db.session.denied` (DB). Registry + recording unit tests |
 | 2026-07-23 | Doc-quality pass: §1 package tree completed (added `ratelimit`, `conjur`, `ticket`, `auditchain`, the broker cluster `agentid`/`policy`/`broker`/`mcp`, `storetest`); §2.2 refreshed to the current migration high-water mark (`0018`) and full table list + advisory-lock keys; header currency |

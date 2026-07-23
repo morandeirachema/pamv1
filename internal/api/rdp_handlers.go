@@ -33,16 +33,21 @@ func (s *Server) rdpToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p := principalFrom(r.Context())
-	if p == nil {
-		writeError(w, http.StatusUnauthorized, "unauthenticated")
-		return
+	// Mint an RDP-tunnel-scoped token: it resolves to a TunnelOnly principal the API
+	// middleware refuses, so a copy leaked from the WS URL is useless elsewhere and
+	// cannot re-mint. A break-glass caller keeps the break-glass scope so the tunnel
+	// still fires the loud audit and bypasses the approval gate as break-glass must
+	// (break-glass is already full-admin, so this adds no exposure).
+	scope := auth.SessionScopeRDP
+	if p.BreakGlass {
+		scope = auth.SessionScopeBreakGlass
 	}
-	token, sess, err := s.issueSessionTTL(r.Context(), p, "", rdpTokenTTL)
+	token, sess, err := s.issueSessionTTL(r.Context(), p, scope, rdpTokenTTL)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not mint RDP token")
 		return
 	}
-	s.audit(r.Context(), "rdp.token", "actor:"+p.Name)
+	s.audit(r.Context(), "rdp.token", "ttl:"+rdpTokenTTL.String())
 	writeJSON(w, http.StatusOK, map[string]any{"token": token, "expires_at": sess.ExpiresAt})
 }
 
@@ -110,6 +115,14 @@ func (s *Server) rdpTunnel(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusForbidden, "connection requires an approved access request")
 			return
 		}
+	}
+	// Enforce the concurrent-session caps before decrypting a secret, as the SSH and
+	// PostgreSQL proxies do — otherwise a connect-capable user could open unbounded
+	// memory-heavy RDP sessions past PAM_MAX_SESSIONS_PER_USER / _TOTAL.
+	if s.sessions != nil && !s.sessions.AllowNew(principal.Name) {
+		s.audit(withPrincipal(r.Context(), principal), "session.denied", "target:"+target.Name+" reason:session-limit")
+		writeError(w, http.StatusTooManyRequests, "session limit reached")
+		return
 	}
 	creds, err := s.store.ListCredentials(r.Context(), target.ID)
 	if err != nil {
@@ -221,11 +234,14 @@ func guacamolePrelude(uuid, connID string) [][]byte {
 func bridgeGuacd(ctx context.Context, ws *websocket.Conn, gconn *guacd.Conn) {
 	done := make(chan struct{}, 2)
 	go func() { // guacd → browser
-		buf := make([]byte, 8192)
+		// Forward one whole Guacamole instruction per WebSocket message: the browser
+		// tunnel parses each message independently and closes on a partial instruction,
+		// so a raw byte-stream copy (which splits large img/blob paints at the read
+		// boundary) corrupts or kills the viewer on the first real screen update.
 		for {
-			n, err := gconn.Read(buf)
-			if n > 0 {
-				if werr := ws.Write(ctx, websocket.MessageText, buf[:n]); werr != nil {
+			inst, err := gconn.NextInstruction()
+			if len(inst) > 0 {
+				if werr := ws.Write(ctx, websocket.MessageText, inst); werr != nil {
 					break
 				}
 			}

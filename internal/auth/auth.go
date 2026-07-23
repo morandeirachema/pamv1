@@ -256,6 +256,13 @@ const SessionScopeEnroll = "enroll"
 // successful M-of-N quorum unseal; it grants admin and is audited loudly.
 const SessionScopeBreakGlass = "breakglass"
 
+// SessionScopeRDP marks a short-lived token minted for the in-portal RDP viewer.
+// Because it travels in the WebSocket URL (browsers cannot set headers on a WS
+// handshake), it is deliberately usable ONLY at the RDP tunnel: it resolves to a
+// TunnelOnly principal that the API authz/authenticated middleware refuse, so a
+// copy leaked from a proxy/access log cannot call any other endpoint or re-mint.
+const SessionScopeRDP = "rdp"
+
 // CapSet is a resolved set of capabilities (used for custom profiles).
 type CapSet map[Capability]bool
 
@@ -272,6 +279,7 @@ type Principal struct {
 	Caps       CapSet // resolved custom-profile capabilities; nil for a built-in role
 	BreakGlass bool   // authenticated via the emergency key; use is audited loudly
 	EnrollOnly bool   // session may only complete MFA enrollment, nothing else
+	TunnelOnly bool   // token minted for the RDP tunnel only; API middleware refuses it
 }
 
 // effectiveRoles returns the role set to evaluate capabilities and role-grants
@@ -430,6 +438,7 @@ func (r *Resolver) Resolve(ctx context.Context, key string) (*Principal, error) 
 			p, perr := r.principalFor(ctx, s.Username, s.Role, s.Scope == SessionScopeEnroll)
 			if perr == nil {
 				p.Roles = SplitRoles(s.Roles) // restore the multi-group union
+				p.TunnelOnly = s.Scope == SessionScopeRDP
 			}
 			return p, perr
 		}
