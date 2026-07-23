@@ -153,20 +153,23 @@ The order matters: **decryption happens only after authorization**, and the
 plaintext exists only between steps 4 and 5, inside the proxy — never on the wire
 to the operator, never in a log.
 
-## 5. Where secrets live, and who can get what
+## 5. Under the hood — ciphering, connections & the target handshake
 
-Understanding this tells you exactly how much a given compromise costs.
+This section is the low-level view: exactly how secrets are ciphered, how each
+network leg is encrypted, and the wire-level handshake the proxy runs when it
+connects you to a target. (§4 was the summary; this is the mechanism.)
 
-**Envelope encryption.** Each secret is sealed with its **own random AES-256 data
-key**; that data key is then wrapped by the **KEK** (Key Encryption Key). The
-database stores only the sealed blob (a `v2:` token). To read a secret you need
-*both* the database *and* the KEK.
+### 5.1 At rest: envelope encryption
+
+Each secret is sealed with its **own random AES-256 data key (DEK)**; that DEK is
+then **wrapped by the KEK** (Key Encryption Key). The database stores only the
+sealed blob. To read a secret you need *both* the database *and* the KEK.
 
 ```mermaid
 flowchart LR
-  S["secret<br/>(root's password)"] -->|AES-256-GCM| ENC["sealed blob (v2:...)"]
-  DK["random data key<br/>(one per secret)"] -->|encrypts| ENC
-  KEK["KEK<br/>Vault / KMS / HSM"] -->|wraps| DK
+  S["secret<br/>(root's password)"] -->|"AES-256-GCM (random DEK + nonce)"| ENC["sealed blob (v2:...)"]
+  DK["random 32-byte DEK<br/>(one per secret)"] -->|encrypts| ENC
+  KEK["KEK<br/>local / Vault / KMS / HSM"] -->|wraps the DEK| ENC
   ENC --> DBROW[("stored in PostgreSQL")]
 ```
 
@@ -180,9 +183,149 @@ What that buys you, in plain terms:
 | An **operator's PAM token** | Only sessions to targets that token is *granted*, all recorded — and never the raw target password. |
 
 Two rules the system never breaks: a stored secret is **never serialized to any
-API response**, and plaintext is **never written to a log**. Revealing a secret
-on purpose (`/reveal`, break-glass) is a separate, audited, capability-gated path
-you can even turn off entirely (`PAM_REVEAL_DISABLED`).
+API response** (the field is `json:"-"`, enforced by a test), and plaintext is
+**never written to a log**. Revealing a secret on purpose (`/reveal`, break-glass)
+is a separate, audited, capability-gated path you can turn off entirely
+(`PAM_REVEAL_DISABLED`).
+
+### 5.2 The exact cipher: the `v2:` token, the AAD, and the KEK
+
+When the API vaults a secret it calls `Encrypt(plaintext, aad)`:
+
+1. Generate a **random 32-byte DEK** and a **random 12-byte nonce**.
+2. `ciphertext = AES-256-GCM.Seal(plaintext, nonce, aad)` — GCM gives both
+   confidentiality and integrity, and it authenticates the **AAD** (below).
+3. **Wrap the DEK with the KEK** → `wrapped`.
+4. Emit the token: `v2:` + base64url( `uint16(len(wrapped))` ‖ `wrapped` ‖ `nonce` ‖ `ciphertext` ).
+5. **Zero the DEK** in memory immediately.
+
+That `v2:` string is what lands in the database. Three things make it robust:
+
+- **AAD binds the ciphertext to its row.** The Additional Authenticated Data is
+  `target:<targetID>/cred:<credentialID>` (MFA secrets use `mfa:<user>`, config
+  uses `config:<key>`). GCM verifies the AAD on decrypt, so a blob **copied to a
+  different credential row fails to decrypt** — you can't move ciphertext around
+  the table to escalate. Both the encrypt side (`api`) and the decrypt side
+  (`proxy`) compute the AAD from the same helper, or decryption silently fails.
+- **`v2:` is a versioned prefix** so the format and keys can evolve; it is what
+  makes online **KEK rotation** possible — `pam-server -rotate-kek` walks every
+  token and re-wraps its DEK under a new KEK (even migrating providers, e.g.
+  local → AWS KMS), without ever exposing a plaintext secret.
+- **The KEK never handles the secret, only the DEK.** Providers:
+  - `local` — AES-256-GCM wrap with the base64 `PAM_MASTER_KEY` (**dev/test only** — the key sits in an env var).
+  - `vault-transit` — wrap/unwrap calls to HashiCorp Vault over HTTPS; **the KEK never leaves Vault**.
+  - `aws-kms` — KMS wrap/unwrap with `EncryptionContext {app: pamv1}`.
+  - `pkcs11` — `CKM_AES_GCM` wrap **inside an HSM**; the wrapping key never leaves the token.
+  - Transit/KMS reject a non-32-byte unwrapped DEK, so a tampered token can't silently downgrade you to AES-128.
+
+### 5.3 The rest of the cryptography (quick reference)
+
+| What | How |
+|---|---|
+| **PAM tokens, agent & app keys** | 24 random bytes (192-bit); stored only as a **SHA-256 hex**, looked up by hash, compared in **constant time** (`crypto/subtle`). The plaintext is shown once, never persisted. |
+| **Bootstrap / break-glass key** | Only the **SHA-256** is stored; constant-time compare. Break-glass can be split into **M-of-N Shamir shares** (over GF(2⁸)) so no one custodian can invoke it. |
+| **Audit chain** (opt-in) | Each event's `hmac = HMAC-SHA256(key, prev_hash ‖ canonical(actor,action,detail))`; verify with `/api/audit/verify`. **ed25519-signed checkpoints** (`/api/audit/head`) catch tail-truncation. |
+| **MFA** | TOTP = **HMAC-SHA1** (RFC 6238); the TOTP secret is itself vault-encrypted (AAD `mfa:<user>`); each time-step is single-use; recovery codes are stored as SHA-256. |
+| **Zero Standing Privilege** | An **ed25519 SSH CA** signs a short-lived user *certificate* per session — the account has no stored secret at all. |
+| **Session recordings** | asciicast v2 with a **SHA-256** over the exact bytes, chained recording-to-recording and anchored in the audit trail. |
+
+### 5.4 Connections — what encrypts each leg
+
+Every hop is a distinct connection with its own transport and auth. Nothing is
+trusted end-to-end: pamv1 authenticates you on the near leg and authenticates
+*itself* to the target on the far leg.
+
+```mermaid
+flowchart LR
+  OP["Operator"] -->|"1 HTTPS / SSH / psql<br/>(PAM token)"| PX["pam-server<br/>:8080 / :2222 / :5433"]
+  PX -->|"2 SSH (injected secret/cert)"| L["Linux :22"]
+  PX -->|"3 PostgreSQL (SCRAM, vaulted secret)"| PG["PostgreSQL :5432"]
+  PX -->|"4 WinRM HTTP/S (basic/NTLM)"| W["Windows :5985/5986"]
+  PX -->|"5 guacd :4822"| G["guacd"] -->|"RDP :3389"| W
+  PX -->|"KEK wrap/unwrap"| K["KMS/HSM :443"]
+```
+
+| Leg | Transport | How you/pamv1 authenticate | Encryption |
+|---|---|---|---|
+| Operator → **API** `:8080` | HTTP or native HTTPS | `X-API-Key: <PAM token>` header | TLS (native `PAM_TLS_CERT/KEY`, or terminate at an ingress; `PAM_REQUIRE_HTTPS` refuses plaintext) |
+| Operator → **SSH proxy** `:2222` | SSH (the proxy is an SSH **server** with its own host key) | SSH username `<cred>@<target>`, **password = PAM token** | SSH transport encryption. Pin the proxy's host key on your clients. |
+| Operator → **DB proxy** `:5433` | PostgreSQL wire | PAM token via cleartext-password auth | Optional TLS on the operator leg (`PAM_TLS_CERT/KEY`; `PAM_REQUIRE_DB_CLIENT_TLS`). Otherwise terminate TLS at the ingress. |
+| Proxy → **SSH target** `:22` | fresh SSH client | injected password **or** a minted ZSP certificate | SSH. Upstream host key verified against `PAM_SSH_KNOWN_HOSTS` (else trust-any + startup warning). Optional jump-host tunnel. |
+| Proxy → **PostgreSQL target** `:5432` | PostgreSQL wire | **SCRAM-SHA-256** / MD5 / cleartext, using the vaulted secret | Optional upstream TLS; verify the target cert with `PAM_DB_UPSTREAM_CA` / `PAM_DB_UPSTREAM_TLS_VERIFY`. |
+| Proxy → **WinRM** `:5985/5986` | HTTP / HTTPS | basic or NTLM, injected credential | HTTPS when `PAM_WINRM_HTTPS` (default). |
+| guacd → **RDP** `:3389` | guacd protocol then RDP | JIT credential handed to guacd (never the browser) | RDP; guacd verifies the RDP server cert unless overridden. |
+| Proxy → **KMS/HSM** | HTTPS / PKCS#11 | provider auth (Vault token, IAM, HSM PIN) | TLS / in-process; wraps the DEK only. |
+
+### 5.5 The SSH session handshake, step by step
+
+What actually happens on the wire when an operator runs
+`ssh -p 2222 root@web-01@pam` (`root` = the target account, `web-01` = the target,
+your PAM token is typed at the password prompt):
+
+1. **SSH handshake with the proxy.** The operator's SSH client completes a normal
+   SSH transport handshake *against the proxy* — the proxy presents its host key
+   (pin it), and the client offers the password.
+2. **Authenticate the token (no target contact yet).** The proxy's password
+   callback resolves the typed PAM token into an identity (role/capabilities, or a
+   directory user), and stashes the requested `target`/`cred` and the resolved
+   role in the SSH connection's permissions. A bad token is refused here (and
+   throttled per source IP).
+3. **Authorize, per connection.** After the handshake the proxy runs every gate:
+   MFA-enrollment complete? role has `connect`? protocol allowed? does a per-target
+   grant or safe membership admit this user? is an approval required and present?
+   is the concurrent-session cap free? Any "no" ends the connection.
+4. **Fail-closed audit, *then* decrypt.** The proxy durably writes `session.start`
+   to the audit trail **before** any secret is touched; if the audit store is down
+   it refuses. Only then does it **decrypt the credential just-in-time** (plaintext
+   in memory only) — or, for a ZSP credential, mint a short-lived certificate.
+5. **Dial the target.** It opens a **new SSH client connection** to the real target
+   (optionally through a jump host), **verifies the target's host key**, and
+   authenticates as the credential's account with the injected password/certificate.
+6. **Broker the channels.** It opens a `session` channel upstream and forwards the
+   operator's channel requests both ways — `pty-req`, `shell`, `exec`,
+   `window-change` — copying stdin up and stdout/stderr down. Every output byte is
+   **tee'd into the recording** (asciicast + running SHA-256) and the live-monitor
+   hub. `exec` command strings are checked against the command guard first; an
+   `+observe` session drops the operator's keystrokes and exec requests entirely.
+7. **Tear-down.** On exit it flushes and closes the recording (hashing it into the
+   audit chain, `session.record`), writes `session.end`, drops the session from the
+   registry, and — if `PAM_ROTATE_AFTER_SESSION` — rotates the credential so the
+   secret it just used can't be reused.
+
+The operator's terminal is connected to the proxy the entire time; the target's
+password/cert lives only between steps 4 and 5, inside `pam-server`, and never
+crosses to the operator.
+
+### 5.6 The database session handshake
+
+`psql "host=pam port=5433 user=root@web-01 dbname=orders"` follows the same shape
+over the PostgreSQL wire protocol:
+
+1. The proxy reads the client's **startup message** (`user=<cred>@<target>`,
+   `database`) and answers with `AuthenticationCleartextPassword`.
+2. The operator's client sends the **PAM token** as the password; the proxy
+   resolves it and runs the same gates as SSH (plus the concurrent-session cap),
+   audits `db.session.start` fail-closed, then **JIT-decrypts** the DB credential.
+3. It dials the real PostgreSQL, does the **upstream SSL negotiation**
+   (`SSLRequest` → `S`/`N`; verifies the server cert if `PAM_DB_UPSTREAM_CA` is
+   set), and authenticates as the vaulted account. With **SCRAM-SHA-256** it proves
+   knowledge of the password **without sending it**, and it **verifies the server's
+   signature** (mutual auth); MD5 and cleartext are supported for legacy servers.
+4. It sends `AuthenticationOk` back to the operator and then **relays the wire
+   protocol** in both directions — **auditing and recording every `Query`/`Parse`
+   statement** (`db.query`), refusing statements the command guard blocks, and
+   auditing the deprecated fast-path (`FunctionCall`) so nothing evades the trail.
+
+### 5.7 WinRM & RDP, briefly
+
+- **WinRM** (Windows command targets): the proxy runs each operator line as a
+  separate WinRM command over HTTP/HTTPS (basic or NTLM), injecting the vaulted
+  Windows credential; output is recorded like an SSH session. It's a command loop,
+  not a stateful PowerShell.
+- **RDP**: the browser opens a WebSocket to `/api/targets/{id}/rdp`; pamv1 hands
+  the JIT credential to a **guacd** daemon, which makes the actual RDP connection
+  and streams the rendered session back. The credential reaches guacd, never the
+  browser, and guacd can record server-side.
 
 ## 6. Day-to-day operations (the runbook)
 
@@ -372,5 +515,6 @@ Postgres), and Terraform. Full detail is in the [Administrator Guide](ADMIN-GUID
 
 | Date | Change |
 |---|---|
+| 2026-07-23 | Expanded §5 into a low-level "under the hood": the exact cipher (DEK/nonce, `v2:` token, AAD binding, KEK providers), the rest of the crypto, the encryption on every connection leg, and the step-by-step SSH/PostgreSQL/WinRM/RDP target handshakes |
 | 2026-07-23 | Aligned with the doc set (standard header, change log); added the tamper-evident-audit and kill-on-revoke safety nets; corrected the default-credential SSH example; standardized on "PAM token" for the per-user secret |
 | 2026-07-21 | Initial sysadmin how-it-works guide: the PAM problem, the chokepoint model, the secret/security model, a copy-paste runbook, safety nets, and a production checklist |
