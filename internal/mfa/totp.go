@@ -7,7 +7,7 @@ package mfa
 import (
 	"crypto/hmac"
 	"crypto/rand"
-	"crypto/sha1"
+	"crypto/sha1" // #nosec G505 -- HMAC-SHA1 is mandated by RFC 6238 TOTP for authenticator-app compatibility
 	"crypto/subtle"
 	"encoding/base32"
 	"encoding/binary"

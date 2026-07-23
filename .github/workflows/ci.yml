@@ -32,6 +32,18 @@ jobs:
         run: |
           go install golang.org/x/vuln/cmd/govulncheck@latest
           "$(go env GOPATH)/bin/govulncheck" ./...
+      - name: gosec
+        # Security static analysis. Deliberate findings are recorded inline with
+        # `#nosec Gxxx -- reason`. Excluded rules are pervasively-deliberate or noisy
+        # for a PAM and would only add suppression clutter:
+        #   G104 unhandled errors  — best-effort audit/flush calls on cleanup paths
+        #   G115 integer overflow  — safe conversions (TOTP counters, HMAC lengths)
+        #   G304 file inclusion    — every hit loads an operator-configured file, not request input
+        #   G306 WriteFile perms   — the archgen dev tool writing a public doc
+        #   G101 hardcoded creds   — LOW-confidence false positives (capability-name maps, CHANGE_ME placeholders)
+        run: |
+          go install github.com/securego/gosec/v2/cmd/gosec@latest
+          "$(go env GOPATH)/bin/gosec" -quiet -confidence high -exclude=G104,G115,G304,G306,G101 ./...
       - name: build
         run: go build ./...
       - name: architecture diagrams up to date

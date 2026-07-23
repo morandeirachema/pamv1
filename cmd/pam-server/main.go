@@ -131,9 +131,9 @@ func runHealthcheck() error {
 	client := &http.Client{Timeout: 3 * time.Second}
 	if os.Getenv("PAM_TLS_CERT") != "" && os.Getenv("PAM_TLS_KEY") != "" {
 		scheme = "https"
-		client.Transport = &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}} //nolint:gosec // loopback liveness probe only
+		client.Transport = &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}} // #nosec G402 -- loopback liveness probe only; authenticates nothing
 	}
-	resp, err := client.Get(scheme + "://" + net.JoinHostPort(host, port) + "/healthz")
+	resp, err := client.Get(scheme + "://" + net.JoinHostPort(host, port) + "/healthz") // #nosec G704 -- host is the configured PAM_LISTEN_ADDR on loopback, not user input
 	if err != nil {
 		return err
 	}
