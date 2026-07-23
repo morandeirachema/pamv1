@@ -1,11 +1,11 @@
-# pamv1 — Low-Level Architecture (living document)
+# pamv1 — Low-Level Architecture
 
 > **Living document.** Update this whenever code structure, packages, schemas,
 > wire formats, env vars or algorithms change. This is the engineer's map of
 > the codebase; the conceptual view lives in
 > [ARCHITECTURE-HIGH-LEVEL.md](ARCHITECTURE-HIGH-LEVEL.md).
 >
-> Last updated: 2026-07-21 · Reflects: **Phases 0–24 shipped** — through the 5250 management console (11), the configuration subsystem + custom-profile RBAC + hot-swap (12), the AI-agent access broker (13), SOPS-encrypted secrets (14), the PostgreSQL database session proxy (15), live session monitoring + command control (16), safes + dependent-account propagation (17), optional CyberArk Conjur secret sourcing (18), access certification campaigns (19), an ITSM/ticketing gate (20), richer approval workflows (21), Zero Standing Privilege via ephemeral SSH certificates (22), privileged threat analytics (23), and a Conjur-style application-secrets API for non-agent apps (24) — plus a keyboard-first console and the security/correctness hardening passes and code-generated diagrams. Items that need external infrastructure or a paid account to build/verify honestly are catalogued in [EXTERNAL-INFRA-GAPS.md](EXTERNAL-INFRA-GAPS.md). See the [ROADMAP](../ROADMAP.md) for authoritative per-phase status. Commit the doc update with the code change.
+> Last updated: 2026-07-23 · Reflects: Phases 0–24 + the 2026-07 hardening pass — through the 5250 management console (11), the configuration subsystem + custom-profile RBAC + hot-swap (12), the AI-agent access broker (13), SOPS-encrypted secrets (14), the PostgreSQL database session proxy (15), live session monitoring + command control (16), safes + dependent-account propagation (17), optional CyberArk Conjur secret sourcing (18), access certification campaigns (19), an ITSM/ticketing gate (20), richer approval workflows (21), Zero Standing Privilege via ephemeral SSH certificates (22), privileged threat analytics (23), and a Conjur-style application-secrets API for non-agent apps (24) — plus a keyboard-first console and the security/correctness hardening passes and code-generated diagrams. Items that need external infrastructure or a paid account to build/verify honestly are catalogued in [EXTERNAL-INFRA-GAPS.md](EXTERNAL-INFRA-GAPS.md). See the [ROADMAP](../ROADMAP.md) for authoritative per-phase status. Commit the doc update with the code change.
 
 ## 1. Language, layout, dependencies
 
@@ -32,12 +32,22 @@ internal/
   session/     # live-session registry (list + kill), shared proxy↔api
   shamir/      # Shamir secret sharing (GF(2^8)) for break-glass quorum
   alert/       # real-time alert delivery (webhook, syslog, email), break-glass events
+  ratelimit/   # shared per-key fixed-window limiter (API auth, proxies, broker)
+  conjur/      # CyberArk Conjur bootstrap-secret sourcing at startup (Phase 18)
+  ticket/      # ITSM/ticketing gate — regex + webhook ticket validation (Phase 20)
   auth/        # roles, capabilities, Principal, Resolver (RBAC), LDAP/Entra/OIDC
+  auditchain/  # keyed-HMAC tamper-evident chain + ed25519 signed checkpoints (broker + primary audit)
+  # AI-agent access broker (Phase 13):
+  agentid/     # agent identity + SPIFFE JWT-SVID verification
+  policy/      # broker policy engine (allow/deny over tool + args)
+  broker/      # JIT server-side tool execution, verifiable audit, approval/resume
+  mcp/         # Model Context Protocol transport for the broker
   store/       # Store interface + domain types + CredentialAAD
     memstore/  # in-memory impl (tests, demo)
     pgstore/   # PostgreSQL impl + embedded versioned migrations
+    storetest/ # shared store-conformance suite (memstore + live pgstore)
   api/         # REST handlers, authz middleware, user administration
-  proxy/       # SSH gateway, JIT injection, session recording, host key
+  proxy/       # SSH + PostgreSQL gateways, JIT injection, recording, cmdguard
   web/         # embedded AS/400 portal (static/index.html)
 ```
 
@@ -82,13 +92,19 @@ AAD matches on both encrypt and decrypt paths.
 Schema is applied by an embedded **migration runner** (`pgstore/migrate.go`):
 ordered `migrations/*.sql` files run once each in a transaction, tracked in a
 `schema_migrations` table. `0001_init.sql` is the idempotent baseline (safe on a
-pre-migrations database); later changes are new numbered files (through
-`0011_session_roles.sql`), applied under a `pg_advisory_lock` so concurrent replicas
-don't race. Tables: `targets`, `credentials` (FK `ON DELETE CASCADE`),
-`target_grants`, `audit_events`, `users`, `sessions`, `mfa_enrollments`,
-`mfa_recovery_codes`, `access_requests`, `checkouts` (partial UNIQUE index — one
-active lease per credential), `oidc_states`, `agent_keys`, `broker_audit_events`
-(the hash-chained agent-broker audit log), `settings` (config overrides).
+pre-migrations database); later changes are new numbered files (through the latest
+numbered migration — `0018_audit_chain.sql` at time of writing), applied under a
+`pg_advisory_lock` so concurrent replicas don't race. Tables: `targets`,
+`credentials` (FK `ON DELETE CASCADE`), `target_grants`, `audit_events` (with the
+optional `prev_hash`/`hmac` chain columns from `0018`), `users`, `sessions`,
+`mfa_enrollments`, `mfa_recovery_codes`, `access_requests`, `checkouts` (partial
+UNIQUE index — one active lease per credential), `oidc_states`, `settings` (config
+overrides), `profiles` (custom capability sets), `safes` + `safe_members`,
+`credential_dependencies`, `campaigns` + `campaign_items`, `agent_keys`,
+`broker_audit_events` (the hash-chained agent-broker audit log), `broker_tokens`,
+and `app_keys` + `app_secret_grants`. Cross-process serialization uses Postgres
+advisory locks keyed `pam_mig` (migrations), `pam_br` (broker chain), `pam_audc`
+(primary audit chain), and `pam_lfc`/`pam_ana` (worker leader election).
 
 ### 2.3 `auth` *(Phase 3a)*
 
@@ -591,6 +607,7 @@ events are also written to the separate tamper-evident `broker_audit_events` cha
 
 | Date | Change |
 |---|---|
+| 2026-07-23 | Doc-quality pass: §1 package tree completed (added `ratelimit`, `conjur`, `ticket`, `auditchain`, the broker cluster `agentid`/`policy`/`broker`/`mcp`, `storetest`); §2.2 refreshed to the current migration high-water mark (`0018`) and full table list + advisory-lock keys; header currency |
 | 2026-07-23 | **Kill in-flight sessions on revocation + break-glass share-check fix.** Revoking a login (`POST /api/login-sessions/revoke`), disabling a directory user (reconcile), or deleting a user's target grant now terminates their matching live proxied sessions via the session registry (`KillByActor` / new `KillByActorTarget`; role-grant deletions still only affect new connections, and the registry is per-replica). New audit action `session.killed`. Also fixed a real bug found while testing: the break-glass quorum share collector checked the *first* byte as the Shamir x-coordinate, but `shamir.Split`/`Combine` put it in the *last* byte — this spuriously rejected ~1/256 of valid share sets (flaky unseal) and weakened poison detection |
 | 2026-07-23 | **Signed audit checkpoints (tail-truncation detection).** The primary-audit HMAC chain catches edits/reorders/mid-deletions but not tail truncation. Added `GET /api/audit/head` (`CapReadAudit`), which returns an ed25519-signed checkpoint over `(last_id, head)` — an auditor stores it and later detects truncation, mirroring the broker chain. New `PAM_AUDIT_SIGN_SEED` (base64 32-byte ed25519 seed; requires `PAM_AUDIT_HMAC_KEY`, fail-loud). New store method `GetAuditHead`; the signing helper `auditchain.SignCheckpoint` is now shared by the broker and primary chains. 501 when unconfigured |
 | 2026-07-23 | **Security hygiene: dependency refresh + gosec gate.** Bumped outdated dependencies (AWS SDK point releases, go-logr; `go mod verify` clean, govulncheck still 0 reachable). Added `gosec` as a CI gate (`-confidence high -exclude=G104,G115,G304,G306,G101` — the pervasively-deliberate/noisy rule categories); the remaining deliberate findings (protocol-mandated md5/sha1, the documented trust-any host-key defaults, the opt-in-verify TLS fallbacks, the loopback healthcheck probe, the conditionally-Secure OIDC cookie, operator-config file reads) are recorded inline with `#nosec Gxxx -- reason`. No behavior change |

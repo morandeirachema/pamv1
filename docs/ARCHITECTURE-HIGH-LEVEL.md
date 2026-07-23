@@ -1,4 +1,4 @@
-# pamv1 — High-Level Architecture (living document)
+# pamv1 — High-Level Architecture
 
 > **Living document.** Update this on every change that alters components,
 > boundaries, data flows or trust zones. Keep it conceptual — implementation
@@ -9,7 +9,7 @@
 > [ARCHITECTURE-DIAGRAMS.md](ARCHITECTURE-DIAGRAMS.md). This file holds the
 > hand-authored conceptual diagrams below.
 >
-> Last updated: 2026-07-21 · Reflects: **Phases 0–24 shipped** — the PostgreSQL database session proxy (15), live session monitoring + command control (16), safes + dependent-account propagation (17), optional CyberArk Conjur secret sourcing (18), access certification campaigns (19), an ITSM/ticketing gate (20), richer approval workflows (21), Zero Standing Privilege via ephemeral SSH certificates (22), privileged threat analytics (23), and a Conjur-style application-secrets API for non-agent apps (24). All four Tier-1 and all three Tier-2 competitive-coverage gaps are closed, plus **two of five Tier-3** (Zero Standing Privilege, threat analytics) and the **first Tier-4** (application secrets); the 5250 console is now **keyboard-first**. See the [ROADMAP](../ROADMAP.md) for the authoritative per-phase status and [EXTERNAL-INFRA-GAPS.md](EXTERNAL-INFRA-GAPS.md) for what remains.
+> Last updated: 2026-07-23 · Reflects: Phases 0–24 + the 2026-07 hardening pass — the PostgreSQL database session proxy (15), live session monitoring + command control (16), safes + dependent-account propagation (17), optional CyberArk Conjur secret sourcing (18), access certification campaigns (19), an ITSM/ticketing gate (20), richer approval workflows (21), Zero Standing Privilege via ephemeral SSH certificates (22), privileged threat analytics (23), and a Conjur-style application-secrets API for non-agent apps (24). All four Tier-1 and all three Tier-2 competitive-coverage gaps are closed, plus **two of five Tier-3** (Zero Standing Privilege, threat analytics) and the **first Tier-4** (application secrets); the 5250 console is now **keyboard-first**. See the [ROADMAP](../ROADMAP.md) for the authoritative per-phase status and [EXTERNAL-INFRA-GAPS.md](EXTERNAL-INFRA-GAPS.md) for what remains.
 
 ## 1. Purpose
 
@@ -43,7 +43,8 @@ flowchart TB
 
     subgraph Z3["Zone: targets (IT / OT)"]
         LNX["  Linux (SSH)  "]
-        WIN["  Windows (WinRM/RDP)*  "]
+        WIN["  Windows (WinRM/RDP)  "]
+        PGT["  PostgreSQL DBs  "]
     end
 
     IDP["  Active Directory*  "]
@@ -57,10 +58,14 @@ flowchart TB
     API --> DB
     API -.->|"authn/z"| IDP
     PROXY -->|"JIT credential"| LNX
-    PROXY -.-> WIN
+    PROXY -->|"JIT credential"| WIN
+    PROXY -->|"JIT credential"| PGT
 ```
 
-`*` planned (see roadmap). Solid = implemented today.
+`*` Active Directory login is partial — LDAP/Entra/OIDC ship; Kerberos/GSSAPI is
+deferred (see [roadmap](../ROADMAP.md)). Solid edges = implemented today. Windows
+(WinRM/RDP) and the PostgreSQL session proxy ship, but need a real Windows host /
+database to verify end-to-end (see [EXTERNAL-INFRA-GAPS.md](EXTERNAL-INFRA-GAPS.md)).
 
 ## 3. Components (responsibility view)
 
@@ -81,11 +86,17 @@ flowchart TB
 | **RBAC** | Four profiles (admin/user/auditor/approver), per-user tokens | ✅ Phase 3a |
 | **AD / Entra / OIDC login** | LDAPS + Entra ID (ROPC) + OIDC auth-code SSO, groups/app-roles → roles, session tokens | ✅ Phase 3b |
 | **MFA** | TOTP (RFC 6238), recovery codes, enforce-MFA policy | ✅ Phase 3b |
-| **Windows access** | WinRM (basic/NTLM) command exec + RDP via Guacamole, JIT credentials | 🚧 Phase 4 |
+| **Windows access** | WinRM (basic/NTLM) command exec + RDP via Guacamole, JIT credentials | ✅ Phase 4 (needs a Windows host to verify end-to-end) |
 | **Credential lifecycle** | Rotation (SSH/WinRM connectors), reconciliation + drift remediation, scheduled worker | ✅ Phase 7 |
 | **OT session approval** | 4-eyes access-request workflow, per-target/global gate, air-gap mode | ✅ Phase 8 |
 | **NIS2 incident export** | Tamper-evident audit export (JSON/CSV, SHA-256), Art. 21 control matrix | ✅ Phase 9 |
 | **Observability & ops** | Prometheus `/metrics`, `/healthz`+`/readyz`, Helm chart, SBOM + cosign-signed releases | ✅ Phase 10 |
+| **Custom profiles & config subsystem** | Named capability sets beyond the four roles; DB-persisted, hot-swappable `PAM_*` overrides | ✅ Phase 12 |
+| **AI-agent access broker** | Policy over tool + args, JIT server-side execution, keyed-HMAC verifiable audit, MCP transport, SPIFFE SVID | ✅ Phase 13 |
+| **Zero Standing Privilege** | `ssh_ca` credentials store no secret; a short-lived SSH certificate is minted per session | ✅ Phase 22 |
+| **Privileged threat analytics** | Behavioral risk scoring over the audit trail; optional auto-kill of critical actors | ✅ Phase 23 |
+| **Application-secrets API** | Conjur-style pull of explicitly-granted secrets by a non-agent app (bearer key) | ✅ Phase 24 |
+| **Tamper-evident audit** | Optional HMAC chain over the primary trail + ed25519 signed checkpoints | ✅ 2026-07 hardening |
 
 ## 3a. Roles (RBAC)
 
@@ -143,7 +154,8 @@ sequenceDiagram
     Proxy->>Proxy: append audit (session.start/record/end)
 ```
 
-`*` API key today; AD user + MFA in Phase 3.
+`*` The operator authenticates with a PAM token (a per-user token, the bootstrap
+API key, or a directory/session token); MFA and SSO shipped in Phase 3b.
 
 ## 5. Cross-cutting concerns
 
@@ -173,6 +185,7 @@ flowchart LR
 
 | Date | Change |
 |---|---|
+| 2026-07-23 | Doc-quality pass: corrected the Windows-access status (marked shipped consistently across the trust-zone diagram, components table, and footnote — it needs a Windows host to verify end-to-end, not "planned"); added the PostgreSQL target node; header currency |
 | 2026-07-22 | **Security gap-analysis hardening pass** — closes the gaps from a repo-wide self-audit ([SECURITY-GAPS.md](SECURITY-GAPS.md)) without touching the architecture: safe-scoped targets are default-deny, the DB proxy enforces the MFA-enrollment gate, secret delivery is fail-closed on the audit trail, upstream DB TLS is verifiable, both proxies throttle auth, admin session-revocation lands, and the deployment gets a default-deny NetworkPolicy. The core invariant (operator never holds the credential) was already sound; these harden the trust boundaries around it |
 | 2026-07-21 | Phase 24: **application-secrets API** (Tier-4) — a Conjur-style path (`PAM_APP_SECRETS_ENABLED`) where a non-agent application retrieves the specific secrets it was **explicitly granted** with a bearer key (`GET /v1/app-secrets/{credential_id}`); default-deny, granting needs `reveal_secret`, every retrieval audited. Managed from a keyboard-first 5250 console screen (menu 15). Also: the console is now **keyboard-first** (mouse optional) |
 | 2026-07-21 | Phase 23: **privileged threat analytics** (Tier-3) — an explainable behavioral risk scorer over the audit trail (`GET /api/analytics/risk`); a background worker alerts on newly elevated high/critical actors and can terminate a critical actor's live sessions. Named signals, per-signal caps, a re-alert cooldown; the CyberArk PTA gap |

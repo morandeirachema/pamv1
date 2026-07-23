@@ -8,7 +8,7 @@ review activity. If you deploy or administer pamv1, see the
 > user-facing behavior changes (portal, connecting, roles). Add a row to the
 > [change log](#8-change-log) with each update.
 >
-> Last updated: 2026-07-21 · Reflects: **Phases 0–24** — the 5250 console (11, now keyboard-first), custom permission profiles (12), the database session proxy you connect to with `psql` (15), supervised sessions (16: a supervisor may watch live, and a command can be blocked by policy), and Zero Standing Privilege on some targets (22: no stored password — pamv1 signs a short-lived certificate for your session). See the [ROADMAP](../ROADMAP.md).
+> Last updated: 2026-07-23 · Reflects: Phases 0–24 + the 2026-07 hardening pass — the 5250 console (11, now keyboard-first), custom permission profiles (12), the database session proxy you connect to with `psql` (15), supervised sessions (16: a supervisor may watch live, and a command can be blocked by policy), and Zero Standing Privilege on some targets (22: no stored password — pamv1 signs a short-lived certificate for your session). Note: an admin revoking your access now ends your live sessions immediately. See the [ROADMAP](../ROADMAP.md).
 
 > ⚠️ Educational / pre-production project — see the [README](../README.md).
 
@@ -116,23 +116,27 @@ The portal is **keyboard-first**: the mouse is **optional**. The cursor lands on
 each screen's main field automatically, so you can just start typing — no clicking
 required.
 
-The **main menu** is your whole management surface, and it shows **only the
-options your role may use**:
+The **main menu** is your whole management surface. This is the complete menu;
+**the portal hides the rows your role may not use**, so you may see fewer:
 
-| # | Screen |
-|---|---|
-| 1 | Work with targets (+ access grants, require-approval) |
-| 2 | Work with vaulted credentials (reveal, check-out, rotate, reconcile) |
-| 3 | Credential check-out / check-in (exclusive leases) |
-| 4 | Work with active sessions (live monitor + kill) |
-| 5 | Work with access requests (4-eyes approve / deny / file) |
-| 6 | Rotation & reconciliation report |
-| 7 | Discovery scan (find and onboard hosts) |
-| 8 | Work with users & profiles (mint tokens, directory reconcile) |
-| 9 | Multi-factor authentication (enroll / recovery / disable — yourself) |
-| 10 | Display audit trail (filter + CSV export) |
-| 11 | Break-glass unseal (M-of-N quorum) |
-| 90 | Sign off |
+| # | Screen | |
+|---|---|---|
+| 1 | Work with targets (+ access grants, require-approval) | admin |
+| 2 | Work with vaulted credentials (reveal, check-out, rotate, reconcile) | admin |
+| 3 | Credential check-out / check-in (exclusive leases) | admin |
+| 4 | Work with active sessions (live monitor + kill) | |
+| 5 | Work with access requests (4-eyes approve / deny / file) | |
+| 6 | Rotation & reconciliation report | admin |
+| 7 | Discovery scan (find and onboard hosts) | admin |
+| 8 | Work with users & profiles (mint tokens, directory reconcile) | admin |
+| 9 | Multi-factor authentication (enroll / recovery / disable — yourself) | |
+| 10 | Display audit trail (filter + CSV export) | |
+| 11 | Break-glass unseal (M-of-N quorum) | |
+| 12 | Work with permission profiles | admin |
+| 13 | System configuration | admin |
+| 14 | Effective config & IaC export | admin |
+| 15 | Work with application secrets | admin |
+| 90 | Sign off | |
 
 On list screens you type an **option number** next to a row (e.g. `5` to display,
 `4` to delete) and press Enter.
@@ -231,6 +235,7 @@ is audited (`session.monitor`).
 | `command blocked by policy` (SSH exec / WinRM / SQL) | That specific command matched a command-control deny rule and was refused before reaching the target. The session continues; run something else or ask your admin. |
 | `psql`: `pamv1: authentication failed` | Your PAM token (the psql password) is wrong or deleted — check it, or ask for a new one. |
 | Portal panels are empty | Normal — your role can't read those panels. |
+| Your session ended abruptly / `connection closed` mid-session | An admin may have revoked your login or your grant to that target — revocation now ends live sessions. Confirm your access. |
 
 ---
 
@@ -238,6 +243,7 @@ is audited (`session.monitor`).
 
 | Date | Change |
 |---|---|
+| 2026-07-23 | Completed the main-menu table (items 12–15); noted that revoking access now ends live sessions (troubleshooting + header); aligned with the doc set |
 | 2026-07-21 | Portal is now **keyboard-first** (mouse optional): the cursor lands on each screen's field, **Esc** goes back, **↑/↓** move between list rows |
 | 2026-07-21 | Phase 22: some targets now use **Zero Standing Privilege** — there is no stored password; pamv1 signs a short-lived certificate just for your session. You connect exactly as before |
 | 2026-07-21 | Phases 15–16: connect to **`postgres` targets with `psql`** through the proxy (`:5433`; every SQL statement audited); sessions can be **watched live** by a supervisor and a command can be **blocked by policy** (`command blocked by policy`). Custom permission profiles (Phase 12) can be assigned in place of the four built-in roles |

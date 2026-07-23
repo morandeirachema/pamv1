@@ -8,7 +8,7 @@
 > map) — by explaining *how the code actually runs*. Keep it current: when you
 > change a subsystem, update its section here in the same change.
 >
-> Last updated: 2026-07-21 · Reflects Phases 0–24.
+> Last updated: 2026-07-23 · Reflects: Phases 0–24 + the 2026-07 hardening pass.
 
 ---
 
@@ -217,7 +217,7 @@ Sentinel errors `ErrNotFound` / `ErrConflict` map to HTTP/SSH errors upstream.
   `migrations/*.sql` files, each run once inside its own transaction, tracked in a
   `schema_migrations` table, under a session-level `pg_advisory_lock` so concurrent
   replicas booting together don't race. `0001_init.sql` is the idempotent baseline;
-  every later change is a new numbered file (through `0016_approval_workflow.sql`).
+  every later change is a new numbered file (through `0018_audit_chain.sql` at time of writing).
 
   Two implementation details are load-bearing:
   - **Error mapping is the contract.** A pgx `PgError` SQLSTATE is translated to
@@ -834,9 +834,11 @@ Tests exercise **real behavior on the security-critical path**, not mocks of it:
 - The store conformance suite (`storetest.RunStoreContract`) runs against both
   memstore and, in CI, a live PostgreSQL.
 - The analytics engine is a pure function, so its tests are deterministic.
-- CI (`.github/workflows/ci.yml`) gates on `gofmt -l`, `go vet`, `go build`,
-  `go test -race`, a Docker image build, and the `sops` round-trip. `cmd/archgen`
-  regenerates the architecture diagrams and CI fails if they drift.
+- CI (`.github/workflows/ci.yml`) gates on `gofmt -l`, `go vet`, `staticcheck`,
+  `govulncheck`, `gosec`, `go build`, `go test -race`, a Docker image build, the
+  live-Postgres store contract, the PKCS#11/SoftHSM2 build, and the `sops`
+  round-trip. `cmd/archgen` regenerates the architecture diagrams and CI fails if
+  they drift.
 
 ---
 
@@ -889,4 +891,5 @@ phase-by-phase status.
 
 | Date | Change |
 |---|---|
-| 2026-07-21 | Initial code guide covering Phases 0–23 (vault, store, auth, api, proxy, identity, lifecycle, ZSP, analytics, broker, break-glass, governance). |
+| 2026-07-23 | Doc-quality pass: current CI-gate list (`staticcheck`/`govulncheck`/`gosec` + live-Postgres/PKCS#11/sops); current migration high-water mark; header currency. |
+| 2026-07-21 | Initial code guide covering Phases 0–24 (vault, store, auth, api, proxy, identity, lifecycle, ZSP, analytics, broker, break-glass, governance). |

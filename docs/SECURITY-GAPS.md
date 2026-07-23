@@ -1,4 +1,4 @@
-# Security gaps — findings, fixes, and remaining work
+# pamv1 — Security Gaps (findings, fixes, and remaining work)
 
 > **Purpose.** This is a self-audit of pamv1 against the security posture expected
 > of a Privileged Access Management system. It records every gap found in a
@@ -7,7 +7,7 @@
 > lives. pamv1 is educational ("for learning purposes") — this document is part of
 > that: it shows the reasoning, not just the result.
 >
-> Last reviewed: 2026-07-22 · Reflects Phases 0–24.
+> Last updated: 2026-07-23 · Reflects: Phases 0–24 + the 2026-07 hardening pass.
 
 ## How the review was run
 
@@ -84,6 +84,11 @@ few authorization edges.
   AAD-binds-row-id design; a client cancel already rolls back.
 
 ## Tier 3 — Missing capabilities (deferred; new roadmap phases, not fixes)
+
+> These are severity tiers of *found gaps* — not the same as the market-coverage
+> "Tier-3/Tier-4" bands in [EXTERNAL-INFRA-GAPS.md](EXTERNAL-INFRA-GAPS.md), which
+> is the canonical list of what needs a real account/host to build and verify
+> honestly. Where an item below overlaps that list, EXTERNAL-INFRA-GAPS owns the detail.
 
 These are whole subsystems a commercial PAM has and pamv1 does not — building them
 is a phase each, out of scope for a security *fix*:

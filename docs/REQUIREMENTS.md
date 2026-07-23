@@ -1,6 +1,10 @@
-# System Requirements & Run Specs
+# pamv1 — System Requirements & Run Specs
 
-> **Alpha, for learning purposes. Not production, not audited.** These are the
+> **Living document.** Update when a version floor, port, or resource spec changes.
+>
+> Last updated: 2026-07-23 · Reflects: Phases 0–24 + the 2026-07 hardening pass.
+
+> ⚠️ **Alpha · for learning purposes. Not production, not audited.** These are the
 > specs to *run* pamv1 in Docker and Kubernetes, plus rough sizing. Validate
 > against your own load.
 
@@ -32,7 +36,7 @@ Generate before first run (see the [Admin Guide](ADMIN-GUIDE.md#31-generate-the-
 - `PAM_MASTER_KEY` — `./pam-server -genkey` (or use a KMS-backed KEK).
 - `PAM_API_KEY` — the bootstrap admin key.
 - `PAM_DATABASE_URL` — `postgres://…?sslmode=verify-full` (or `memory` for the demo).
-- Optional: `PAM_BREAK_GLASS_KEY_HASH` (`-hashkey`), TLS cert/key, OIDC/LDAP/Entra config.
+- Optional: `PAM_BREAK_GLASS_KEY_HASH` (`-hashkey`), TLS cert/key, the audit-chain keys `PAM_AUDIT_HMAC_KEY` + `PAM_AUDIT_SIGN_SEED` (base64 32 bytes each, `openssl rand -base64 32`), OIDC/LDAP/Entra config.
 
 ## Docker / docker-compose
 

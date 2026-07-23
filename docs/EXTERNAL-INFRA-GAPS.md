@@ -1,4 +1,4 @@
-# External infrastructure & accounts checklist
+# pamv1 — External Infrastructure & Accounts Checklist
 
 > **Purpose.** pamv1 follows a hard rule: *every phase is fully functional and
 > tested end-to-end without faking the security-critical path.* Where a feature
@@ -8,7 +8,7 @@
 > live. This is the operator's checklist of what you must stand up (and what to
 > re-verify) before relying on each capability in production.
 >
-> Last updated: 2026-07-21 · Reflects Phases 0–24.
+> Last updated: 2026-07-23 · Reflects: Phases 0–24 + the 2026-07 hardening pass.
 
 ## Legend
 
