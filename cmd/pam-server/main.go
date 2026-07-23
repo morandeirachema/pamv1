@@ -459,6 +459,18 @@ func run() error {
 	}
 	defer st.Close()
 
+	// Optional tamper-evident chaining of the primary audit trail. When set, the
+	// key must decode to exactly KeySize bytes — fail loud rather than silently run
+	// unchained.
+	if cfg.AuditHMACKey != "" {
+		ak, derr := base64.StdEncoding.DecodeString(cfg.AuditHMACKey)
+		if derr != nil || len(ak) != auditchain.KeySize {
+			return fmt.Errorf("PAM_AUDIT_HMAC_KEY must be base64 of %d bytes", auditchain.KeySize)
+		}
+		st.EnableAuditChain(ak)
+		log.Info("primary audit trail is tamper-evident (HMAC-chained)")
+	}
+
 	// Phase 12: overlay DB-persisted configuration onto the env-derived config
 	// before building the identity backends and policy-driven components, so
 	// stored settings take effect (identity/SSO/policy only; bootstrap/transport

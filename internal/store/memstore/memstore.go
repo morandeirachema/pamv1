@@ -3,7 +3,10 @@
 package memstore
 
 import (
+	"bytes"
 	"context"
+	"crypto/hmac"
+	"errors"
 	"sort"
 	"sync"
 	"time"
@@ -25,6 +28,7 @@ type Memstore struct {
 	checkouts     map[int64]store.Checkout
 	oidcStates    map[string]oidcState
 	audit         []store.AuditEvent
+	auditKey      []byte // set ⇒ chain the primary audit trail
 	agentKeys     map[int64]store.AgentKey
 	appKeys       map[int64]store.AppKey
 	appGrants     map[int64]store.AppSecretGrant
@@ -777,8 +781,48 @@ func (m *Memstore) AppendAudit(_ context.Context, e *store.AuditEvent) error {
 	defer m.mu.Unlock()
 	e.ID = m.id()
 	e.TS = time.Now().UTC()
+	if len(m.auditKey) > 0 {
+		var prev []byte
+		for i := len(m.audit) - 1; i >= 0; i-- {
+			if m.audit[i].HMAC != nil {
+				prev = m.audit[i].HMAC
+				break
+			}
+		}
+		e.PrevHash = prev
+		e.HMAC = store.AuditMAC(m.auditKey, prev, e)
+	}
 	m.audit = append(m.audit, *e)
 	return nil
+}
+
+// EnableAuditChain turns on tamper-evident chaining of the primary audit trail.
+func (m *Memstore) EnableAuditChain(key []byte) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.auditKey = key
+}
+
+// VerifyAuditChain recomputes the chain over every chained audit event in order.
+func (m *Memstore) VerifyAuditChain(_ context.Context) (bool, int64, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if len(m.auditKey) == 0 {
+		return false, 0, errors.New("memstore: audit chain not enabled")
+	}
+	var prev []byte
+	for i := range m.audit {
+		e := m.audit[i]
+		if e.HMAC == nil {
+			continue
+		}
+		want := store.AuditMAC(m.auditKey, prev, &e)
+		if !hmac.Equal(want, e.HMAC) || !bytes.Equal(prev, e.PrevHash) {
+			return false, e.ID, nil
+		}
+		prev = e.HMAC
+	}
+	return true, 0, nil
 }
 
 // ListAudit returns up to limit audit events, newest first (all when limit <= 0).

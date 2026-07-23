@@ -79,6 +79,11 @@ type Config struct {
 	// keeps the legacy trust-any-with-warning behavior.
 	DBUpstreamCA        string
 	DBUpstreamTLSVerify bool
+	// AuditHMACKey, when set (base64 of 32 bytes), turns on tamper-evident
+	// chaining of the PRIMARY audit trail: each event is HMAC-linked to the
+	// previous one, so editing/reordering/deleting any event is detectable via
+	// GET /api/audit/verify. Unset leaves the plain (unchained) audit table.
+	AuditHMACKey string
 	// RevealDisabled makes credential reveal break-glass-only.
 	RevealDisabled bool
 
@@ -311,6 +316,7 @@ func Load() (*Config, error) {
 		RequireDBClientTLS:  boolean("PAM_REQUIRE_DB_CLIENT_TLS", false),
 		DBUpstreamCA:        os.Getenv("PAM_DB_UPSTREAM_CA"),
 		DBUpstreamTLSVerify: boolean("PAM_DB_UPSTREAM_TLS_VERIFY", false),
+		AuditHMACKey:        os.Getenv("PAM_AUDIT_HMAC_KEY"),
 		RevealDisabled:      boolean("PAM_REVEAL_DISABLED", false),
 		BreakGlassThreshold: integer("PAM_BREAK_GLASS_THRESHOLD", 0),
 		BreakGlassShares:    integer("PAM_BREAK_GLASS_SHARES", 5),

@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/morandeirachema/pamv1/internal/store"
 	"github.com/morandeirachema/pamv1/internal/store/pgstore"
 	"github.com/morandeirachema/pamv1/internal/store/storetest"
 )
@@ -44,6 +45,60 @@ func TestPGStoreContract(t *testing.T) {
 	}
 
 	storetest.RunStoreContract(t, st)
+	storetest.RunAuditChainContract(t, st)
+}
+
+// TestPGStoreAuditChainTamperDetection proves the primary-audit chain catches a
+// database-level edit against a live PostgreSQL: it appends chained events, edits
+// one row's detail directly, and confirms VerifyAuditChain flags it.
+func TestPGStoreAuditChainTamperDetection(t *testing.T) {
+	url := os.Getenv("PAM_TEST_DATABASE_URL")
+	if url == "" {
+		t.Skip("PAM_TEST_DATABASE_URL not set; skipping live Postgres audit-chain test")
+	}
+	ctx := context.Background()
+	st, err := pgstore.Open(ctx, url)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer st.Close()
+
+	pool, err := pgxpool.New(ctx, url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	if _, err := pool.Exec(ctx, `TRUNCATE audit_events RESTART IDENTITY`); err != nil {
+		t.Fatalf("truncate: %v", err)
+	}
+
+	key := make([]byte, 32)
+	for i := range key {
+		key[i] = byte(i + 1)
+	}
+	st.EnableAuditChain(key)
+	for i := 0; i < 4; i++ {
+		if err := st.AppendAudit(ctx, &store.AuditEvent{Actor: "a", Action: "credential.reveal", Detail: "x"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if ok, _, err := st.VerifyAuditChain(ctx); err != nil || !ok {
+		t.Fatalf("fresh chain: ok=%v err=%v", ok, err)
+	}
+
+	// Edit a row in the middle of the chain, as an attacker with DB write access would.
+	if _, err := pool.Exec(ctx,
+		`UPDATE audit_events SET detail = 'TAMPERED'
+		 WHERE id = (SELECT id FROM audit_events WHERE hmac IS NOT NULL ORDER BY id ASC OFFSET 1 LIMIT 1)`); err != nil {
+		t.Fatalf("tamper update: %v", err)
+	}
+	ok, brokeAt, err := st.VerifyAuditChain(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok || brokeAt == 0 {
+		t.Fatalf("tampering not detected: ok=%v brokeAt=%d", ok, brokeAt)
+	}
 }
 
 // TestPGStoreLeaderLockMutualExclusion proves the advisory-lock leader election

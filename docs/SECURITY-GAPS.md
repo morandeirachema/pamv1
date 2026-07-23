@@ -87,10 +87,12 @@ few authorization edges.
 These are whole subsystems a commercial PAM has and pamv1 does not — building them
 is a phase each, out of scope for a security *fix*:
 
-- **Tamper-evident PRIMARY audit trail.** The keyed-HMAC chain today protects only
-  the AI-broker events; the main `audit_events` table (reveal, break-glass,
-  db.query, sessions) is unchained. Extending the chain to the primary trail is the
-  single most valuable follow-up — noted here as the top deferred item.
+- ~~**Tamper-evident PRIMARY audit trail.**~~ **Fixed (opt-in).** The keyed-HMAC
+  chain now covers the main `audit_events` table (reveal, break-glass, db.query,
+  sessions), not just broker events. Set `PAM_AUDIT_HMAC_KEY` (base64 32 bytes) to
+  activate chaining; verify with `GET /api/audit/verify`. The migration is additive
+  and unset leaves the plain table, so it's non-breaking. This was the top deferred
+  item; it is now closed.
 - **Session-recording playback** (recordings are written to disk; no API/portal
   replays them), **JIT ephemeral account provisioning** on targets, **FIDO2/
   WebAuthn**, **CIEM / cloud-IAM brokering**, **Kubernetes secret/SA delivery**,

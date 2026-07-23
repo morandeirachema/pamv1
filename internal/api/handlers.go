@@ -103,6 +103,18 @@ func (s *Server) listAudit(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, events)
 }
 
+// verifyAudit recomputes the tamper-evident chain over the primary audit trail
+// and reports whether it is intact. It returns 501 when chaining is not enabled
+// (no PAM_AUDIT_HMAC_KEY). A broken chain reports ok=false with the offending id.
+func (s *Server) verifyAudit(w http.ResponseWriter, r *http.Request) {
+	ok, brokeAtID, err := s.store.VerifyAuditChain(r.Context())
+	if err != nil {
+		writeError(w, http.StatusNotImplemented, "audit chain is not enabled (set PAM_AUDIT_HMAC_KEY)")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": ok, "broke_at_id": brokeAtID})
+}
+
 // --- helpers ---
 
 // writeJSON writes v as a JSON response body with the given status code.
