@@ -34,6 +34,14 @@ func TestIndexNonceCSP(t *testing.T) {
 	if strings.Contains(body, "__CSP_NONCE__") {
 		t.Fatal("nonce placeholder was not substituted in the served page")
 	}
+	// The vendored-client import path is content-addressed and substituted, so an
+	// upgrade of the embedded module busts the browser cache.
+	if strings.Contains(body, "__GUAC_SRC__") {
+		t.Fatal("guac-src placeholder was not substituted in the served page")
+	}
+	if !regexp.MustCompile(`/static/guacamole-common\.min\.js\?v=[0-9a-f]{12}`).MatchString(body) {
+		t.Errorf("served page does not import the content-addressed Guacamole client")
+	}
 	for _, dir := range []string{"base-uri 'none'", "form-action 'self'", "frame-ancestors 'none'", "object-src 'none'"} {
 		if !strings.Contains(csp, dir) {
 			t.Errorf("CSP missing %q: %s", dir, csp)
