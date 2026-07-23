@@ -155,6 +155,7 @@ else across the 3.5 boundary.
 
 | Date | Change |
 |---|---|
+| 2026-07-23 | **Helm NetworkPolicy: pam→guacd egress.** When `guacd.enabled` + `networkPolicy.enabled`, the pam-server default-deny NetworkPolicy now includes the `pam-server → guacd:4822` egress rule (E4a) — it was only in the raw k8s manifest, so a Helm deploy with a narrowed `egressTargetCIDRs` blocked the bundled guacd. guacd resource limits raised (256Mi→512Mi) since a large RDP display is a ~64 MiB framebuffer; guacd resource names re-truncated to the 63-char limit |
 | 2026-07-23 | **In-portal RDP viewer** — the browser now renders RDP over the **existing** `:8080/443` control plane (a WebSocket upgrade of `GET /api/targets/{id}/rdp`, preceded by `POST /api/rdp-token`); no new listener. The guacd egress (E4a `:4822` → E4b `:3389`) is unchanged |
 | 2026-07-23 | **guacd** (RDP broker) now ships as a co-deployed **internal** service (docker-compose + `deploy/k8s/guacd.yaml` + gated Helm), reached on `:4822`; `PAM_GUACD_ADDR` is wired for you and its NetworkPolicy admits only pam-server. No new *external* listeners |
 | 2026-07-23 | Phases 19–24 add no new listeners (all ride `:8080`); ZSP (22) rides `:2222`. Corrected §6: pamv1 now **ships** a default-deny `NetworkPolicy` (`deploy/k8s/networkpolicy.yaml` + a gated Helm template), not just pod-level restrictions |

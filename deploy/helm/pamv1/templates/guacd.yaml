@@ -6,7 +6,7 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ include "pamv1.fullname" . }}-guacd
+  name: {{ include "pamv1.guacdFullname" . }}
   labels:
     {{- include "pamv1.labels" . | nindent 4 }}
     app.kubernetes.io/component: guacd
@@ -14,12 +14,12 @@ spec:
   replicas: 1
   selector:
     matchLabels:
-      app.kubernetes.io/name: {{ include "pamv1.name" . }}-guacd
+      app.kubernetes.io/name: {{ include "pamv1.guacdName" . }}
       app.kubernetes.io/instance: {{ .Release.Name }}
   template:
     metadata:
       labels:
-        app.kubernetes.io/name: {{ include "pamv1.name" . }}-guacd
+        app.kubernetes.io/name: {{ include "pamv1.guacdName" . }}
         app.kubernetes.io/instance: {{ .Release.Name }}
         app.kubernetes.io/component: guacd
     spec:
@@ -62,14 +62,14 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: {{ include "pamv1.fullname" . }}-guacd
+  name: {{ include "pamv1.guacdFullname" . }}
   labels:
     {{- include "pamv1.labels" . | nindent 4 }}
     app.kubernetes.io/component: guacd
 spec:
   type: ClusterIP
   selector:
-    app.kubernetes.io/name: {{ include "pamv1.name" . }}-guacd
+    app.kubernetes.io/name: {{ include "pamv1.guacdName" . }}
     app.kubernetes.io/instance: {{ .Release.Name }}
   ports:
     - name: guacd
@@ -80,14 +80,14 @@ spec:
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: {{ include "pamv1.fullname" . }}-guacd
+  name: {{ include "pamv1.guacdFullname" . }}
   labels:
     {{- include "pamv1.labels" . | nindent 4 }}
     app.kubernetes.io/component: guacd
 spec:
   podSelector:
     matchLabels:
-      app.kubernetes.io/name: {{ include "pamv1.name" . }}-guacd
+      app.kubernetes.io/name: {{ include "pamv1.guacdName" . }}
       app.kubernetes.io/instance: {{ .Release.Name }}
   policyTypes:
     - Ingress

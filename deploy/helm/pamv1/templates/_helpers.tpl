@@ -15,6 +15,22 @@
 {{- end -}}
 {{- end -}}
 
+{{/*
+guacd resource name and selector-label value. Both re-truncate to 63 chars after
+appending "-guacd" because pamv1.fullname / pamv1.name are already truncated to 63,
+so a long release name would otherwise overflow the Kubernetes name (RFC-1035) and
+label-value limits. Use guacdFullname for metadata.name / PAM_GUACD_ADDR host and
+guacdName for the app.kubernetes.io/name label value; both must agree so the
+Service and NetworkPolicy podSelectors match the pod.
+*/}}
+{{- define "pamv1.guacdFullname" -}}
+{{- printf "%s-guacd" (include "pamv1.fullname" .) | trunc 63 | trimSuffix "-" -}}
+{{- end -}}
+
+{{- define "pamv1.guacdName" -}}
+{{- printf "%s-guacd" (include "pamv1.name" .) | trunc 63 | trimSuffix "-" -}}
+{{- end -}}
+
 {{- define "pamv1.labels" -}}
 app.kubernetes.io/name: {{ include "pamv1.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}

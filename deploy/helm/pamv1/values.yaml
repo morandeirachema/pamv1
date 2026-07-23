@@ -38,12 +38,15 @@ guacd:
     repository: guacamole/guacd
     tag: "1.5.5"
     pullPolicy: IfNotPresent
+  # Sized for a few concurrent RDP sessions: a large display (up to the server's
+  # 4096-px cap) is a ~64 MiB framebuffer plus encode buffers, so 256Mi OOM-killed
+  # the single guacd pod under light concurrency. Raise for more parallelism.
   resources:
     requests:
-      cpu: 25m
-      memory: 32Mi
+      cpu: 100m
+      memory: 128Mi
     limits:
-      memory: 256Mi
+      memory: 512Mi
 
 networkPolicy:
   enabled: false

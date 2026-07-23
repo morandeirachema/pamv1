@@ -61,12 +61,16 @@ spec:
               port: guacd
             initialDelaySeconds: 2
             periodSeconds: 5
+          # Sized for a few concurrent RDP sessions: a large display (up to the
+          # server's 4096-px cap) is a ~64 MiB framebuffer plus FreeRDP/libguac
+          # encode buffers, so 256Mi OOM-killed the single guacd pod (dropping every
+          # session) under light concurrency. Raise limits for more parallelism.
           resources:
             requests:
-              cpu: 25m
-              memory: 32Mi
+              cpu: 100m
+              memory: 128Mi
             limits:
-              memory: 256Mi
+              memory: 512Mi
       volumes:
         - name: tmp
           emptyDir: {}
