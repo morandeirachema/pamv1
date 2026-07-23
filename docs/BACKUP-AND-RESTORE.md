@@ -1,8 +1,12 @@
-# pamv1 — Backup & Restore Runbook (living document)
+# pamv1 — Backup & Restore Runbook
 
-> **Living document.** Update when the data model or deployment changes.
+> **Living document.** Update when the data model or deployment changes. See the
+> [change log](#change-log).
 >
-> Last updated: 2026-07-19 · Reflects: Phase 5.
+> Last updated: 2026-07-23 · Reflects: Phases 0–24 + the 2026-07 hardening pass.
+
+> ⚠️ **Alpha · for learning purposes.** pamv1 has not been security-audited and is
+> not production-ready.
 
 pamv1 has **two** things to protect, and they must be backed up **separately** —
 backing them up together defeats the encryption:
@@ -16,9 +20,17 @@ backing them up together defeats the encryption:
 > backup (e.g. the DB backup in object storage, the key in a secrets manager /
 > sealed envelope). Anyone holding both can decrypt every secret.
 
-Also back up, if used: the SSH proxy host key (`PAM_SSH_HOST_KEY`) and session
-recordings (`PAM_RECORDING_DIR`, including the `.chain` head that anchors the
-[recording hash chain](ARCHITECTURE-LOW-LEVEL.md)).
+Also back up, if used (these are **keys** → hold them under separate-custodian
+handling like the vault key):
+
+- the **audit-chain keys** `PAM_AUDIT_HMAC_KEY` and `PAM_AUDIT_SIGN_SEED` —
+  without the HMAC key you cannot verify the audit chain after a restore, and the
+  archived `GET /api/audit/head` ed25519 checkpoints are your only tail-truncation
+  anchor;
+- the **SSH proxy host key** (`PAM_SSH_HOST_KEY`) and the **ZSP SSH-CA key**
+  (`PAM_SSH_CA_KEY`), if configured;
+- session recordings (`PAM_RECORDING_DIR`, including the `.chain` head that anchors
+  the [recording hash chain](ARCHITECTURE-LOW-LEVEL.md)).
 
 ## Back up the database
 
@@ -31,7 +43,7 @@ age -r <recipient> pamv1-*.dump > pamv1-*.dump.age && rm pamv1-*.dump
 ```
 
 Store the dump in your backup system with retention that satisfies your audit
-requirements (NIS2 retention — see the [ports/flow](PORTS-AND-FLOWS.md) SIEM note).
+requirements (NIS2 retention — see [audit retention & SIEM forwarding](NIS2-COMPLIANCE.md#3-audit-retention--siem-forwarding)).
 
 ## Back up the vault key
 
@@ -76,5 +88,14 @@ the key matches, it works; if not, the vault key is wrong.
   superuser).
 - Enable **[pgAudit](https://www.pgaudit.org/)** for database-side audit logging
   (needs an image that bundles the extension; the demo `postgres:17-alpine` does not).
-- Managed HA (e.g. [CloudNativePG](https://cloudnative-pg.io/)) with point-in-time
-  recovery is [Phase 10](../ROADMAP.md#phase-10--scale--operations-).
+- Managed HA with point-in-time recovery **ships** in `deploy/k8s/postgres-cnpg.yaml`
+  (a 3-instance [CloudNativePG](https://cloudnative-pg.io/) cluster with automatic
+  failover). Uncomment the `backup.barmanObjectStore` block and point it at object
+  storage to enable continuous backup + PITR.
+
+## Change log
+
+| Date | Change |
+|---|---|
+| 2026-07-23 | Aligned with the doc set (standard header, change log); added the audit-chain keys and ZSP SSH-CA key to the backup inventory; corrected the CloudNativePG PITR note (ships in `deploy/k8s/postgres-cnpg.yaml`); fixed the NIS2 retention cross-link |
+| 2026-07-19 | Initial backup & restore runbook (Phase 5): separate DB and vault-key backup, restore procedure, key-loss scenarios, hardened Postgres |

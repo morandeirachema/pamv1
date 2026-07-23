@@ -1,6 +1,10 @@
-# OT / Industrial Deployment Guide (Phase 8)
+# pamv1 — OT / Industrial Deployment Guide
 
-> **Alpha, for learning purposes. Not production, not audited.** This guide
+> **Living document.** Update when an OT-relevant control or flow changes.
+>
+> Last updated: 2026-07-23 · Reflects: Phases 0–24 + the 2026-07 hardening pass (introduced Phase 8).
+
+> ⚠️ **Alpha · for learning purposes. Not production, not audited.** This guide
 > describes how pamv1 is *designed* to fit an OT architecture; validate every
 > control against your own risk assessment and [IEC 62443](https://www.isa.org/standards-and-publications/isa-standards/isa-iec-62443-series-of-standards)
 > program before relying on it.

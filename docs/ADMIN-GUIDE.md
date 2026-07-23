@@ -8,19 +8,24 @@ procedure, and read the logs and audit trail.
 > admin-facing behavior changes (config, deployment, management, logging). Add a
 > row to the [change log](#12-change-log) with each update.
 >
-> Last updated: 2026-07-21 · Reflects: **Phases 0–24** — through the AI-agent access broker (13), the PostgreSQL database session proxy (15), live monitoring + command control (16), safes + dependent-account propagation (17), optional CyberArk Conjur secret sourcing (18), access certification campaigns (19), the ITSM/ticketing gate (20), richer approval workflows (21), Zero Standing Privilege via ephemeral SSH certificates (22), privileged threat analytics (23), and the Conjur-style application-secrets API (24). The console is keyboard-first. See the [ROADMAP](../ROADMAP.md).
+> Last updated: 2026-07-23 · Reflects: Phases 0–24 + the 2026-07 hardening pass — through the AI-agent access broker (13), the PostgreSQL database session proxy (15), live monitoring + command control (16), safes + dependent-account propagation (17), optional CyberArk Conjur secret sourcing (18), access certification campaigns (19), the ITSM/ticketing gate (20), richer approval workflows (21), Zero Standing Privilege via ephemeral SSH certificates (22), privileged threat analytics (23), and the Conjur-style application-secrets API (24) — plus the post-24 hardening: an HMAC-chained audit trail with signed checkpoints (§9.2), revocation that terminates live sessions (§7), verified upstream-DB TLS, and per-IP proxy auth throttling. The console is keyboard-first. See the [ROADMAP](../ROADMAP.md).
 
 > ⚠️ **Educational / pre-production.** pamv1 is a learning project and is
 > currently intended for **pre-production** use. It has not been security-audited.
 > Do not guard real production credentials with it yet.
 
-New here? If you want the **how‑it‑works mental model and a script‑oriented
+New here? If you want the **how-it-works mental model and a script-oriented
 runbook** before this reference, start with the
 [Sysadmin Guide](SYSADMIN-GUIDE.md). Otherwise read the [concepts](#1-concepts)
 first, then jump to [deployment](#3-deployment). Operators/users should read the
 [User Guide](USER-GUIDE.md). For the big picture see the
 [high-level architecture](ARCHITECTURE-HIGH-LEVEL.md); for firewall rules see the
-[ports & flow matrix](PORTS-AND-FLOWS.md).
+[ports & flow matrix](PORTS-AND-FLOWS.md); for navigation across all docs see the
+[docs hub](README.md).
+
+### Contents
+
+1. [Concepts](#1-concepts) · 2. [Prerequisites](#2-prerequisites) · 3. [Deployment](#3-deployment) · 4. [Configuration reference](#4-configuration-reference) · 5. [Managing targets](#5-managing-targets) · 6. [Managing credentials](#6-managing-credentials) · 7. [Managing users & roles](#7-managing-users--roles) · 8. [Break-glass procedure](#8-break-glass-procedure) · 9. [Logs & audit](#9-logs--audit) · 10. [Security & hardening notes](#10-security--hardening-notes) · 11. [Troubleshooting](#11-troubleshooting) · 12. [Change log](#12-change-log)
 
 ---
 
@@ -29,11 +34,11 @@ first, then jump to [deployment](#3-deployment). Operators/users should read the
 | Term | Meaning |
 |---|---|
 | **Vault** | Where privileged secrets are stored, always encrypted ([AES-256-GCM](https://en.wikipedia.org/wiki/Galois/Counter_Mode)). The plaintext is never written to the database. |
-| **Target** | A machine you grant privileged access to (Linux via SSH today; Windows later). |
+| **Target** | A machine or database you grant privileged access to — Linux (SSH), Windows (WinRM/RDP), and PostgreSQL today. |
 | **Credential** | A privileged account (username + secret) on a target, stored in the vault. |
-| **Session proxy** | An SSH gateway that operators connect *through*. It injects the credential **just-in-time (JIT)** into the connection to the target — the operator never sees the secret. |
-| **Role** | One of `admin`, `user`, `auditor`, `approver` — determines what an identity may do. |
-| **Access token** | A per-user secret (shown once) that a user presents as `X-API-Key` or the SSH password. |
+| **Session proxy** | A gateway operators connect *through* — SSH (`:2222`) and PostgreSQL (`:5433`) — that injects the credential **just-in-time (JIT)** into the connection to the target, so the operator never sees the secret. |
+| **Role** | One of `admin`, `user`, `auditor`, `approver`, or a custom permission profile — determines what an identity may do. |
+| **PAM token** | A per-user secret (shown once) that a user presents as `X-API-Key` or the SSH/DB proxy password. (The bootstrap `PAM_API_KEY` is the initial admin equivalent.) |
 | **Break-glass** | An emergency key for admin access when the normal path is unavailable; every use is loudly audited. |
 | **Audit trail** | An append-only record (in the database) of every sensitive action. Distinct from operational **logs** (stdout). |
 
@@ -41,7 +46,7 @@ first, then jump to [deployment](#3-deployment). Operators/users should read the
 flowchart LR
     OP["Operator"] -->|"HTTPS / SSH"| PAM["pam-server<br/>portal · API · proxy"]
     PAM -->|"encrypt / decrypt"| DB[("PostgreSQL<br/>vault + audit")]
-    PAM -->|"JIT credential"| T["Target (SSH)"]
+    PAM -->|"JIT credential"| T["Target (SSH / WinRM / RDP / PostgreSQL)"]
 ```
 
 ---
@@ -289,7 +294,7 @@ curl -H "X-API-Key: $PAM_API_KEY" http://localhost:8080/api/targets/1
 curl -H "X-API-Key: $PAM_API_KEY" -X DELETE http://localhost:8080/api/targets/1   # cascades to its credentials
 ```
 
-`os_type` ∈ `linux|windows`; `protocol` ∈ `ssh|winrm|rdp`.
+`os_type` ∈ `linux|windows`; `protocol` ∈ `ssh|winrm|rdp|postgres`.
 
 **Per-target access grants** restrict who may connect. A target with no grants is
 open to any connect-capable user; add grants to lock it down (admins always have
@@ -320,7 +325,7 @@ curl -H "X-API-Key: $PAM_API_KEY" -X POST http://localhost:8080/api/credentials/
 curl -H "X-API-Key: $PAM_API_KEY" -X DELETE http://localhost:8080/api/credentials/1
 ```
 
-`secret_type` is `password` or `ssh_key` (paste the PEM private key as `secret`).
+`secret_type` is `password`, `ssh_key` (paste the PEM private key as `secret`), or `ssh_ca` (Zero Standing Privilege — no stored secret; see the ZSP subsection below).
 Once the proxy is your normal path, **`reveal` should be the exception** — prefer
 brokered sessions so the secret is never shown.
 
@@ -436,7 +441,7 @@ works). Users with the connect capability run commands through pamv1 — the
 credential is injected just-in-time and never shown:
 
 ```bash
-curl -H "X-API-Key: $TOKEN" -X POST http://localhost:8080/api/targets/1/winrm \
+curl -H "X-API-Key: $PAM_API_KEY" -X POST http://localhost:8080/api/targets/1/winrm \
   -d '{"command":"whoami; hostname"}'
 # → {"target":"win-01","exit_code":0,"stdout":"contoso\\svc-admin\r\n...","stderr":""}
 ```
@@ -475,7 +480,7 @@ itself is usable by any Guacamole-compatible client today.
 ### Database targets (PostgreSQL)
 
 The database session proxy (Phase 15) extends the same JIT chokepoint to
-**PostgreSQL**: an operator connects with `psql` and their PAM key, the proxy
+**PostgreSQL**: an operator connects with `psql` and their PAM token, the proxy
 injects the vaulted database credential, and **every SQL statement is audited**
 (`db.query`) and recorded. The operator never sees the database password. Enable
 the listener:
@@ -493,11 +498,11 @@ curl -sX POST https://pam.example/api/targets -H "X-API-Key: $PAM_API_KEY" \
 ```
 
 Operators then connect through the proxy — the username selects the credential
-and target, the password is their PAM key (or per-user token):
+and target, the password is their PAM token (or per-user token):
 
 ```bash
 psql "host=pam.example port=5433 user=dbuser@appdb dbname=orders"
-# Password: <your PAM key>
+# Password: <your PAM token>
 ```
 
 The proxy runs the same authorization gates as the SSH proxy (role capability,
@@ -741,16 +746,16 @@ path. Once enrolled, `POST /api/login` requires the 6-digit code.
 
 ```bash
 # 1. Enroll (as the signed-in user): returns the secret + otpauth URI, once
-curl -H "X-API-Key: $TOKEN" -X POST http://localhost:8080/api/mfa/enroll
+curl -H "X-API-Key: $PAM_API_KEY" -X POST http://localhost:8080/api/mfa/enroll
 # → {"secret":"…","otpauth_uri":"otpauth://totp/pamv1:alice?…"}
 #    add the otpauth URI / secret to your authenticator app
 
 # 2. Confirm with a code from the app
-curl -H "X-API-Key: $TOKEN" -X POST http://localhost:8080/api/mfa/verify -d '{"otp":"123456"}'
+curl -H "X-API-Key: $PAM_API_KEY" -X POST http://localhost:8080/api/mfa/verify -d '{"otp":"123456"}'
 
 # status / disable
-curl -H "X-API-Key: $TOKEN" http://localhost:8080/api/mfa
-curl -H "X-API-Key: $TOKEN" -X DELETE http://localhost:8080/api/mfa
+curl -H "X-API-Key: $PAM_API_KEY" http://localhost:8080/api/mfa
+curl -H "X-API-Key: $PAM_API_KEY" -X DELETE http://localhost:8080/api/mfa
 ```
 
 The TOTP secret is stored **vault-encrypted** and returned only once at enrollment.
@@ -1252,6 +1257,7 @@ scores in your environment.
 
 | Date | Change |
 |---|---|
+| 2026-07-23 | Doc-quality pass: added a contents index; de-staled §1 Concepts (Windows/PostgreSQL targets, DB proxy, custom profiles) and the `protocol`/`secret_type` type-lists; standardized on "PAM token"; fixed undefined `$TOKEN` in examples; header currency |
 | 2026-07-23 | **Signed audit checkpoints.** With `PAM_AUDIT_SIGN_SEED` (+ `PAM_AUDIT_HMAC_KEY`), `GET /api/audit/head` returns an ed25519-signed checkpoint so an auditor can detect **tail truncation** the HMAC chain alone can't. Archive checkpoints out-of-band. See §9.2 |
 | 2026-07-23 | **Tamper-evident primary audit trail** (opt-in). Set `PAM_AUDIT_HMAC_KEY` (base64 32 bytes) to HMAC-chain the whole `audit_events` table, not just broker events; any edit/reorder/delete is detectable via `GET /api/audit/verify`. Additive, non-breaking (unset = plain table). See §4 and §9.2 |
 | 2026-07-22 | **Security gap-analysis hardening pass** ([SECURITY-GAPS.md](SECURITY-GAPS.md)). Safe-scoped targets are now default-deny (a target in an empty safe is no longer open to all); the DB proxy enforces the MFA-enrollment gate; secret delivery and proxied sessions are **fail-closed on the audit trail**. New admin controls: `GET /api/login-sessions` + `POST /api/login-sessions/revoke`, and reconcile revokes disabled directory sessions (§7). New env: `PAM_REQUIRE_HTTPS`, `PAM_REQUIRE_DB_CLIENT_TLS`, `PAM_DB_UPSTREAM_CA`/`_TLS_VERIFY`, `PAM_PROXY_AUTH_RATE_LIMIT`, `PAM_TRUSTED_PROXY_HOPS`, `PAM_ALLOW_WEAK_API_KEY` (§4); `-rotate-kek` migrates between KEK providers via `PAM_NEW_KEK_*` (§8). Deploy: default-deny `NetworkPolicy` (§3.4), pinned image tags. See §10 |
@@ -1264,7 +1270,7 @@ scores in your environment.
 | 2026-07-21 | Phase 18: **Conjur secret sourcing** — an alternative to SOPS: set `PAM_CONJUR_URL` and pam-server fetches its own bootstrap secrets from CyberArk Conjur at startup (authn-api-key or Kubernetes authn-jwt). Both ship; SOPS stays the default. See [deploy/k8s/conjur/README.md](../deploy/k8s/conjur/README.md) |
 | 2026-07-21 | Phase 17: **safes + dependent-account propagation** — group targets into delegated-access safes (`/api/safes`, a member reaches every target in the safe; `can_manage` delegated administration) and declare a credential's consumers (`/api/credentials/{id}/dependencies`) so rotation updates the Windows Services / Scheduled Tasks / IIS App Pools that use it. See §7 → *Safes* and *Dependent accounts* |
 | 2026-07-21 | Phase 16: **live session monitoring + command control** — watch an SSH/PostgreSQL session live over `GET /api/sessions/{id}/stream` (SSE, `CapReadAudit`); block dangerous commands on exec/WinRM/SQL via a regex denylist (`PAM_COMMAND_DENY_FILE`, audited `command.blocked`). See §9.4 |
-| 2026-07-20 | Phase 15: **PostgreSQL database session proxy** (`PAM_DB_ADDR`) — brokers `postgres` targets with JIT credential injection and **per-statement query audit** (`db.query`); operators use `psql user=<dbcred>@<target>` with their PAM key. Same authorization gates as the SSH proxy; upstream auth via SCRAM-SHA-256/MD5/cleartext. See §5 → *Database targets (PostgreSQL)* |
+| 2026-07-20 | Phase 15: **PostgreSQL database session proxy** (`PAM_DB_ADDR`) — brokers `postgres` targets with JIT credential injection and **per-statement query audit** (`db.query`); operators use `psql user=<dbcred>@<target>` with their PAM token. Same authorization gates as the SSH proxy; upstream auth via SCRAM-SHA-256/MD5/cleartext. See §5 → *Database targets (PostgreSQL)* |
 | 2026-07-20 | Post-review hardening: directory logins grant the **union** of every mapped group's role (not the single highest); a parked agent approval is **re-validated at decision time** (revoked key / expired SVID refused); broker-audit append serializes under a Postgres advisory lock so a rolling-deploy/HA overlap can't fork the hash chain; numeric policy arguments match in plain decimal |
 | 2026-07-20 | Phase 14: **SOPS-encrypted Kubernetes secrets** — seal the Secret manifest with [SOPS](https://github.com/getsops/sops)+[age](https://age-encryption.org/) and keep it in Git; `deploy/k8s/sops/apply.sh` streams decrypt→`kubectl apply` (plaintext never on disk). See [deploy/k8s/sops/README.md](../deploy/k8s/sops/README.md) |
 | 2026-07-20 | Phase 13: **AI-agent access broker** — opt-in via `PAM_BROKER_POLICY_FILE`; policy-gated tool calls with JIT server-side execution, approval/resume + single-use tokens, an MCP transport (`POST /mcp`), SPIFFE JWT-SVID identity, and a keyed-HMAC verifiable audit chain (`GET /v1/audit/verify`/`/head`). See §7 → *AI-agent access broker* |

@@ -1,4 +1,4 @@
-# Related PAM projects — open-source & commercial landscape
+# pamv1 — Related PAM Projects (open-source & commercial landscape)
 
 > How pamv1 sits in the wider Privileged Access Management landscape — both the
 > **open-source** projects and the **commercial** products (including the many
@@ -7,16 +7,17 @@
 > comparison lives in the README's
 > [coverage section](../README.md#coverage-vs-commercial-pam-cyberark-wallix-).
 >
-> Last updated: 2026-07-22. **Two caveats.** (1) *Licenses change* — several
-> formerly-OSI-open projects moved to *source-available* terms (HashiCorp
-> **Vault**/**Boundary** → BUSL; **Bastillion** → a non-commercial license), which is
-> not the same as OSI "open source". (2) The **commercial market consolidates
-> constantly** (mergers, renames, acquisitions) — verify current ownership and product
-> names against each vendor.
+> Last updated: 2026-07-23 · Reflects: the PAM landscape as of mid-2026.
+>
+> **Two caveats.** (1) *Licenses change* — several formerly-OSI-open projects moved
+> to *source-available* terms (HashiCorp **Vault**/**Boundary** → BUSL;
+> **Bastillion** → a non-commercial license), which is not the same as OSI "open
+> source". (2) The **commercial market consolidates constantly** (mergers, renames,
+> acquisitions) — verify current ownership and product names against each vendor.
 
 ---
 
-# Part 1 — Open source
+## Part 1 — Open source
 
 The big all-in-one PAM leaders are proprietary (see Part 2); the open-source world is
 more **fragmented**: a couple of full platforms, plus many projects that each cover one
@@ -54,7 +55,7 @@ flowchart TB
   PAM -.uses ideas from.-> S & Z & G
 ```
 
-## Full-featured PAM / access bastions (closest to pamv1)
+### Full-featured PAM / access bastions (closest to pamv1)
 
 | Project | License | What it is | Relation to pamv1 |
 |---|---|---|---|
@@ -65,7 +66,7 @@ flowchart TB
 | [sshportal](https://github.com/moul/sshportal) | Apache-2.0 | A small single-binary SSH bastion with host/user management, ACLs and recording | PAM-lite; similar "one binary, Postgres/SQLite" spirit |
 | [HashiCorp Boundary](https://www.boundaryproject.io/) | BUSL (source-available) | Identity-based session brokering with credential injection, pairs with Vault | Same "broker the session, inject the credential" idea; different licensing posture |
 
-## Secrets / credential management (the vault half of PAM)
+### Secrets / credential management (the vault half of PAM)
 
 | Project | License | What it is | Relation to pamv1 |
 |---|---|---|---|
@@ -74,7 +75,7 @@ flowchart TB
 | [CyberArk Conjur (OSS)](https://www.conjur.org/) | Apache-2.0 | Machine-identity secrets for apps/DevOps | pamv1 can **source its own bootstrap secrets** from Conjur (Phase 18), and its Tier-4 **application-secrets API** (Phase 24) is "Conjur-style" |
 | [Infisical](https://github.com/Infisical/infisical) · [Passbolt](https://www.passbolt.com/) | MIT core / AGPL | Secrets & team-password vaulting | Vault-only; no session brokering |
 
-## Ephemeral credentials / SSH certificate authorities (Zero Standing Privilege)
+### Ephemeral credentials / SSH certificate authorities (Zero Standing Privilege)
 
 | Project | License | What it is |
 |---|---|---|
@@ -84,13 +85,13 @@ flowchart TB
 pamv1's Phase 22 (`internal/sshca`) is a small, self-contained version of this idea wired
 directly into the proxy — no external CA service required.
 
-## Session gateways / clientless remote access
+### Session gateways / clientless remote access
 
 | Project | License | What it is | Relation to pamv1 |
 |---|---|---|---|
 | [Apache Guacamole](https://guacamole.apache.org/) | Apache-2.0 | Clientless RDP/VNC/SSH through the browser, with server-side recording | pamv1 **uses `guacd`** for its RDP brokering (Phase 4) |
 
-## Identity layer (adjacent — usually paired with a PAM, not a PAM themselves)
+### Identity layer (adjacent — usually paired with a PAM, not a PAM themselves)
 
 | Project | License | What it is |
 |---|---|---|
@@ -100,7 +101,7 @@ directly into the proxy — no external CA service required.
 
 ---
 
-# Part 2 — Commercial
+## Part 2 — Commercial
 
 The market leaders are proprietary; but note (Part 2c) how many commercial products are the
 paid edition of, or are built directly on, the open-source projects above.
@@ -131,7 +132,7 @@ flowchart TB
   M -. many have an OSS lineage .-> O
 ```
 
-## 2a. Traditional PAM leaders (proprietary; no open-source core)
+### 2a. Traditional PAM leaders (proprietary; no open-source core)
 
 | Vendor / product | What it is | Notable pieces |
 |---|---|---|
@@ -142,7 +143,7 @@ flowchart TB
 | [One Identity](https://www.oneidentity.com/products/safeguard/) (Quest) | PAM within IGA | **Safeguard** for Privileged Passwords / Sessions (session mgmt from the acquired Balabit Shell Control Box) |
 | [ARCON](https://arconnet.com/) · [Fudo Security](https://fudosecurity.com/) · [ManageEngine PAM360](https://www.manageengine.com/privileged-access-management/) · [Senhasegura](https://senhasegura.com/) · [Netwrix Privilege Secure](https://www.netwrix.com/privileged-access-management.html) | Mid-market / regional / JIT specialists | ARCON & Fudo (session mgmt); ManageEngine (affordable all-in-one); Senhasegura (LATAM); Netwrix Privilege Secure = the acquired **Remediant** JIT/ZSP tech |
 
-## 2b. Cloud-native / modern access & CIEM
+### 2b. Cloud-native / modern access & CIEM
 
 | Vendor / product | What it is | Open-source lineage |
 |---|---|---|
@@ -151,7 +152,7 @@ flowchart TB
 | [Britive](https://www.britive.com/) | Cloud PAM / CIEM — JIT cloud privileges, entitlement right-sizing | Proprietary |
 | [Microsoft Entra PIM](https://learn.microsoft.com/en-us/entra/id-governance/privileged-identity-management/pim-configure) · [Okta Privileged Access](https://www.okta.com/products/privileged-access/) | Privileged Identity Management inside the IAM suites (JIT role activation) | Proprietary |
 
-## 2c. Commercial products built ON open-source projects ("following open source")
+### 2c. Commercial products built ON open-source projects ("following open source")
 
 The most interesting overlap: several commercial offerings are the paid edition of, or are
 built directly on top of, one of the open-source projects in Part 1.

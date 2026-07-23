@@ -48,14 +48,17 @@ but don't trust it with real secrets.
 
 🔎 **Live overview:** [interactive project page](https://claude.ai/code/artifact/a1b34e5b-cd84-4fc7-8389-ebb1897495f7) — what works, architecture and roadmap at a glance &nbsp;·&nbsp; 📖 **[Léelo en español →](README.es.md)**
 
-**Documentation** — living docs, kept in step with the code:
+## Documentation
 
-- **[Sysadmin Guide — how it works](docs/SYSADMIN-GUIDE.md)** — start here: a script-oriented explanation of what pamv1 does, how the pieces fit, and copy-paste `curl`/`ssh` recipes for day-to-day operations. The mental model + runbook.
-- **[User Guide](docs/USER-GUIDE.md)** — for operators / auditors / approvers: signing in, connecting through the proxy, per-role abilities.
+**[📚 Documentation hub](docs/README.md)** — living docs with reading paths by
+audience (new / operator / admin / developer / auditor / OT). Start there, or jump to:
+
+- **[Sysadmin Guide — how it works](docs/SYSADMIN-GUIDE.md)** — best first read: what pamv1 does, how the pieces fit, and copy-paste `curl`/`ssh` recipes. The mental model + runbook.
+- **[User Guide](docs/USER-GUIDE.md)** — operators / auditors / approvers: signing in, connecting through the proxy, per-role abilities.
 - **[Administrator Guide](docs/ADMIN-GUIDE.md)** — the full reference: deploy, configure (every flag), manage targets / credentials / users / roles, break-glass, logging & audit.
-- **[Architecture — high level](docs/ARCHITECTURE-HIGH-LEVEL.md)** and **[low level](docs/ARCHITECTURE-LOW-LEVEL.md)** (the fullest map — read it first), plus **[code-derived diagrams](docs/ARCHITECTURE-DIAGRAMS.md)** (package graph, data model, REST surface — generated from source and CI-enforced current).
-- **[Ports & network-flow matrix](docs/PORTS-AND-FLOWS.md)** · **[backup & restore runbook](docs/BACKUP-AND-RESTORE.md)** · **[OT deployment guide](docs/OT-DEPLOYMENT.md)** · **[NIS2 compliance pack](docs/NIS2-COMPLIANCE.md)**.
-- **[Related PAM projects — open-source & commercial](docs/RELATED-PROJECTS.md)** — how pamv1 sits among the open-source projects (JumpServer, Teleport, Warpgate, Vault/OpenBao, step-ca, Guacamole …) and the commercial vendors (CyberArk, BeyondTrust, Delinea, Wallix …), including which commercial products are built on open-source cores · **[external-infra gaps](docs/EXTERNAL-INFRA-GAPS.md)** (what needs a real account/host to verify).
+- **Architecture & code** — **[high level](docs/ARCHITECTURE-HIGH-LEVEL.md)**, **[low level](docs/ARCHITECTURE-LOW-LEVEL.md)** (the fullest map), **[code-derived diagrams](docs/ARCHITECTURE-DIAGRAMS.md)** (CI-enforced current), and the **[Code Guide](docs/CODE-GUIDE.md)** (narrative walkthrough — for contributors).
+- **Security & ops** — **[Security Gaps](docs/SECURITY-GAPS.md)** (self-audit) · **[Requirements](docs/REQUIREMENTS.md)** · **[Ports & Flows](docs/PORTS-AND-FLOWS.md)** · **[Backup & Restore](docs/BACKUP-AND-RESTORE.md)** · **[External-Infra Gaps](docs/EXTERNAL-INFRA-GAPS.md)**.
+- **Compliance & landscape** — **[OT Deployment](docs/OT-DEPLOYMENT.md)** · **[NIS2 Compliance](docs/NIS2-COMPLIANCE.md)** · **[Related PAM projects](docs/RELATED-PROJECTS.md)** (open-source & commercial landscape).
 
 ## Architecture
 

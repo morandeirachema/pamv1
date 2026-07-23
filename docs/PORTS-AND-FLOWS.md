@@ -1,10 +1,10 @@
-# pamv1 — Ports & Network Flow Matrix (living document)
+# pamv1 — Ports & Network Flow Matrix
 
 > **Living document.** Update whenever a listener, an upstream protocol, or a
 > deployment flow changes. This is the reference for firewall rules, security
 > groups, NetworkPolicies and OT segmentation.
 >
-> Last updated: 2026-07-21 · Reflects: **Phases 0–24**. Ports marked *planned* have
+> Last updated: 2026-07-23 · Reflects: Phases 0–24 + the 2026-07 hardening pass. Ports marked *planned* have
 > no listener/dialer yet — do not open them until the phase lands. Phases 19–24 add
 > **no new listeners**: certification/ticketing/approvals (19–21), threat analytics
 > (23) and the application-secrets API (24) all ride the existing HTTP control plane
@@ -135,10 +135,12 @@ deny   <operator-cidr>,<target-cidr> -> db:5432
 ```
 
 Kubernetes: pamv1 ships the pod-level restrictions (restricted PSS, non-root,
-read-only rootfs, dropped capabilities). The namespace-level `NetworkPolicy` — a
-default-deny paired with explicit allows mirroring the table above — is an
-operator step to apply via your CNI; pamv1 does not ship a `NetworkPolicy`
-manifest (it depends on your CNI and topology).
+read-only rootfs, dropped capabilities) **and** a default-deny `NetworkPolicy` —
+`deploy/k8s/networkpolicy.yaml` (raw manifest, applied by `kubectl apply -f deploy/k8s/`)
+and a gated Helm template (`networkPolicy.enabled`, default `false` in `values.yaml`).
+Both mirror the allow-list above: ingress only on the app ports, egress only to DNS,
+PostgreSQL, and your target networks. Tighten the ingress `from` CIDRs and the
+RFC-1918 egress blocks for your topology and CNI before relying on it.
 
 ## 7. OT / industrial placement (Phase 8)
 
@@ -153,5 +155,6 @@ else across the 3.5 boundary.
 
 | Date | Change |
 |---|---|
+| 2026-07-23 | Phases 19–24 add no new listeners (all ride `:8080`); ZSP (22) rides `:2222`. Corrected §6: pamv1 now **ships** a default-deny `NetworkPolicy` (`deploy/k8s/networkpolicy.yaml` + a gated Helm template), not just pod-level restrictions |
 | 2026-07-21 | Refreshed for Phases 0–18: added the **`:5433` database-proxy listener** (I5) and its egress to postgres targets (E10, `:5432`); marked the now-shipped flows implemented — Prometheus scrape (I4), rotation/reconciliation (E7), syslog (E8), alerts (E9); added **CyberArk Conjur** (E11, `:443`, optional) and the **KMS/HSM KEK** egress (E12); folded Entra/OIDC into the identity egress; noted native HTTPS + the db-proxy operator-leg TLS. Diagram and firewall summary updated |
 | 2026-07-18 | Initial ports & flow matrix (Phase 3a): 8080/2222 listeners, 5432 egress, 22 target SSH; planned WinRM/RDP/LDAP/syslog/alerting flows |

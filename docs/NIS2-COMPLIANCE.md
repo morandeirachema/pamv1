@@ -1,6 +1,10 @@
-# NIS2 Compliance Pack (Phase 9)
+# pamv1 — NIS2 Compliance Pack
 
-> **Alpha, for learning purposes. Not production, not audited, not legal advice.**
+> **Living document.** Update when a mapped control or endpoint changes.
+>
+> Last updated: 2026-07-23 · Reflects: Phases 0–24 + the 2026-07 hardening pass (introduced Phase 9).
+
+> ⚠️ **Alpha · for learning purposes. Not production, not audited, not legal advice.**
 > This maps pamv1 features to [Directive (EU) 2022/2555 (NIS2)](https://eur-lex.europa.eu/eli/dir/2022/2555/oj)
 > to show *how a PAM supports* an operator's obligations. Compliance is a
 > property of your whole organisation and its national transposition, not of a
@@ -16,13 +20,13 @@ Privileged access is where many of those measures are enforced.
 | # | NIS2 Art. 21(2) measure | How pamv1 supports it | Status |
 |---|---|---|---|
 | (a) | Risk analysis & information-system security policies | Roles, per-target grants, approval policy are declarative config (IaC); [template](#4-risk-management-documentation-template) below | 🟡 partial (docs) |
-| (b) | Incident handling | Append-only audit trail + [tamper-evident export](#2-incident-reporting-art-23) for early-warning/notification | ✅ |
+| (b) | Incident handling | Append-only audit trail, optionally **HMAC-chained** and cryptographically verifiable (`GET /api/audit/verify`) with ed25519 signed checkpoints (`/api/audit/head`), plus a [tamper-evident export](#2-incident-reporting-art-23) for early-warning/notification | ✅ |
 | (c) | Business continuity, backup, crisis mgmt | [Backup & restore runbook](BACKUP-AND-RESTORE.md); break-glass emergency access | ✅ |
 | (d) | Supply-chain security | Vendor access is brokered, time-boxed (approval window) and recorded; no standing vendor credentials | 🟡 partial |
-| (e) | Security in acquisition/development/maintenance, vuln handling | Versioned DB migrations; CI (build/vet/test/race); SBOM + signed releases on the [roadmap](../ROADMAP.md#phase-10--scale--operations-) | 🟡 partial |
+| (e) | Security in acquisition/development/maintenance, vuln handling | Versioned DB migrations; CI gates `gofmt`/`vet`/`staticcheck`/`govulncheck`/`gosec`/`test -race`; SBOM + cosign-signed releases + SLSA provenance (`.github/workflows/release.yml`) | ✅ |
 | (f) | Policies to assess effectiveness | Audit trail + reconciliation reports (`GET /api/reconcile`) evidence control operation | ✅ |
 | (g) | Basic cyber hygiene & training | AS/400 portal deliberately signals gravity; least-privilege defaults | 🟡 partial |
-| (h) | Cryptography & encryption policy | Envelope encryption (AES-256-GCM per-secret data key wrapped by a pluggable KEK — local / Vault Transit / AWS KMS); LDAPS/HTTPS/TLS only | ✅ |
+| (h) | Cryptography & encryption policy | Envelope encryption (AES-256-GCM per-secret data key wrapped by a pluggable KEK — local / Vault Transit / AWS KMS / **PKCS#11 HSM**); LDAPS/HTTPS/TLS only | ✅ |
 | (i) | Human-resources security, access control, asset mgmt | Four RBAC roles, per-target grants, 4-eyes approval, break-glass quorum, credential lifecycle (rotation/reconciliation) | ✅ |
 | (j) | MFA / continuous auth, secured comms, secured emergency comms | TOTP MFA + recovery codes + enforce-MFA policy; OIDC/Entra SSO; all sessions brokered, JIT-injected and recorded | ✅ |
 
@@ -67,10 +71,14 @@ curl -H "X-API-Key: $PAM_API_KEY" \
 
 - **Query params:** `since`, `until` (RFC3339), `actor` (substring), `action`
   (exact), `format` (`json` | `csv`).
-- **Tamper evidence:** the response carries a **SHA-256** over the exact event
-  list — in the JSON `sha256` field and the `X-PAM-Export-SHA256` header. Record
-  the digest when you hand the export to the authority; anyone can recompute it to
-  prove the file was not altered. The same closed window always yields the same
+- **Tamper evidence — two layers.** *At rest:* enable the primary audit chain
+  (`PAM_AUDIT_HMAC_KEY`) and every event is HMAC-linked to the previous one, so any
+  edit, reorder, or deletion is detectable via `GET /api/audit/verify`; add
+  `PAM_AUDIT_SIGN_SEED` and archive the ed25519-signed checkpoint from
+  `GET /api/audit/head` to also catch tail-truncation. *In transit:* the export
+  carries a **SHA-256** over the exact event list (JSON `sha256` field +
+  `X-PAM-Export-SHA256` header) — record it when you hand the file to the
+  authority; anyone can recompute it. The same closed window always yields the same
   digest.
 - **The export is itself audited** (`audit.export` with the digest), so the act of
   producing evidence is on the record too.
