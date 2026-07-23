@@ -473,6 +473,11 @@ type Store interface {
 	// reports whether it is intact. brokeAtID is the id of the first event whose
 	// HMAC does not match (0 when ok). It errors if the chain is not enabled.
 	VerifyAuditChain(ctx context.Context) (ok bool, brokeAtID int64, err error)
+	// GetAuditHead returns the most recent chained audit event (for a signed
+	// checkpoint that detects tail truncation), or (nil, nil) when the chain is
+	// empty. Unaffected by whether chaining is enabled — it simply reads the latest
+	// row that carries an HMAC.
+	GetAuditHead(ctx context.Context) (*AuditEvent, error)
 	// ListAudit returns the most recent audit events, newest first.
 	ListAudit(ctx context.Context, limit int) ([]AuditEvent, error)
 	// ExportAudit returns every audit event with since <= ts < until, ordered

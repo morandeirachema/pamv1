@@ -8,7 +8,9 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
+	"github.com/morandeirachema/pamv1/internal/auditchain"
 	"github.com/morandeirachema/pamv1/internal/store"
 )
 
@@ -113,6 +115,29 @@ func (s *Server) verifyAudit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": ok, "broke_at_id": brokeAtID})
+}
+
+// auditHead returns an ed25519-signed checkpoint of the primary audit chain's
+// current head. An auditor stores it out-of-band and later detects TAIL
+// TRUNCATION (which the HMAC chain alone cannot catch) by re-verifying the signed
+// (last_id, head) against the published public key. Returns 501 when checkpoint
+// signing is not configured (no PAM_AUDIT_SIGN_SEED).
+func (s *Server) auditHead(w http.ResponseWriter, r *http.Request) {
+	if s.auditSignKey == nil {
+		writeError(w, http.StatusNotImplemented, "audit checkpoints are not enabled (set PAM_AUDIT_HMAC_KEY and PAM_AUDIT_SIGN_SEED)")
+		return
+	}
+	head, err := s.store.GetAuditHead(r.Context())
+	if err != nil {
+		storeError(w, err)
+		return
+	}
+	var lastID int64
+	var h []byte
+	if head != nil {
+		lastID, h = head.ID, head.HMAC
+	}
+	writeJSON(w, http.StatusOK, auditchain.SignCheckpoint(s.auditSignKey, lastID, h, time.Now()))
 }
 
 // --- helpers ---

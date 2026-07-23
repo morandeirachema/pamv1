@@ -84,6 +84,11 @@ type Config struct {
 	// previous one, so editing/reordering/deleting any event is detectable via
 	// GET /api/audit/verify. Unset leaves the plain (unchained) audit table.
 	AuditHMACKey string
+	// AuditSignSeed, when set (base64 of 32 bytes) alongside AuditHMACKey, is an
+	// ed25519 seed for signing audit-chain checkpoints (GET /api/audit/head). An
+	// auditor stores a signed head and later detects TAIL TRUNCATION (which the
+	// HMAC chain alone cannot catch). Unset disables the checkpoint endpoint.
+	AuditSignSeed string
 	// RevealDisabled makes credential reveal break-glass-only.
 	RevealDisabled bool
 
@@ -317,6 +322,7 @@ func Load() (*Config, error) {
 		DBUpstreamCA:        os.Getenv("PAM_DB_UPSTREAM_CA"),
 		DBUpstreamTLSVerify: boolean("PAM_DB_UPSTREAM_TLS_VERIFY", false),
 		AuditHMACKey:        os.Getenv("PAM_AUDIT_HMAC_KEY"),
+		AuditSignSeed:       os.Getenv("PAM_AUDIT_SIGN_SEED"),
 		RevealDisabled:      boolean("PAM_REVEAL_DISABLED", false),
 		BreakGlassThreshold: integer("PAM_BREAK_GLASS_THRESHOLD", 0),
 		BreakGlassShares:    integer("PAM_BREAK_GLASS_SHARES", 5),

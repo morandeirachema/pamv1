@@ -122,14 +122,30 @@ func (c *Chain) Head(ctx context.Context, now time.Time) (Checkpoint, error) {
 	if err != nil {
 		return Checkpoint{}, err
 	}
-	cp := Checkpoint{TS: now.UTC(), PublicKey: c.signKey.Public().(ed25519.PublicKey)}
+	var lastID int64
+	var h []byte
 	if head != nil {
-		cp.LastID = head.ID
-		cp.Count = head.ID // highest row id (a BIGSERIAL upper bound; rolled-back inserts can leave gaps, so this is not an exact row count — truncation detection relies on the signed LastID/Head, not Count)
-		cp.Head = head.HMAC
+		lastID, h = head.ID, head.HMAC
 	}
-	cp.Signature = ed25519.Sign(c.signKey, checkpointMsg(cp.LastID, cp.Head))
-	return cp, nil
+	return SignCheckpoint(c.signKey, lastID, h, now), nil
+}
+
+// SignCheckpoint builds an ed25519-signed Checkpoint anchoring a hash chain at
+// (lastID, head). Shared by the broker chain and the primary audit trail: an
+// auditor stores the returned checkpoint and later detects tail truncation if the
+// current chain no longer reproduces this signed (LastID, Head). Count mirrors
+// LastID (a BIGSERIAL upper bound, not an exact row count — rolled-back inserts
+// leave gaps; truncation detection relies on the signed LastID/Head).
+func SignCheckpoint(signKey ed25519.PrivateKey, lastID int64, head []byte, now time.Time) Checkpoint {
+	cp := Checkpoint{
+		LastID:    lastID,
+		Count:     lastID,
+		Head:      head,
+		TS:        now.UTC(),
+		PublicKey: signKey.Public().(ed25519.PublicKey),
+	}
+	cp.Signature = ed25519.Sign(signKey, checkpointMsg(cp.LastID, cp.Head))
+	return cp
 }
 
 // mac computes HMAC-SHA256(key, prev || canonical(ev)).

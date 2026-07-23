@@ -167,6 +167,10 @@ type Options struct {
 	// take effect without a restart; nil keeps the startup snapshot (changes
 	// apply on the next restart).
 	Reconfigure func(context.Context) (*RuntimeConfig, error)
+	// AuditSignKey (optional) signs primary-audit-chain checkpoints served by
+	// GET /api/audit/head, so an auditor can detect tail truncation. nil disables
+	// the endpoint.
+	AuditSignKey ed25519.PrivateKey
 	// BrokerPolicy (optional) enables the AI-agent access broker (Phase 13). When
 	// non-nil the broker routes are served; BrokerAuditKey (32 bytes) and
 	// BrokerAuditSignKey are then required for the tamper-evident audit chain.
@@ -247,6 +251,8 @@ type Server struct {
 	// reconfigure rebuilds the runtime snapshot from current stored config; nil
 	// disables hot-swap (changes then apply on the next restart).
 	reconfigure func(context.Context) (*RuntimeConfig, error)
+	// auditSignKey signs primary-audit checkpoints (GET /api/audit/head); nil disables it.
+	auditSignKey ed25519.PrivateKey
 	// AI-agent access broker (Phase 13); nil unless a policy file is configured.
 	broker        *broker.Broker
 	agentVerifier agentid.Verifier
@@ -412,6 +418,7 @@ func New(st store.Store, v *vault.Vault, resolver *auth.Resolver, authn auth.Aut
 		airGap:             opts.AirGap,
 		discoveryDial:      opts.DiscoveryDial,
 		reconfigure:        opts.Reconfigure,
+		auditSignKey:       opts.AuditSignKey,
 		sshCA:              opts.CA,
 		analytics:          opts.Analytics,
 		analyticsWindow:    opts.AnalyticsWindow,
@@ -602,6 +609,7 @@ func (s *Server) routes() {
 	s.mux.Handle("GET /api/audit", s.authz(auth.CapReadAudit, s.listAudit))
 	s.mux.Handle("GET /api/audit/export", s.authz(auth.CapReadAudit, s.exportAudit))
 	s.mux.Handle("GET /api/audit/verify", s.authz(auth.CapReadAudit, s.verifyAudit))
+	s.mux.Handle("GET /api/audit/head", s.authz(auth.CapReadAudit, s.auditHead))
 
 	s.mux.Handle("GET /api/sessions", s.authz(auth.CapReadAudit, s.listSessions))
 	s.mux.Handle("GET /api/sessions/{id}/stream", s.authz(auth.CapReadAudit, s.streamSession))

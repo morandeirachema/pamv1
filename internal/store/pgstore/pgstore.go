@@ -593,6 +593,22 @@ func (s *PGStore) AppendAudit(ctx context.Context, e *store.AuditEvent) error {
 	return tx.Commit(ctx)
 }
 
+// GetAuditHead returns the most recent chained audit event, or (nil, nil) if none.
+func (s *PGStore) GetAuditHead(ctx context.Context) (*store.AuditEvent, error) {
+	var e store.AuditEvent
+	err := s.pool.QueryRow(ctx,
+		`SELECT id, ts, actor, action, detail, prev_hash, hmac
+		 FROM audit_events WHERE hmac IS NOT NULL ORDER BY id DESC LIMIT 1`).
+		Scan(&e.ID, &e.TS, &e.Actor, &e.Action, &e.Detail, &e.PrevHash, &e.HMAC)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &e, nil
+}
+
 // VerifyAuditChain recomputes the chain over every chained audit event in id
 // order and reports the first id whose HMAC does not match (0 when intact).
 func (s *PGStore) VerifyAuditChain(ctx context.Context) (bool, int64, error) {

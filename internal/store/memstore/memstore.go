@@ -803,6 +803,19 @@ func (m *Memstore) EnableAuditChain(key []byte) {
 	m.auditKey = key
 }
 
+// GetAuditHead returns the most recent chained audit event, or (nil, nil) if none.
+func (m *Memstore) GetAuditHead(_ context.Context) (*store.AuditEvent, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for i := len(m.audit) - 1; i >= 0; i-- {
+		if m.audit[i].HMAC != nil {
+			e := m.audit[i]
+			return &e, nil
+		}
+	}
+	return nil, nil
+}
+
 // VerifyAuditChain recomputes the chain over every chained audit event in order.
 func (m *Memstore) VerifyAuditChain(_ context.Context) (bool, int64, error) {
 	m.mu.Lock()

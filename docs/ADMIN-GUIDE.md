@@ -235,6 +235,7 @@ All configuration is environment variables (12-factor). Full descriptions in
 | `PAM_OT_AIRGAP` | | `false` | Disable all outbound calls (alert webhooks) for air-gapped sites. |
 | `PAM_REVEAL_DISABLED` | | `false` | Make `reveal` break-glass-only (also forces the broker's `reveal_credential` closed). |
 | `PAM_AUDIT_HMAC_KEY` | | (off) | base64 32-byte key enabling the **tamper-evident HMAC chain** over the primary audit trail; verify with `GET /api/audit/verify`. See §9.2. |
+| `PAM_AUDIT_SIGN_SEED` | | (off) | base64 32-byte ed25519 seed (needs `PAM_AUDIT_HMAC_KEY`) enabling **signed checkpoints** (`GET /api/audit/head`) so an auditor can detect **tail truncation**. See §9.2. |
 | `PAM_BROKER_POLICY_FILE` | | (off) | YAML policy file — **its presence enables the AI-agent access broker** (Phase 13). |
 | `PAM_BROKER_AUDIT_KEY` | broker only | — | base64 32-byte HMAC key for the verifiable audit chain (required once the broker is on). |
 | `PAM_BROKER_AUDIT_SIGN_SEED` | broker only | — | base64 32-byte ed25519 seed signing the audit-chain head (truncation detection). |
@@ -1048,6 +1049,23 @@ keyed-HMAC scheme the AI-agent broker's audit chain uses, extended to the primar
 trail. Enabling it is non-breaking — pre-existing rows stay unchained and are
 skipped by the verifier; only events appended after you set the key are chained.
 
+The HMAC chain catches edits, reorders, and mid-history deletions, but **not tail
+truncation** (deleting the newest events leaves a shorter, still-valid chain). To
+catch that, also set an ed25519 signing seed and periodically fetch and archive a
+**signed checkpoint**:
+
+```bash
+export PAM_AUDIT_SIGN_SEED=$(openssl rand -base64 32)   # keep it OUT of the database
+curl -H "X-API-Key: $PAM_API_KEY" http://localhost:8080/api/audit/head > checkpoint-$(date +%F).json
+# → {"last_id":12345,"head":"…","ts":"…","signature":"…","public_key":"…"}
+```
+
+Store each checkpoint out-of-band (a WORM bucket, a ticket, a signed email). Later,
+if the current chain no longer reproduces a stored checkpoint's signed
+`(last_id, head)` — verified against the published `public_key` — the tail was
+truncated. This is the same signed-head mechanism the broker chain exposes at
+`GET /v1/audit/head`.
+
 ### 9.3 Session recordings
 
 Each proxied session is recorded in [asciicast v2](https://docs.asciinema.org/manual/asciicast/v2/)
@@ -1226,6 +1244,7 @@ scores in your environment.
 
 | Date | Change |
 |---|---|
+| 2026-07-23 | **Signed audit checkpoints.** With `PAM_AUDIT_SIGN_SEED` (+ `PAM_AUDIT_HMAC_KEY`), `GET /api/audit/head` returns an ed25519-signed checkpoint so an auditor can detect **tail truncation** the HMAC chain alone can't. Archive checkpoints out-of-band. See §9.2 |
 | 2026-07-23 | **Tamper-evident primary audit trail** (opt-in). Set `PAM_AUDIT_HMAC_KEY` (base64 32 bytes) to HMAC-chain the whole `audit_events` table, not just broker events; any edit/reorder/delete is detectable via `GET /api/audit/verify`. Additive, non-breaking (unset = plain table). See §4 and §9.2 |
 | 2026-07-22 | **Security gap-analysis hardening pass** ([SECURITY-GAPS.md](SECURITY-GAPS.md)). Safe-scoped targets are now default-deny (a target in an empty safe is no longer open to all); the DB proxy enforces the MFA-enrollment gate; secret delivery and proxied sessions are **fail-closed on the audit trail**. New admin controls: `GET /api/login-sessions` + `POST /api/login-sessions/revoke`, and reconcile revokes disabled directory sessions (§7). New env: `PAM_REQUIRE_HTTPS`, `PAM_REQUIRE_DB_CLIENT_TLS`, `PAM_DB_UPSTREAM_CA`/`_TLS_VERIFY`, `PAM_PROXY_AUTH_RATE_LIMIT`, `PAM_TRUSTED_PROXY_HOPS`, `PAM_ALLOW_WEAK_API_KEY` (§4); `-rotate-kek` migrates between KEK providers via `PAM_NEW_KEK_*` (§8). Deploy: default-deny `NetworkPolicy` (§3.4), pinned image tags. See §10 |
 | 2026-07-21 | Phase 24: **application-secrets API** (Tier-4) — a Conjur-style path (`PAM_APP_SECRETS_ENABLED`) where a non-agent app retrieves the secrets it was explicitly granted with a bearer key (`GET /v1/app-secrets/{credential_id}`); default-deny, granting needs `reveal_secret`, every retrieval audited. See §7. The portal is now **keyboard-first** (mouse optional): focus lands on each screen's field, Esc goes back, ↑/↓ move subfile rows. |
