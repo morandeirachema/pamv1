@@ -37,6 +37,18 @@ spec:
       ports:
         - protocol: TCP
           port: 5432
+    {{- if .Values.guacd.enabled }}
+    # Bundled guacd (RDP broker) — pam-server dials it on 4822. Both pods' policies
+    # must permit the flow, so this mirrors the ingress rule in guacd.yaml.
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: {{ include "pamv1.guacdName" . }}
+              app.kubernetes.io/instance: {{ .Release.Name }}
+      ports:
+        - protocol: TCP
+          port: 4822
+    {{- end }}
     # Managed target networks (block public egress / exfiltration by default).
     - to:
         {{- range .Values.networkPolicy.egressTargetCIDRs }}

@@ -57,7 +57,7 @@ services:
       - ALL
     security_opt:
       - no-new-privileges:true
-    mem_limit: 256m
+    mem_limit: 512m                        # a large RDP display is a ~64 MiB framebuffer + encode buffers
     pids_limit: 256
 
   pam:
