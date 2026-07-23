@@ -83,6 +83,9 @@ type Config struct {
 	// limiting online guessing of the PAM key presented as the SSH password
 	// (0 disables).
 	AuthRatePerMin int
+	// MaxRecordingBytes caps a single session recording's output (0 = unlimited);
+	// a session that exceeds it is terminated rather than run unrecorded.
+	MaxRecordingBytes int64
 }
 
 // JumpConfig configures reaching SSH targets through an SSH bastion.
@@ -116,6 +119,7 @@ type Proxy struct {
 	ca           *sshca.CertAuthority
 	certTTL      time.Duration
 	authLimiter  *ratelimit.Limiter
+	maxRecBytes  int64
 
 	bg sync.WaitGroup // background tasks (post-session rotation) to drain on shutdown
 
@@ -163,6 +167,7 @@ func New(st store.Store, v *vault.Vault, resolver *auth.Resolver, cfg Config) (*
 		ca:           cfg.CA,
 		certTTL:      cfg.CertTTL,
 		authLimiter:  ratelimit.New(cfg.AuthRatePerMin),
+		maxRecBytes:  cfg.MaxRecordingBytes,
 		conns:        make(map[net.Conn]struct{}),
 	}
 	if p.certTTL <= 0 {
@@ -487,6 +492,16 @@ func (p *Proxy) handleConn(ctx context.Context, nConn net.Conn) {
 		return
 	}
 
+	// Concurrent-session cap: refuse a new session that would exceed the per-user
+	// or global limit, BEFORE any secret is decrypted, so a single (or compromised)
+	// identity can't exhaust connections/goroutines/recording disk.
+	if p.sessions != nil && !p.sessions.AllowNew(actor) {
+		p.log.Warn("session denied: concurrent-session limit", "actor", actor, "target", target.Name)
+		p.audit(ctx, actor, "session.denied", "target:"+target.Name+" reason:session-limit")
+		rejectAll(chans, ssh.Prohibited, "pamv1: too many concurrent sessions")
+		return
+	}
+
 	// Every authorization gate has passed — obtain the upstream credential
 	// Fail closed: durably audit the session start BEFORE any secret is decrypted
 	// or a ZSP certificate is minted. If the audit store is unavailable we refuse
@@ -729,7 +744,7 @@ func (p *Proxy) handleSession(ctx context.Context, nc ssh.NewChannel, upstream *
 
 	now := time.Now()
 	title := fmt.Sprintf("%d_%s_%s", now.UnixNano(), target.Name, actor)
-	rec, err := newRecording(p.recordingDir, title, now)
+	rec, err := newRecording(p.recordingDir, title, now, p.maxRecBytes)
 	if err != nil {
 		p.log.Error("recording setup failed", "actor", actor, "target", target.Name, "err", err)
 		p.audit(ctx, actor, "session.record_failed",
@@ -821,7 +836,9 @@ func (p *Proxy) handleSession(ctx context.Context, nc ssh.NewChannel, upstream *
 		out = io.MultiWriter(clientChan, rec)
 	}
 	out = p.teeLive(out, sid)
-	io.Copy(out, upChan)
+	if _, cerr := io.Copy(out, upChan); errors.Is(cerr, errRecordingLimit) {
+		p.audit(ctx, actor, "session.record_limit", "target:"+target.Name+" cred_user:"+cred.Username+" reason:recording-size-cap")
+	}
 	upReqDone.Wait() // make sure exit-status reached the client
 
 	// Upstream is done and exit-status is delivered; stop the client-request pump
@@ -892,7 +909,7 @@ func (p *Proxy) handleWinRMSession(ctx context.Context, nc ssh.NewChannel, targe
 	defer ch.Close()
 
 	now := time.Now()
-	rec, err := newRecording(p.recordingDir, fmt.Sprintf("%d_%s_%s", now.UnixNano(), target.Name, actor), now)
+	rec, err := newRecording(p.recordingDir, fmt.Sprintf("%d_%s_%s", now.UnixNano(), target.Name, actor), now, p.maxRecBytes)
 	if err != nil {
 		p.log.Error("recording setup failed", "actor", actor, "target", target.Name, "err", err)
 		p.audit(ctx, actor, "session.record_failed",

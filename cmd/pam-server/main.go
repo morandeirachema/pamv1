@@ -510,6 +510,8 @@ func run() error {
 	}
 
 	sessions := session.NewRegistry()
+	sessions.SetLimits(cfg.MaxSessionsPerUser, cfg.MaxSessionsTotal)
+	maxRecBytes := int64(cfg.MaxRecordingMB) * 1024 * 1024
 	liveHub := session.NewHub()
 
 	// Command control (Phase 16): compile the deny file, if configured, into a
@@ -735,21 +737,22 @@ func run() error {
 			jump = &proxy.JumpConfig{Addr: cfg.SSHJumpHost, User: cfg.SSHJumpUser, KeyPEM: string(keyPEM), HostKey: upstreamHostKey}
 		}
 		px, err := proxy.New(st, v, resolver, proxy.Config{
-			HostKey:          hostKey,
-			RecordingDir:     cfg.RecordingDir,
-			Sessions:         sessions,
-			RequireApproval:  cfg.RequireApproval,
-			UpstreamHostKey:  upstreamHostKey,
-			OnSessionEnd:     onSessionEnd,
-			AllowedProtocols: splitAndTrim(cfg.AllowedProtocols),
-			WinRMRunner:      proxyWinRM,
-			Jump:             jump,
-			RequireRecording: cfg.RequireRecording,
-			CommandGuard:     cmdGuard,
-			Live:             liveHub,
-			CA:               sshCA,
-			CertTTL:          cfg.SSHCertTTL,
-			AuthRatePerMin:   cfg.ProxyAuthRatePerMin,
+			HostKey:           hostKey,
+			RecordingDir:      cfg.RecordingDir,
+			Sessions:          sessions,
+			RequireApproval:   cfg.RequireApproval,
+			UpstreamHostKey:   upstreamHostKey,
+			OnSessionEnd:      onSessionEnd,
+			AllowedProtocols:  splitAndTrim(cfg.AllowedProtocols),
+			WinRMRunner:       proxyWinRM,
+			Jump:              jump,
+			RequireRecording:  cfg.RequireRecording,
+			CommandGuard:      cmdGuard,
+			Live:              liveHub,
+			CA:                sshCA,
+			CertTTL:           cfg.SSHCertTTL,
+			AuthRatePerMin:    cfg.ProxyAuthRatePerMin,
+			MaxRecordingBytes: maxRecBytes,
 		})
 		if err != nil {
 			return err
@@ -804,17 +807,18 @@ func run() error {
 			dbUpstreamTLS = &tls.Config{MinVersion: tls.VersionTLS12}
 		}
 		dbx, err := proxy.NewDB(st, v, resolver, proxy.DBConfig{
-			RecordingDir:     cfg.RecordingDir,
-			Sessions:         sessions,
-			RequireApproval:  cfg.RequireApproval,
-			AllowedProtocols: splitAndTrim(cfg.AllowedProtocols),
-			RequireRecording: cfg.RequireRecording,
-			ClientTLS:        dbClientTLS,
-			OnSessionEnd:     dbOnSessionEnd,
-			CommandGuard:     cmdGuard,
-			Live:             liveHub,
-			AuthRatePerMin:   cfg.ProxyAuthRatePerMin,
-			UpstreamTLS:      dbUpstreamTLS,
+			RecordingDir:      cfg.RecordingDir,
+			Sessions:          sessions,
+			RequireApproval:   cfg.RequireApproval,
+			AllowedProtocols:  splitAndTrim(cfg.AllowedProtocols),
+			RequireRecording:  cfg.RequireRecording,
+			ClientTLS:         dbClientTLS,
+			OnSessionEnd:      dbOnSessionEnd,
+			CommandGuard:      cmdGuard,
+			Live:              liveHub,
+			AuthRatePerMin:    cfg.ProxyAuthRatePerMin,
+			MaxRecordingBytes: maxRecBytes,
+			UpstreamTLS:       dbUpstreamTLS,
 		})
 		if err != nil {
 			return err

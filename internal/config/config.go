@@ -123,6 +123,15 @@ type Config struct {
 	// RequireRecording refuses a proxied session when its recording cannot be
 	// created, rather than proceeding unrecorded (fail-closed session auditing).
 	RequireRecording bool
+	// MaxSessionsPerUser / MaxSessionsTotal cap concurrent live proxied sessions
+	// per actor and across all actors (0 = unlimited), bounding resource use from
+	// a single (or compromised) identity. Per-replica in an HA deployment.
+	MaxSessionsPerUser int
+	MaxSessionsTotal   int
+	// MaxRecordingMB caps a single session recording's output in megabytes
+	// (0 = unlimited); a session that exceeds it is terminated rather than run
+	// unrecorded, so one runaway session can't fill the recording disk.
+	MaxRecordingMB int
 
 	// OT hardening (Phase 8). RequireApproval gates every target's connect paths
 	// behind an approved access request (4-eyes / maintenance window).
@@ -339,6 +348,9 @@ func Load() (*Config, error) {
 		RotateMaxAge:        time.Duration(integer("PAM_ROTATE_MAX_AGE_HOURS", 0)) * time.Hour,
 		RotateAfterSession:  boolean("PAM_ROTATE_AFTER_SESSION", false),
 		RequireRecording:    boolean("PAM_REQUIRE_RECORDING", false),
+		MaxSessionsPerUser:  integer("PAM_MAX_SESSIONS_PER_USER", 0),
+		MaxSessionsTotal:    integer("PAM_MAX_SESSIONS_TOTAL", 0),
+		MaxRecordingMB:      integer("PAM_MAX_RECORDING_MB", 0),
 		RequireApproval:     boolean("PAM_REQUIRE_APPROVAL", false),
 		ApprovalWindow:      time.Duration(integer("PAM_APPROVAL_WINDOW_MIN", 60)) * time.Minute,
 		RequireTicket:       boolean("PAM_REQUIRE_TICKET", false),
@@ -501,6 +513,9 @@ func Load() (*Config, error) {
 	// protection).
 	if cfg.AuthRatePerMin < 0 {
 		errs = append(errs, "PAM_AUTH_RATE_LIMIT must be >= 0 (0 disables)")
+	}
+	if cfg.MaxSessionsPerUser < 0 || cfg.MaxSessionsTotal < 0 || cfg.MaxRecordingMB < 0 {
+		errs = append(errs, "PAM_MAX_SESSIONS_PER_USER / PAM_MAX_SESSIONS_TOTAL / PAM_MAX_RECORDING_MB must be >= 0 (0 disables)")
 	}
 	if cfg.BrokerRatePerMin < 0 || cfg.BrokerMaxArgBytes < 0 {
 		errs = append(errs, "PAM_BROKER_RATE_PER_MIN and PAM_BROKER_MAX_ARG_BYTES must be >= 0")
