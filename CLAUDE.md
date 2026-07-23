@@ -21,6 +21,7 @@ gofmt -l .                                       # must print nothing (CI fails 
 go vet ./...
 staticcheck ./...                                # CI gate (go install honnef.co/go/tools/cmd/staticcheck@latest)
 govulncheck ./...                                # CI gate (go install golang.org/x/vuln/cmd/govulncheck@latest)
+gosec -confidence high -exclude=G104,G115,G304,G306,G101 ./...   # CI gate; deliberate findings carry `#nosec Gxxx -- reason`
 go mod tidy                                      # after changing imports
 ```
 
@@ -38,7 +39,7 @@ export PAM_DATABASE_URL=memory
 
 Full stack (hardened Postgres + server): from `deploy/docker/`, `cp .env.example .env` (fill the keys), then `docker compose up --build`. The Docker/compose files live in `deploy/docker/` (`Dockerfile`, `Dockerfile.pkcs11`, `docker-compose.yml`, `.env.example`); other deploy manifests live in `deploy/k8s/`, `deploy/helm/` and `deploy/terraform/` (all infra is IaC — do not hand-apply). The SOPS config is `deploy/.sops.yaml` (pass `--config deploy/.sops.yaml` when encrypting; decryption needs no config). The repo root keeps only `go.mod`/`go.sum`, `README*`, `ROADMAP.md`, `LICENSE`, `CLAUDE.md` and the two position-sensitive dotfiles `.dockerignore` and `.gitignore`.
 
-CI (`.github/workflows/ci.yml`) gates on: `gofmt -l`, `go vet`, `staticcheck`, `govulncheck`, `go build`, `go test -race`, and a Docker image build.
+CI (`.github/workflows/ci.yml`) gates on: `gofmt -l`, `go vet`, `staticcheck`, `govulncheck`, `gosec`, `go build`, `go test -race`, and a Docker image build.
 
 ## Architecture
 

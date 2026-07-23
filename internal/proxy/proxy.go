@@ -170,7 +170,7 @@ func New(st store.Store, v *vault.Vault, resolver *auth.Resolver, cfg Config) (*
 	}
 	if p.upstreamHKCB == nil {
 		p.log.Warn("upstream SSH host keys are NOT verified (set PAM_SSH_KNOWN_HOSTS to pin them)")
-		p.upstreamHKCB = ssh.InsecureIgnoreHostKey()
+		p.upstreamHKCB = ssh.InsecureIgnoreHostKey() // #nosec G106 -- documented trust-any default; pin with PAM_SSH_KNOWN_HOSTS
 	}
 	if cfg.Jump != nil {
 		dial, err := jumpDial(*cfg.Jump, cfg.DialTimeout)
@@ -675,7 +675,7 @@ func jumpDial(jc JumpConfig, timeout time.Duration) (func(addr string) (net.Conn
 	}
 	hostCB := jc.HostKey
 	if hostCB == nil {
-		hostCB = ssh.InsecureIgnoreHostKey()
+		hostCB = ssh.InsecureIgnoreHostKey() // #nosec G106 -- documented trust-any default (jump host); pin with PAM_SSH_KNOWN_HOSTS
 	}
 	return func(addr string) (net.Conn, error) {
 		bastion, err := ssh.Dial("tcp", jc.Addr, &ssh.ClientConfig{

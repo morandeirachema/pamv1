@@ -240,7 +240,7 @@ func readFileEnv(key string) (string, error) {
 	if path == "" {
 		return "", nil
 	}
-	b, err := os.ReadFile(path)
+	b, err := os.ReadFile(path) // #nosec G703 G304 -- path is the operator-set PAM_CONJUR_JWT_FILE, not request input
 	if err != nil {
 		return "", fmt.Errorf("%s %q: %w", key, path, err)
 	}

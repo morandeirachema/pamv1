@@ -12,7 +12,7 @@ package proxy
 import (
 	"context"
 	"crypto/hmac"
-	"crypto/md5"
+	"crypto/md5" // #nosec G501 -- MD5 is mandated by the PostgreSQL MD5 auth wire protocol
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/tls"
@@ -668,7 +668,7 @@ func (d *DBProxy) maybeUpstreamTLS(conn net.Conn, host string) (net.Conn, error)
 			cfg.ServerName = host
 		}
 	} else {
-		cfg = &tls.Config{ServerName: host, InsecureSkipVerify: true} //nolint:gosec // legacy trust-any; set PAM_DB_UPSTREAM_CA to verify
+		cfg = &tls.Config{ServerName: host, InsecureSkipVerify: true} // #nosec G402 -- legacy trust-any fallback; verify via PAM_DB_UPSTREAM_CA / _TLS_VERIFY
 	}
 	tconn := tls.Client(conn, cfg)
 	if err := tconn.Handshake(); err != nil {
@@ -713,8 +713,8 @@ func pgAuthUpstream(fe *pgproto3.Frontend, user, password string) error {
 // md5Password builds the "md5"-prefixed hash libpq sends for MD5 authentication:
 // md5( md5(password+user) + salt ).
 func md5Password(user, password string, salt [4]byte) string {
-	inner := md5.Sum([]byte(password + user)) //nolint:gosec // protocol-mandated by PostgreSQL MD5 auth
-	outer := md5.Sum(append([]byte(hex.EncodeToString(inner[:])), salt[:]...))
+	inner := md5.Sum([]byte(password + user))                                  // #nosec G401 -- MD5 is mandated by the PostgreSQL MD5 auth protocol
+	outer := md5.Sum(append([]byte(hex.EncodeToString(inner[:])), salt[:]...)) // #nosec G401 -- MD5 is mandated by the PostgreSQL MD5 auth protocol
 	return "md5" + hex.EncodeToString(outer[:])
 }
 

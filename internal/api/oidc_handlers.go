@@ -48,7 +48,7 @@ func (s *Server) oidcStart(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "oidc init failed")
 		return
 	}
-	http.SetCookie(w, &http.Cookie{
+	http.SetCookie(w, &http.Cookie{ // #nosec G124 -- Secure is set conditionally on TLS (requestIsHTTPS); HttpOnly + SameSite=Lax always set
 		Name: oidcStateCookie, Value: state, Path: "/api/auth/oidc/",
 		MaxAge: int(oidcStateTTL.Seconds()), HttpOnly: true,
 		Secure: requestIsHTTPS(r), SameSite: http.SameSiteLaxMode,
@@ -75,7 +75,7 @@ func (s *Server) oidcCallback(w http.ResponseWriter, r *http.Request) {
 	// the state the IdP echoed back. Checked before consuming the single-use
 	// server state so a foreign request can't burn a legitimate one.
 	sc, cerr := r.Cookie(oidcStateCookie)
-	http.SetCookie(w, &http.Cookie{Name: oidcStateCookie, Value: "", Path: "/api/auth/oidc/", MaxAge: -1, HttpOnly: true, Secure: requestIsHTTPS(r), SameSite: http.SameSiteLaxMode})
+	http.SetCookie(w, &http.Cookie{Name: oidcStateCookie, Value: "", Path: "/api/auth/oidc/", MaxAge: -1, HttpOnly: true, Secure: requestIsHTTPS(r), SameSite: http.SameSiteLaxMode}) // #nosec G124 -- Secure conditional on TLS; HttpOnly + SameSite=Lax always (clearing cookie)
 	if state == "" || cerr != nil || subtle.ConstantTimeCompare([]byte(sc.Value), []byte(state)) != 1 {
 		s.log.Warn("oidc callback: state cookie mismatch", "remote", r.RemoteAddr)
 		s.redirectPortal(w, r, "pam_error=invalid_state")

@@ -151,7 +151,7 @@ func (c SSHConnector) timeout() time.Duration {
 func (c SSHConnector) dialAuth(target store.Target, username string, auth ssh.AuthMethod) (*ssh.Client, error) {
 	cb := c.HostKeyCallback
 	if cb == nil {
-		cb = ssh.InsecureIgnoreHostKey()
+		cb = ssh.InsecureIgnoreHostKey() // #nosec G106 -- documented trust-any default; pin with PAM_SSH_KNOWN_HOSTS
 	}
 	cfg := &ssh.ClientConfig{
 		User:            username,
