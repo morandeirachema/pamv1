@@ -37,6 +37,7 @@
 - **[PORTS-AND-FLOWS.md](PORTS-AND-FLOWS.md)** — the listener/egress matrix for firewalls, security groups, NetworkPolicies and OT segmentation.
 - **[BACKUP-AND-RESTORE.md](BACKUP-AND-RESTORE.md)** — runbook for backing up the database and the vault KEK *separately*.
 - **[EXTERNAL-INFRA-GAPS.md](EXTERNAL-INFRA-GAPS.md)** — what needs a real host/account to verify honestly before you rely on it.
+- **[RDP-TESTING.md](RDP-TESTING.md)** — the procedure to verify the RDP path end to end: automated tests, a local runbook, and troubleshooting.
 
 ### Security, compliance & OT
 - **[SECURITY-GAPS.md](SECURITY-GAPS.md)** — a security self-audit: every gap found, and whether it was fixed, mitigated or deferred.
