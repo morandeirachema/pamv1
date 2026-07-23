@@ -29,6 +29,22 @@ ingress:
 # NetworkPolicy: default-deny to/from the vault pod, allowing only the app ports
 # in and DNS + PostgreSQL + your target networks out. Disabled by default because
 # egress rules must be scoped to YOUR environment; enable and tighten in prod.
+# RDP brokering via a bundled Apache Guacamole proxy daemon (guacd). When enabled,
+# a guacd Deployment + ClusterIP Service is created and PAM_GUACD_ADDR is wired
+# into pam-server automatically. guacd is internal-only (no external exposure).
+guacd:
+  enabled: false
+  image:
+    repository: guacamole/guacd
+    tag: "1.5.5"
+    pullPolicy: IfNotPresent
+  resources:
+    requests:
+      cpu: 25m
+      memory: 32Mi
+    limits:
+      memory: 256Mi
+
 networkPolicy:
   enabled: false
   # CIDRs the proxy may reach (SSH/RDP/WinRM/PostgreSQL targets). Defaults to the

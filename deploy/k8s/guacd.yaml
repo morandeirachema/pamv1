@@ -1,0 +1,135 @@
+# Apache Guacamole proxy daemon (guacd) for RDP brokering. pam-server speaks the
+# guacd protocol to it (PAM_GUACD_ADDR=guacd:4822), JIT-injecting the target
+# credential into the handshake — the credential never reaches the operator's
+# browser. guacd itself connects out to the RDP targets (:3389).
+#
+# This is an INTERNAL service: it is a ClusterIP (no external exposure), and the
+# NetworkPolicy below admits only pam-server on :4822.
+#
+# NOTE the labels: guacd uses `app.kubernetes.io/name: guacd` (not `pamv1`) so the
+# pam-server Service and NetworkPolicy — which select `app.kubernetes.io/name: pamv1`
+# — do NOT match it. `part-of: pamv1` keeps it grouped under the app.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: guacd
+  namespace: pamv1
+  labels:
+    app.kubernetes.io/name: guacd
+    app.kubernetes.io/part-of: pamv1
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: guacd
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: guacd
+        app.kubernetes.io/part-of: pamv1
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        # The official guacamole/guacd image runs as the non-root "guacd" user
+        # (UID 1000). If your pinned image requires root, drop runAsNonRoot/runAsUser.
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: guacd
+          image: guacamole/guacd:1.5.5   # pin a released version (or a digest)
+          ports:
+            - containerPort: 4822
+              name: guacd
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+          livenessProbe:
+            tcpSocket:
+              port: guacd
+            initialDelaySeconds: 5
+            periodSeconds: 15
+          readinessProbe:
+            tcpSocket:
+              port: guacd
+            initialDelaySeconds: 2
+            periodSeconds: 5
+          resources:
+            requests:
+              cpu: 25m
+              memory: 32Mi
+            limits:
+              memory: 256Mi
+      volumes:
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: guacd
+  namespace: pamv1
+  labels:
+    app.kubernetes.io/name: guacd
+    app.kubernetes.io/part-of: pamv1
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: guacd
+  ports:
+    - name: guacd
+      port: 4822
+      targetPort: guacd
+---
+# Default-deny for guacd: only pam-server may reach :4822; guacd may resolve DNS
+# and connect out to RDP targets. TIGHTEN the egress ipBlock to your RDP hosts.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: guacd-default-deny
+  namespace: pamv1
+  labels:
+    app.kubernetes.io/name: guacd
+    app.kubernetes.io/part-of: pamv1
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: guacd
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: pamv1   # pam-server only
+      ports:
+        - protocol: TCP
+          port: 4822
+  egress:
+    # DNS.
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # RDP targets. Scope these to your actual Windows/RDP networks.
+    - to:
+        - ipBlock:
+            cidr: 10.0.0.0/8
+        - ipBlock:
+            cidr: 172.16.0.0/12
+        - ipBlock:
+            cidr: 192.168.0.0/16
+      ports:
+        - protocol: TCP
+          port: 3389

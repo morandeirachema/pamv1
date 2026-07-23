@@ -1,0 +1,120 @@
+{{- if .Values.guacd.enabled }}
+# Apache Guacamole proxy daemon (guacd) for RDP brokering — internal only.
+# pam-server reaches it at <fullname>-guacd:4822 (wired via PAM_GUACD_ADDR).
+# guacd's selector labels use name "<name>-guacd" so the pam-server Service /
+# NetworkPolicy (which select the "<name>" app) never match it.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "pamv1.fullname" . }}-guacd
+  labels:
+    {{- include "pamv1.labels" . | nindent 4 }}
+    app.kubernetes.io/component: guacd
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "pamv1.name" . }}-guacd
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ include "pamv1.name" . }}-guacd
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        app.kubernetes.io/component: guacd
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: guacd
+          image: "{{ .Values.guacd.image.repository }}:{{ .Values.guacd.image.tag }}"
+          imagePullPolicy: {{ .Values.guacd.image.pullPolicy | default "IfNotPresent" }}
+          ports:
+            - containerPort: 4822
+              name: guacd
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+          livenessProbe:
+            tcpSocket: { port: guacd }
+            initialDelaySeconds: 5
+            periodSeconds: 15
+          readinessProbe:
+            tcpSocket: { port: guacd }
+            initialDelaySeconds: 2
+            periodSeconds: 5
+          resources:
+            {{- toYaml .Values.guacd.resources | nindent 12 }}
+      volumes:
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "pamv1.fullname" . }}-guacd
+  labels:
+    {{- include "pamv1.labels" . | nindent 4 }}
+    app.kubernetes.io/component: guacd
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: {{ include "pamv1.name" . }}-guacd
+    app.kubernetes.io/instance: {{ .Release.Name }}
+  ports:
+    - name: guacd
+      port: 4822
+      targetPort: guacd
+{{- if .Values.networkPolicy.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "pamv1.fullname" . }}-guacd
+  labels:
+    {{- include "pamv1.labels" . | nindent 4 }}
+    app.kubernetes.io/component: guacd
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "pamv1.name" . }}-guacd
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "pamv1.selectorLabels" . | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: 4822
+  egress:
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    - to:
+        {{- range .Values.networkPolicy.egressTargetCIDRs }}
+        - ipBlock:
+            cidr: {{ . }}
+        {{- end }}
+      ports:
+        - protocol: TCP
+          port: 3389
+{{- end }}
+{{- end }}

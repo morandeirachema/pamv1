@@ -52,6 +52,14 @@ spec:
       ports:
         - protocol: TCP
           port: 5432
+    # guacd (RDP broker) — see deploy/k8s/guacd.yaml.
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: guacd
+      ports:
+        - protocol: TCP
+          port: 4822
     # Managed targets the proxy connects to (SSH/RDP/WinRM/PostgreSQL). Scope
     # these to your actual target networks; the RFC-1918 defaults block public
     # egress (exfiltration) while allowing internal targets.

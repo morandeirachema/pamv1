@@ -47,6 +47,10 @@ spec:
             - name: {{ $k }}
               value: {{ $v | quote }}
             {{- end }}
+            {{- if .Values.guacd.enabled }}
+            - name: PAM_GUACD_ADDR
+              value: {{ printf "%s-guacd:4822" (include "pamv1.fullname" .) | quote }}
+            {{- end }}
           volumeMounts:
             - name: data
               mountPath: /data

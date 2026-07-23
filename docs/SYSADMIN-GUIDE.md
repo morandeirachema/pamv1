@@ -322,10 +322,15 @@ over the PostgreSQL wire protocol:
   separate WinRM command over HTTP/HTTPS (basic or NTLM), injecting the vaulted
   Windows credential; output is recorded like an SSH session. It's a command loop,
   not a stateful PowerShell.
-- **RDP**: the browser opens a WebSocket to `/api/targets/{id}/rdp`; pamv1 hands
-  the JIT credential to a **guacd** daemon, which makes the actual RDP connection
-  and streams the rendered session back. The credential reaches guacd, never the
-  browser, and guacd can record server-side.
+- **RDP**: pamv1 is a **client of an Apache Guacamole `guacd` daemon** — it speaks
+  the guacd protocol (`PAM_GUACD_ADDR`), injecting the credential into the
+  handshake; guacd makes the actual RDP connection and can record server-side. The
+  credential reaches guacd, never the browser. guacd ships as a service in the
+  Docker compose and Kubernetes deploys (`PAM_GUACD_ADDR` is wired for you), or
+  point it at your own daemon. **Caveat:** the server-side WebSocket tunnel
+  (`GET /api/targets/{id}/rdp`) is done, but the in‑portal RDP *viewer* (the
+  browser‑side Guacamole renderer) is **not yet vendored** — so there is a working
+  tunnel but no rendered RDP screen in the 5250 portal yet.
 
 ## 6. Day-to-day operations (the runbook)
 
