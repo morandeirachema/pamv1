@@ -115,8 +115,26 @@ func (s *Server) revokeLoginSessions(w http.ResponseWriter, r *http.Request) {
 		storeError(w, err)
 		return
 	}
-	s.audit(r.Context(), "session.revoked", fmt.Sprintf("user:%s sessions:%d", in.Username, n))
-	writeJSON(w, http.StatusOK, map[string]any{"username": in.Username, "revoked": n})
+	// Revoking a login cuts the user off entirely — also terminate any in-flight
+	// proxied target sessions they hold, not just their login tokens.
+	killed := s.killUserSessions(r.Context(), in.Username, "login-revoked")
+	s.audit(r.Context(), "session.revoked", fmt.Sprintf("user:%s sessions:%d killed:%d", in.Username, n, killed))
+	writeJSON(w, http.StatusOK, map[string]any{"username": in.Username, "revoked": n, "killed": killed})
+}
+
+// killUserSessions terminates every live proxied session an actor holds (via the
+// shared session registry) and audits it. Returns how many were killed; a no-op
+// when no registry is wired. Note: the registry is per-replica, so in an HA
+// deployment this cuts sessions on this replica only.
+func (s *Server) killUserSessions(ctx context.Context, username, reason string) int {
+	if s.sessions == nil {
+		return 0
+	}
+	killed := s.sessions.KillByActor(username)
+	if killed > 0 {
+		s.audit(ctx, "session.killed", fmt.Sprintf("user:%s count:%d reason:%s", username, killed, reason))
+	}
+	return killed
 }
 
 // capsForGrant resolves a built-in role name or an existing custom profile name

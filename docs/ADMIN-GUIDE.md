@@ -553,6 +553,14 @@ curl -H "X-API-Key: $PAM_API_KEY" -X POST http://localhost:8080/api/login-sessio
 `POST /api/identity/reconcile` also revokes the login sessions of any directory
 user it finds disabled/absent, so a scheduled reconcile deprovisions logins too.
 
+Revocation now also **terminates in-flight target sessions**, not just login
+tokens: revoking a user's login (or disabling them in the directory) kills their
+live SSH/DB/RDP sessions, and deleting a *user* grant to a target kills that
+user's session to that target (sessions to still-authorized targets keep running).
+Deleting a *role* grant only affects new connections. Note the session registry is
+per-replica, so in a multi-replica deployment this cuts sessions on the replica
+that handled the request (see the HA notes in [SECURITY-GAPS.md](SECURITY-GAPS.md)).
+
 ### Roles at a glance
 
 | Role | Manage targets/creds/users | Reveal secret | Connect via proxy | Read audit | Approve requests* |
