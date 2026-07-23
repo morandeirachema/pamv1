@@ -111,8 +111,9 @@ is a phase each, out of scope for a security *fix*:
   (syslog/CEF/LEEF), **HSM/KMS-backed SSH-CA signing**, **rotation webhooks**, and
   **HA correctness** (in-memory session registry + scheduler have no leader
   election, so kill-switch/monitoring/rotation are per-replica).
-- **Roadmap-deferred**: Kerberos/GSSAPI, in-browser RDP viewer, serial connectors,
-  SPIRE workload attestation, automatic broker-chain checkpoint export.
+- **Roadmap-deferred**: Kerberos/GSSAPI, serial connectors, SPIRE workload
+  attestation, automatic broker-chain checkpoint export. (The in-browser RDP viewer
+  has since **shipped** — vendored Guacamole client + bundled guacd.)
 
 ## New configuration introduced by these fixes
 

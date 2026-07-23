@@ -4,8 +4,10 @@ package web
 import (
 	"bytes"
 	"crypto/rand"
+	"crypto/sha256"
 	_ "embed"
 	"encoding/base64"
+	"encoding/hex"
 	"net/http"
 )
 
@@ -23,6 +25,19 @@ var guacamoleJS []byte
 // noncePlaceholder is the token in index.html's <script> tag that Index rewrites
 // to the per-request CSP nonce.
 var noncePlaceholder = []byte("__CSP_NONCE__")
+
+// guacSrcPlaceholder is the token in index.html the portal imports the vendored
+// client from; Index rewrites it to guacSrc.
+var guacSrcPlaceholder = []byte("__GUAC_SRC__")
+
+// guacSrc is a content-addressed URL for the vendored client — the fixed path with
+// a short hash of the embedded bytes as a cache-busting ?v=. Because the URL
+// changes whenever the file changes, GuacamoleJS can serve it `immutable` (never
+// revalidated) while an upgrade still reaches returning browsers.
+var guacSrc = func() []byte {
+	sum := sha256.Sum256(guacamoleJS)
+	return []byte("/static/guacamole-common.min.js?v=" + hex.EncodeToString(sum[:])[:12])
+}()
 
 // nonce returns a fresh base64 CSP nonce, or "" if the system RNG fails — in
 // which case the emitted policy matches no script and the page fails closed
@@ -54,12 +69,16 @@ func Index(w http.ResponseWriter, _ *http.Request) {
 			"connect-src 'self'; base-uri 'none'; form-action 'self'; "+
 			"frame-ancestors 'none'; object-src 'none'")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
-	_, _ = w.Write(bytes.Replace(indexHTML, noncePlaceholder, []byte(n), 1))
+	page := bytes.Replace(indexHTML, noncePlaceholder, []byte(n), 1)
+	page = bytes.Replace(page, guacSrcPlaceholder, guacSrc, 1)
+	_, _ = w.Write(page)
 }
 
-// GuacamoleJS serves the vendored guacamole-common-js ESM module (immutable, so
-// it is cached aggressively). It is public, like the portal page itself; the RDP
-// tunnel and token endpoints — not this static asset — enforce authorization.
+// GuacamoleJS serves the vendored guacamole-common-js ESM module. It is served
+// `immutable` (cached for a year, never revalidated) — sound because the portal
+// imports it via a content-hashed URL (guacSrc), so an upgrade changes the URL and
+// returning browsers fetch the new bytes. It is public, like the portal page
+// itself; the RDP tunnel and token endpoints enforce authorization, not this asset.
 func GuacamoleJS(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
 	w.Header().Set("X-Content-Type-Options", "nosniff")

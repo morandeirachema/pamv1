@@ -86,10 +86,19 @@
   let liveTimer = null;
 
   // The Apache Guacamole client (vendored) powers the in-portal RDP viewer. It is
-  // loaded lazily so the ~75KB module never delays first paint of the console;
-  // Guac stays null until the import resolves (RDP is user-initiated long after).
-  let Guac = null, rdpActive = false;
-  import("/static/guacamole-common.min.js").then((m) => { Guac = m.default; }).catch(() => { Guac = null; });
+  // imported on demand — the first time an operator opens RDP — so the ~75KB module
+  // never loads for the sign-on screen, non-RDP roles, or guacd-disabled deploys.
+  // GUAC_SRC is a content-addressed path (…?v=<hash>) so an upgrade busts the cache.
+  const GUAC_SRC = "__GUAC_SRC__";
+  let rdpActive = false, guacPromise = null;
+  function loadGuac() {
+    // Memoize the resolved module, but reset on failure so a transient error retries.
+    if (!guacPromise) {
+      guacPromise = import(GUAC_SRC).then((m) => m.default)
+        .catch((e) => { guacPromise = null; throw e; });
+    }
+    return guacPromise;
+  }
 
   const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   const pad = (s, n) => esc(String(s ?? "")).padEnd(n);
@@ -209,23 +218,27 @@
   // handshake; the browser only ever receives the rendered display.
   async function openRDP(t) {
     if (t.protocol !== "rdp") { say("CPF0002: TARGET " + String(t.name).toUpperCase() + " IS NOT RDP.", true); render(); return; }
-    if (!Guac) { say("RDP VIEWER IS STILL LOADING — TRY AGAIN.", true); render(); return; }
-    let tok;
-    try { tok = (await api("POST", "/api/rdp-token")).token; }
-    catch (e) { say("CPF9999: " + e.message, true); render(); return; }
-    startRDP(t, tok);
+    let Guac, tok;
+    try {
+      Guac = await loadGuac();
+      tok = (await api("POST", "/api/rdp-token")).token;
+    } catch (e) { say("CPF9999: " + String(e.message || "RDP VIEWER UNAVAILABLE").toUpperCase(), true); render(); return; }
+    startRDP(Guac, t, tok);
   }
 
   // startRDP builds the fullscreen viewer overlay, wires the Guacamole client to
-  // the WebSocket tunnel, and forwards keyboard/mouse. Ctrl+Alt+Q disconnects —
-  // caught in the capture phase so it never reaches the remote host.
-  function startRDP(t, tok) {
-    const wrap = document.createElement("div"); wrap.className = "rdpwrap";
+  // the WebSocket tunnel, and forwards keyboard/mouse. Keyboard/Mouse are bound to
+  // the overlay element (not document), so removing the overlay on teardown drops
+  // every listener — guacamole-common-js has no detach API. Ctrl+Alt+Q disconnects
+  // and is swallowed inside onkeydown so the chord never reaches the remote host.
+  function startRDP(Guac, t, tok) {
+    const wrap = document.createElement("div"); wrap.className = "rdpwrap"; wrap.tabIndex = -1;
     const bar = document.createElement("div"); bar.className = "rdpbar";
     bar.innerHTML = `<span><span class="white">RDP</span> ${esc(t.name)} <span class="cyan">${esc(t.host)}:${esc(t.port || 3389)}</span></span>` +
       `<span class="amber">Ctrl+Alt+Q = disconnect</span>`;
     const view = document.createElement("div"); view.className = "rdpview";
     wrap.appendChild(bar); wrap.appendChild(view); document.body.appendChild(wrap);
+    wrap.focus(); // the overlay must hold focus to receive key events
     rdpActive = true;
 
     const w = Math.max(640, Math.min(view.clientWidth || 1024, 4096));
@@ -235,32 +248,34 @@
     const display = client.getDisplay();
     view.appendChild(display.getElement());
 
-    const mouse = new Guac.Mouse(display.getElement());
-    mouse.onmousedown = mouse.onmouseup = mouse.onmousemove = (state) => client.sendMouseState(state);
-    const keyboard = new Guac.Keyboard(document);
-    keyboard.onkeydown = (sym) => client.sendKeyEvent(1, sym);
-    keyboard.onkeyup = (sym) => client.sendKeyEvent(0, sym);
-
     let closed = false;
-    const teardown = () => {
+    const teardown = (msg, isErr) => {
       if (closed) return; closed = true; rdpActive = false;
-      document.removeEventListener("keydown", capture, true);
-      keyboard.onkeydown = keyboard.onkeyup = null;
-      try { keyboard.reset(); } catch (e) {}
       try { client.disconnect(); } catch (e) {}
-      wrap.remove();
-      say("RDP SESSION TO " + String(t.name).toUpperCase() + " CLOSED.");
+      wrap.remove(); // drops the Keyboard/Mouse listeners bound to the overlay
+      say(msg || ("RDP SESSION TO " + String(t.name).toUpperCase() + " CLOSED."), !!isErr);
       render(); focusPrimary();
     };
-    const capture = (ev) => {
-      if (ev.ctrlKey && ev.altKey && (ev.key === "q" || ev.key === "Q")) {
-        ev.preventDefault(); ev.stopImmediatePropagation(); teardown();
+
+    const mouse = new Guac.Mouse(view);
+    mouse.onmousedown = mouse.onmouseup = mouse.onmousemove = (state) => client.sendMouseState(state);
+    const keyboard = new Guac.Keyboard(wrap);
+    keyboard.onkeydown = (sym) => {
+      // Ctrl+Alt+Q (q = keysym 0x071 / Q = 0x051) disconnects; return without
+      // forwarding so the chord is never sent to the privileged Windows session.
+      if (keyboard.modifiers.ctrl && keyboard.modifiers.alt && (sym === 0x071 || sym === 0x051)) {
+        teardown();
+        return true;
       }
+      client.sendKeyEvent(1, sym);
     };
-    document.addEventListener("keydown", capture, true);
-    client.onerror = (st) => { say("CPF9999: RDP — " + String((st && st.message) || "error").toUpperCase(), true); teardown(); };
-    tunnel.onerror = (st) => { say("CPF9999: RDP TUNNEL — " + String((st && st.message) || "error").toUpperCase(), true); teardown(); };
-    client.onstatechange = (state) => { if (state === 5) teardown(); }; // 5 = DISCONNECTED
+    keyboard.onkeyup = (sym) => client.sendKeyEvent(0, sym);
+
+    const errMsg = (st, what) => "CPF9999: " + what + " — " + String((st && st.message) || "error").toUpperCase();
+    client.onerror = (st) => teardown(errMsg(st, "RDP"), true);
+    tunnel.onerror = (st) => teardown(errMsg(st, "RDP TUNNEL"), true);
+    client.onstatechange = (state) => { if (state === 5) teardown(); };       // 5 = client DISCONNECTED
+    tunnel.onstatechange = (state) => { if (state === 2) teardown(); };        // 2 = tunnel CLOSED (e.g. admin kill / clean server close)
 
     client.connect("token=" + encodeURIComponent(tok) + "&width=" + w + "&height=" + h);
   }
