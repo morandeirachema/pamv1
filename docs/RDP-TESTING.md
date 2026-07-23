@@ -66,8 +66,9 @@ go test ./internal/web -run TestIndexNonceCSP -v
 |---|---|
 | `TestGuacamolePrelude` | The exact bytes `0.,<len>.<uuid>;` and `5.ready,<len>.<id>;` are emitted first. |
 | `TestTunnelUUID` | The tunnel id is a fresh 16-byte hex value per session. |
-| `TestRDPTunnelEndToEnd` | Full path over a real WebSocket: prelude first, the vaulted secret injected into guacd's `connect` (never sent by the browser), and **both** piping directions. |
+| `TestRDPTunnelEndToEnd` | Full path over a real WebSocket: prelude first, the vaulted secret injected into guacd's `connect` (never sent by the browser), **both** piping directions, and that a **>8 KB instruction arrives as one intact WebSocket message** (the bridge never splits a screen paint). |
 | `TestRDPTokenRequiresConnect` | `POST /api/rdp-token` is 404 without guacd, 403 for a non-connect role, 200 for a connector. |
+| `TestRDPTokenIsTunnelScoped` | A minted RDP token is 403 on `/api/targets` and `/api/me` and cannot re-mint — usable only at the tunnel, so a URL leak grants nothing. |
 | `TestRDPAuthAndTargetChecks` | Pre-upgrade auth: missing token → 401, wrong role → 403, non-RDP target → 422. |
 | `TestConnectInjectsCredentials` (guacd) | `connect` values are supplied in the order guacd advertised, with the credential injected. |
 

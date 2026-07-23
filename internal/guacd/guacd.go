@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // Instruction is a decoded Guacamole instruction: an opcode and its arguments.
@@ -112,6 +113,45 @@ type Conn struct {
 // Read reads from the buffered reader, so any bytes buffered during the
 // handshake are delivered to the interactive stream rather than lost.
 func (c *Conn) Read(p []byte) (int, error) { return c.r.Read(p) }
+
+// NextInstruction reads exactly one complete Guacamole instruction and returns
+// its raw wire bytes (length-prefixed elements terminated by ';'). A tunnel must
+// forward instruction-aligned frames because guacamole-common-js parses each
+// WebSocket message independently and rejects a message that ends mid-instruction
+// ("Incomplete instruction"); a value may itself contain ',' or ';', so the byte
+// stream cannot simply be split on those — the length prefixes are authoritative.
+func (c *Conn) NextInstruction() ([]byte, error) {
+	var b []byte
+	for {
+		// LENGTH is the Unicode code-point count of the element that follows the '.'.
+		lenStr, err := c.r.ReadString('.')
+		if err != nil {
+			return b, err
+		}
+		b = append(b, lenStr...)
+		n, err := strconv.Atoi(strings.TrimRight(lenStr, "."))
+		// Bound the element length so a corrupt/hostile prefix cannot drive a huge read.
+		if err != nil || n < 0 || n > 1<<20 {
+			return b, fmt.Errorf("guacd: bad length %q", lenStr)
+		}
+		for i := 0; i < n; i++ {
+			ru, _, err := c.r.ReadRune()
+			if err != nil {
+				return b, err
+			}
+			b = utf8.AppendRune(b, ru)
+		}
+		sep, err := c.r.ReadByte()
+		if err != nil {
+			return b, err
+		}
+		b = append(b, sep)
+		if sep == ';' { // instruction terminator
+			return b, nil
+		}
+		// sep == ',' → another element follows.
+	}
+}
 
 // Connect dials guacd at addr and performs the handshake for params, injecting
 // the credential just-in-time. It returns a Conn ready to be tunnelled.

@@ -721,6 +721,13 @@ func (s *Server) authz(cap auth.Capability, next http.HandlerFunc) http.Handler 
 			writeError(w, http.StatusForbidden, "complete MFA enrollment to continue")
 			return
 		}
+		if p.TunnelOnly {
+			// An RDP-tunnel token (minted for the WS URL) must not reach any API endpoint,
+			// so a copy leaked from a proxy log cannot act or re-mint itself.
+			s.audit(ctx, "authz.denied", r.Method+" "+r.URL.Path+" reason:tunnel-only-token")
+			writeError(w, http.StatusForbidden, "this token is only valid for the RDP tunnel")
+			return
+		}
 		if !p.Can(cap) {
 			s.log.Warn("authorization denied", "actor", p.Name, "role", string(p.Role),
 				"method", r.Method, "path", r.URL.Path)
@@ -764,6 +771,10 @@ func (s *Server) authenticated(next http.HandlerFunc) http.Handler {
 		// low-sensitivity endpoints any signed-in identity may call (/me, /logout,
 		// /mfa/*), so an emergency-key holder never acts entirely unrecorded.
 		s.noteBreakGlass(ctx, p, r)
+		if p.TunnelOnly {
+			writeError(w, http.StatusForbidden, "this token is only valid for the RDP tunnel")
+			return
+		}
 		next(w, r.WithContext(ctx))
 	})
 }
