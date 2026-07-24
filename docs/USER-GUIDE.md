@@ -8,7 +8,7 @@ review activity. If you deploy or administer pamv1, see the
 > user-facing behavior changes (portal, connecting, roles). Add a row to the
 > [change log](#8-change-log) with each update.
 >
-> Last updated: 2026-07-23 · Reflects: Phases 0–24 + the 2026-07 hardening pass — the 5250 console (11, now keyboard-first), custom permission profiles (12), the database session proxy you connect to with `psql` (15), supervised sessions (16: a supervisor may watch live, and a command can be blocked by policy), and Zero Standing Privilege on some targets (22: no stored password — pamv1 signs a short-lived certificate for your session). Note: an admin revoking your access now ends your live sessions immediately. See the [ROADMAP](../ROADMAP.md).
+> Last updated: 2026-07-24 · Reflects: Phases 0–25 + the 2026-07 hardening pass — the 5250 console (11, now keyboard-first and with full backend parity: safes, campaigns, risk analytics, live watch — Phase 25), custom permission profiles (12), the database session proxy you connect to with `psql` (15), supervised sessions (16: a supervisor may watch live, and a command can be blocked by policy), and Zero Standing Privilege on some targets (22: no stored password — pamv1 signs a short-lived certificate for your session). Note: an admin revoking your access now ends your live sessions immediately. See the [ROADMAP](../ROADMAP.md).
 
 > ⚠️ Educational / pre-production project — see the [README](../README.md).
 
@@ -108,7 +108,7 @@ touching privileged systems.
 | **Tab** | Move to the next field |
 | **F3** | Exit to the main menu / sign off |
 | **F5** | Refresh |
-| **F6** | Add (target, credential, grant, user, access request) |
+| **F6** | Add (target, credential, grant, user, access request, safe, member, campaign) |
 | **F9** | Context action (export the audit CSV; reconcile the directory) |
 | **F12** | Cancel / go back |
 
@@ -124,7 +124,7 @@ The **main menu** is your whole management surface. This is the complete menu;
 | 1 | Work with targets (+ access grants, require-approval) | admin |
 | 2 | Work with vaulted credentials (reveal, check-out, rotate, reconcile) | admin |
 | 3 | Credential check-out / check-in (exclusive leases) | admin |
-| 4 | Work with active sessions (live monitor + kill) | |
+| 4 | Work with active sessions (live monitor + kill; option 5 watches one live) | |
 | 5 | Work with access requests (4-eyes approve / deny / file) | |
 | 6 | Rotation & reconciliation report | admin |
 | 7 | Discovery scan (find and onboard hosts) | admin |
@@ -136,6 +136,9 @@ The **main menu** is your whole management surface. This is the complete menu;
 | 13 | System configuration | admin |
 | 14 | Effective config & IaC export | admin |
 | 15 | Work with application secrets | admin |
+| 16 | Work with safes (members, delegated administration) | |
+| 17 | Certification campaigns (review access, certify / revoke) | |
+| 18 | Risk analytics (behavioral risk per actor) | |
 | 90 | Sign off | |
 
 On list screens you type an **option number** next to a row (e.g. `5` to display,
@@ -230,10 +233,29 @@ Each entry shows the timestamp, the **actor** (a real username, or `break-glass`
 the **action**, and details. Break-glass entries are highlighted — they mark
 emergency access and always deserve a look.
 
-You can also **watch an in-progress session live**: list the active sessions
-(**Work with Active Sessions**, or `GET /api/sessions`) and stream one as it
-happens — `GET /api/sessions/{id}/stream` (Server-Sent Events). The watch itself
-is audited (`session.monitor`).
+You can also **watch an in-progress session live**: on **Work with Active
+Sessions**, type option **5** next to a session and its output streams into a
+view-only pane as it happens (F12 stops watching). The same stream is available
+via the API — `GET /api/sessions/{id}/stream` (Server-Sent Events). The watch
+itself is audited (`session.monitor`).
+
+Two more review screens (both need audit-read):
+
+- **Certification campaigns** (menu 17) — the periodic access review: each item
+  is one grant; you (or an admin) certify it (keep) or revoke it (**the grant is
+  deleted**). Auditors can read every campaign and its decisions as evidence;
+  deciding needs a user-management role.
+- **Risk analytics** (menu 18) — per-actor behavioral risk over the recent audit
+  window. Every score is explainable: the screen lists the named signals
+  (break-glass, blocked commands, auth-failure bursts, off-hours, velocity) and
+  the points each contributed. Filter by minimum level or widen the window and
+  press Enter to rescore.
+
+When you **file an access request** (menu 5, F6) you can now also provide a
+change **ticket** (if your organization gates access on ITSM tickets), ask for a
+stricter **N-of-M approval chain**, and set an **active window** (`Active from` /
+`Active until`) to pre-approve a future maintenance slot. Approvers see the
+ticket, the approval progress (e.g. `1/2`), and the window on their list.
 
 ## 7. Troubleshooting
 
@@ -256,6 +278,7 @@ is audited (`session.monitor`).
 
 | Date | Change |
 |---|---|
+| 2026-07-24 | Phase 25 (console parity): menu items **16–18** (safes, certification campaigns, risk analytics), **watching a session live from the portal** (Active Sessions option 5), and the richer access-request form (ticket, N-of-M approvals, active window). §4, §6 |
 | 2026-07-23 | **RDP in the portal:** documented option **7** on an RDP target — the Windows desktop now renders in the browser (`Ctrl+Alt+Q` disconnects), no client needed. §5 |
 | 2026-07-23 | Completed the main-menu table (items 12–15); noted that revoking access now ends live sessions (troubleshooting + header); aligned with the doc set |
 | 2026-07-21 | Portal is now **keyboard-first** (mouse optional): the cursor lands on each screen's field, **Esc** goes back, **↑/↓** move between list rows |

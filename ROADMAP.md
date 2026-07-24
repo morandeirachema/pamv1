@@ -6,7 +6,7 @@ Status: ✅ done · 🚧 in progress · ⬜ planned
 
 > 🟢 **Living document** — updated in the same change as the code, without a separate ask (see the [docs hub](docs/README.md)).
 
-**Phases 0–24 are shipped** — through the CyberArk/Wallix-style console, the AI-agent
+**Phases 0–25 are shipped** — through the CyberArk/Wallix-style console, the AI-agent
 access broker (MCP + SPIFFE), SOPS-encrypted secrets, the four **Tier-1
 competitive-coverage gaps** closed (a PostgreSQL session proxy, supervised sessions
 with command control, safes, dependent-account propagation), optional CyberArk Conjur
@@ -16,8 +16,11 @@ the two **Tier-3** market-frontier gaps that can be built and verified honestly 
 process — **Zero Standing Privilege** (ephemeral short-lived SSH certificates, Phase 22)
 and **privileged threat analytics** (behavioral risk scoring + automated response,
 Phase 23) — and now the first **Tier-4** ecosystem gap: a **Conjur-style
-application-secrets API** for non-agent apps (Phase 24). The portal is also
-**keyboard-first** (mouse optional). See their sections below. Beyond those,
+application-secrets API** for non-agent apps (Phase 24), and **console parity**
+(Phase 25) — 5250 screens for every backend capability that had been API-only
+(safes, certification campaigns, risk analytics, a live session viewer, and the
+Phase 20/21 request-workflow fields). The portal is also **keyboard-first**
+(mouse optional). See their sections below. Beyond those,
 a number of items genuinely require external infrastructure or a paid account to build
 and verify honestly, so they are left as documented follow-ons rather than faked. The
 full catalogue is in **[docs/EXTERNAL-INFRA-GAPS.md](docs/EXTERNAL-INFRA-GAPS.md)**;
@@ -238,7 +241,7 @@ Turn the existing recording + kill-switch into **supervised** sessions — the t
 - [x] **Command control**: a `CommandGuard` (regex denylist from `PAM_COMMAND_DENY_FILE`, one pattern per line) blocks a dangerous command **before it reaches the target** on every path where a discrete command is visible — SSH `exec` (the request is refused, never forwarded), each WinRM command-loop line, and each PostgreSQL `Query`/`Parse` (a simple query is refused but the session stays usable; an extended-protocol statement fails closed). Blocks are audited `command.blocked` with the matched pattern
 - [x] **Shared writer plumbing**: the proxy tees session output to the hub via `teeLive`; the DB relay serializes all client-facing writes under one mutex (pgproto3 is not concurrency-safe), proven race-free under `-race`
 - [x] **Tests**: the guard (match / comment-skip / fail-loud / nil no-op), the hub (pub-sub, cancel, slow-watcher drop), a blocked SSH exec and a blocked SQL statement (neither reaches the upstream), a live SQL frame observed over the hub, and the SSE endpoint (200 + frame for an auditor, 403 without `CapReadAudit`)
-- Deferred (documented): interactive-shell command filtering (a raw PTY stream is not parsed — use observer sessions or restrict shell access), WinRM live streaming, and an in-portal 5250 viewer for the live stream
+- Deferred (documented): interactive-shell command filtering (a raw PTY stream is not parsed — use observer sessions or restrict shell access) and WinRM live streaming. *(The in-portal 5250 viewer for the live stream shipped in Phase 25.)*
 
 ## Phase 17 — Safes & dependent-account propagation ✅
 
@@ -256,7 +259,7 @@ The last two [Tier-1 competitive-coverage gaps](README.md#coverage-vs-commercial
 - [x] **Declared consumers** (migration `0013`: `credential_dependencies`): a credential lists the **Windows Services / Scheduled Tasks / IIS App Pools** that log on with it (`POST/GET /api/credentials/{id}/dependencies`, `DELETE …/{did}`)
 - [x] **Propagation on rotation**: after `rotateCredential` sets and re-vaults the new secret, `propagateDependencies` updates each consumer over WinRM (`sc.exe config` / `schtasks /Change /RP` / `appcmd set apppool …password`) with the new secret — so auto-rotating a service account no longer breaks the services that use it. A propagation failure never fails the (already-persisted) rotation; each consumer is audited `credential.dependency_updated`/`credential.dependency_failed` (the secret is injected into the WinRM command but never audited or recorded)
 - [x] **Tests**: store contract (CRUD, default WinRM port, missing-credential `ErrNotFound`, cascade on credential delete) and an end-to-end rotation test (the fake WinRM receives the `sc.exe config` for the service with the new secret; the audit carries the update without the secret)
-- Deferred (documented): a per-consumer management/reconcile credential (propagation currently connects as the rotated account), a Safe-scoped policy/workflow layer (per-safe approval, dual control), and an in-portal 5250 safe-management screen
+- Deferred (documented): a per-consumer management/reconcile credential (propagation currently connects as the rotated account) and a Safe-scoped policy/workflow layer (per-safe approval, dual control). *(The in-portal 5250 safe-management screens shipped in Phase 25.)*
 
 ## Phase 18 — Conjur secret sourcing (alternative to SOPS) ✅
 
@@ -278,7 +281,7 @@ The first [Tier-2 competitive-coverage gap](README.md#coverage-vs-commercial-pam
 - [x] **Governance-scoped authz**: management (`create`/`decide`/`close`) needs `CapManageUsers`; reading a campaign + its items needs `CapReadAudit` — so an auditor can review the evidence without being able to change access. No new capability added to the matrix
 - [x] **Audit vocabulary**: `certification.campaign_created` · `certification.item_certified` · `certification.item_revoked` · `certification.campaign_closed`
 - [x] **Tests**: store contract (CRUD, decide, close, missing-campaign `ErrNotFound`) and an end-to-end API test (a campaign snapshots a grant + a safe member; revoke deletes the grant, certify retains the member, a closed campaign returns 409; auditor can read, a plain user cannot manage)
-- Deferred (documented): scheduled/recurring campaigns, scoped campaigns (per-safe or per-owner), reviewer assignment + reminders, and a 5250 console review screen
+- Deferred (documented): scheduled/recurring campaigns, scoped campaigns (per-safe or per-owner), and reviewer assignment + reminders. *(The 5250 console review screen shipped in Phase 25.)*
 
 ## Phase 20 — ITSM / ticketing gate ✅
 
@@ -318,7 +321,7 @@ The second [Tier-3 gap](README.md#coverage-vs-commercial-pam-cyberark-wallix-): 
 - [x] **Risk API**: `GET /api/analytics/risk` (`CapReadAudit`) scores the recent audit window into per-actor findings (score, level, contributing signals), sorted by score, filterable by `?min_level=` and `?window_min=` — so an auditor reviews risk without changing any access.
 - [x] **Background worker + automated response** (`RunAnalyticsWorker`, `PAM_ANALYTICS_INTERVAL_MIN`): each pass scores the window, and for a **newly elevated** high/critical actor appends `analytics.risk_flagged`, fires the alert channel, and — with `PAM_ANALYTICS_AUTO_KILL` on — **terminates a critical actor's live sessions** (`session.Registry.KillByActor`, audited `analytics.auto_response`). A steady state is not re-alerted every pass; a worsening trend is.
 - [x] **Tests**: engine unit tests (break-glass → high; clean in-hours work → no finding; off-hours contribution; auth-failure burst + score-descending sort; per-signal cap) and API tests (the risk endpoint scores + enforces `CapReadAudit`; the worker flags, alerts, dedupes, and auto-kills a critical actor's sessions).
-- Deferred (documented): peer-baseline / new-target novelty scoring (needs a longer history model), step-up-MFA response, and a 5250 console risk dashboard.
+- Deferred (documented): peer-baseline / new-target novelty scoring (needs a longer history model) and step-up-MFA response. *(The 5250 console risk dashboard shipped in Phase 25.)*
 
 ---
 
@@ -334,10 +337,25 @@ The first [Tier-4 ecosystem gap](README.md#coverage-vs-commercial-pam-cyberark-w
 - [x] **Tests**: store contract (app-key CRUD, default-deny + grant, duplicate/missing-FK errors, cascade on credential and app delete) and an end-to-end API test (mint → grant → fetch exactly the granted secret; ungranted 403; bad token 401; the secret never enters the audit trail; a plain user can neither mint apps nor grant secrets; routes absent when disabled).
 - Deferred (documented, Tier-4): a **Terraform provider** for pamv1 objects (a separate module + the Terraform Registry), **Secrets-Hub-style sync-out** to AWS Secrets Manager / Azure Key Vault (needs a cloud account), **SSH-key fleet discovery** at scale (needs a real host fleet), and **thick-app connection components** (Windows RemoteApp hosts) — see [docs/EXTERNAL-INFRA-GAPS.md](docs/EXTERNAL-INFRA-GAPS.md).
 
+## Phase 25 — Console parity ✅
+
+Close the gap between the backend and the 5250 console: Phases 16–23 shipped
+capabilities whose portal screens were documented follow-ons. This phase brings
+the console back to full CyberArk/Wallix-style *coverage* — every capability
+reachable keyboard-first, same austere look, still one `//go:embed`'d vanilla-JS
+page with no new routes or schema (each screen drives an existing API).
+
+- [x] **Work with safes** (menu 16): list/create/delete safes with per-safe target counts; *Work with safe members* (add/remove, `can_manage` delegated administration); targets now show their safe and *Work with Targets* option 8 assigns/clears a target's safe (`PUT /api/targets/{id}/safe`)
+- [x] **Certification campaigns** (menu 17): snapshot a new campaign (name + optional due date), review items with certify/revoke decisions (revoke deletes the underlying grant — labeled as such), close a campaign; read-only for auditors (decisions need `manage_users`), decided items show decision + decider
+- [x] **Risk analytics** (menu 18): the per-actor behavioral-risk dashboard over `GET /api/analytics/risk` — score, level (color-coded), named signals with points, event counts; filter by minimum level and scoring window from the screen
+- [x] **Live session viewer**: *Work with Active Sessions* option 5 watches a session as it happens — the SSE stream (`GET /api/sessions/{id}/stream`) is read with `fetch` (EventSource cannot send the `X-API-Key` header), ANSI-stripped, and rendered in a bounded scrollback pane; view-only, audited `session.monitor`
+- [x] **Access-request workflow fields** (Phases 20–21 catch-up): the file-request form now takes a change **ticket**, a requested **N-of-M approval count**, and a **scheduled window** (`not_before`/`not_after`); the approver list shows ticket, approval progress (`n/m` distinct approvers), window start, and expiry
+- [x] Verified end to end against the in-memory server: every screen's exact API calls exercised (safe → member → target assignment; campaign snapshot → certify/revoke-with-teeth → close; risk filters; a ticketed 2-of-N windowed request), plus `node --check` on the embedded script and the full Go test suite
+
 ## Portal: keyboard-first navigation ✅
 
 The 5250 console is now explicitly **keyboard-first** (the mouse is optional), matching the IBM-terminal heritage: focus lands on each screen's primary field after every render, **Esc** cancels/goes back (the twin of F12), **↑/↓** move between subfile option cells, Tab/Enter/F-keys work throughout, and a persistent hint documents the shortcuts. The look is unchanged — only keyboard affordances were added.
 
 ---
 
-**Tier-2 (access-governance depth) is complete** — certification campaigns (19), the ITSM/ticketing gate (20), and richer approval workflows (21). **Tier-3**: Zero Standing Privilege (22) and privileged threat analytics (23) are shipped; connector/plugin breadth, cloud CIEM, and web/SaaS session proxying remain (infra-bound). **Tier-4 is under way**: the application-secrets API (24) is shipped; a Terraform provider, Secrets-Hub sync-out, SSH-key fleet discovery, and thick-app components remain, each requiring external infrastructure or an account to build honestly (see [docs/EXTERNAL-INFRA-GAPS.md](docs/EXTERNAL-INFRA-GAPS.md)). See the [competitive-coverage section](README.md#coverage-vs-commercial-pam-cyberark-wallix-) for the full picture.
+**Tier-2 (access-governance depth) is complete** — certification campaigns (19), the ITSM/ticketing gate (20), and richer approval workflows (21). **Tier-3**: Zero Standing Privilege (22) and privileged threat analytics (23) are shipped; connector/plugin breadth, cloud CIEM, and web/SaaS session proxying remain (infra-bound). **Tier-4 is under way**: the application-secrets API (24) is shipped; a Terraform provider, Secrets-Hub sync-out, SSH-key fleet discovery, and thick-app components remain, each requiring external infrastructure or an account to build honestly (see [docs/EXTERNAL-INFRA-GAPS.md](docs/EXTERNAL-INFRA-GAPS.md)). The 5250 console has **full parity** with the backend (Phase 25) — every shipped capability is operable from the portal, keyboard-first. See the [competitive-coverage section](README.md#coverage-vs-commercial-pam-cyberark-wallix-) for the full picture.

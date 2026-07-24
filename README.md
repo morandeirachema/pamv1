@@ -30,7 +30,7 @@ unapologetically **AS/400 / IBM 5250 green-screen console**, because touching a 
 
 Built phase by phase with a single rule: **every phase is functional end to end** — it
 runs, passes tests, and deploys as Infrastructure-as-Code. The **[roadmap](ROADMAP.md)** runs
-0–24 and **all twenty-five phases have shipped** — from the JIT SSH proxy and RBAC, through
+0–25 and **all twenty-six phases have shipped** — from the JIT SSH proxy and RBAC, through
 AD/Entra/OIDC login, Windows targets, break-glass quorum, OT/industrial adaptation, NIS2
 tooling, scale/HA and the full 5250 console, to a hot-swappable configuration subsystem with
 custom-profile RBAC, an **AI-agent access broker** (policy engine, JIT tool execution,
@@ -138,7 +138,7 @@ JIT credential, and the agent receives only the result.
 
 ## What works today
 
-Phases 0–24, grouped by area. Every capability is exercised by tests and deploys as code.
+Phases 0–25, grouped by area. Every capability is exercised by tests and deploys as code.
 
 ### Identity & access
 
@@ -169,7 +169,7 @@ Phases 0–24, grouped by area. Every capability is exercised by tests and deplo
 
 ### Configuration & the management console
 
-- **AS/400 management console** — a full role-aware console in green phosphor: Sign On, a numbered main menu, and menu-driven `Work with…` screens for targets & grants, credentials (reveal/check-out/rotate/reconcile), active sessions (live monitor + kill), 4-eyes access requests, users & profiles, MFA, discovery, reconciliation, audit (filter + CSV export), break-glass, **permission profiles**, **system configuration**, **effective config + IaC export** and **application secrets** — numeric options (`4=Delete`, `5=Display`), F-keys, scanlines. It is **keyboard-first** (the mouse is optional): focus lands on each screen's field, `Esc` goes back, `↑/↓` move between rows. The menu shows only what your role permits.
+- **AS/400 management console** — a full role-aware console in green phosphor: Sign On, a numbered main menu, and menu-driven `Work with…` screens for targets & grants, credentials (reveal/check-out/rotate/reconcile), active sessions (live monitor + kill + a **live watch pane**), 4-eyes access requests (ticket, N-of-M approvals, scheduled windows), users & profiles, MFA, discovery, reconciliation, audit (filter + CSV export), break-glass, **permission profiles**, **system configuration**, **effective config + IaC export**, **application secrets**, **safes**, **certification campaigns** and **risk analytics** — numeric options (`4=Delete`, `5=Display`), F-keys, scanlines. It is **keyboard-first** (the mouse is optional): focus lands on each screen's field, `Esc` goes back, `↑/↓` move between rows. The menu shows only what your role permits.
 
 <p align="center">
   <img src="docs/img/portal-app-secrets.svg" alt="Work with application secrets — the 5250 console screen" width="720">
@@ -246,7 +246,7 @@ disable the proxy with `PAM_SSH_ADDR=off`.
 
 ## Roadmap
 
-All twenty-five phases (0–24) have shipped — full per-phase detail in **[ROADMAP.md](ROADMAP.md)**:
+All twenty-six phases (0–25) have shipped — full per-phase detail in **[ROADMAP.md](ROADMAP.md)**:
 
 | Phase | Theme | Status |
 |---|---|---|
@@ -275,6 +275,7 @@ All twenty-five phases (0–24) have shipped — full per-phase detail in **[ROA
 | 22 | Zero Standing Privilege (ephemeral short-lived SSH certificates) | ✅ shipped |
 | 23 | Privileged threat analytics (behavioral risk scoring + auto-response) | ✅ shipped |
 | 24 | Application-secrets API (Conjur-style delivery for non-agent apps) | ✅ shipped |
+| 25 | Console parity (safes, campaigns, risk analytics, live session viewer) | ✅ shipped |
 
 ## Coverage vs. commercial PAM (CyberArk, Wallix, …)
 
