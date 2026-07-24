@@ -8,7 +8,7 @@
 > map) — by explaining *how the code actually runs*. Keep it current: when you
 > change a subsystem, update its section here in the same change.
 >
-> Last updated: 2026-07-23 · Reflects: Phases 0–24 + the 2026-07 hardening pass.
+> Last updated: 2026-07-24 · Reflects: Phases 0–25 + the 2026-07 hardening pass.
 
 ---
 
@@ -336,6 +336,11 @@ It is also **keyboard-first** (the mouse is optional), matching the 5250 heritag
 after every redraw (dynamically-inserted `autofocus` is unreliable), `Esc` cancels
 / goes back (the twin of F12), `↑`/`↓` move between subfile option cells, and Tab /
 Enter / F-keys work throughout. The look is unchanged — only affordances were added.
+
+Since Phase 25 the console has **full parity** with the backend — screens for
+safes, certification campaigns, and risk analytics, plus a live session watch
+pane that reads the Phase 16 SSE stream with `fetch` (EventSource cannot send
+the `X-API-Key` header; frames are ANSI-stripped into a bounded scrollback).
 
 ### 4.4 Request lifecycle (a typical write)
 
@@ -891,5 +896,6 @@ phase-by-phase status.
 
 | Date | Change |
 |---|---|
+| 2026-07-24 | Phase 25 (console parity): §4.3 notes the new portal screens (safes, campaigns, risk, live watch pane) and the fetch-based SSE reader. Portal-only change — no Go surface moved. |
 | 2026-07-23 | Doc-quality pass: current CI-gate list (`staticcheck`/`govulncheck`/`gosec` + live-Postgres/PKCS#11/sops); current migration high-water mark; header currency. |
 | 2026-07-21 | Initial code guide covering Phases 0–24 (vault, store, auth, api, proxy, identity, lifecycle, ZSP, analytics, broker, break-glass, governance). |

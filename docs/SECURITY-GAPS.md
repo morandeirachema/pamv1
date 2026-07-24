@@ -9,7 +9,7 @@
 > lives. pamv1 is educational ("for learning purposes") — this document is part of
 > that: it shows the reasoning, not just the result.
 >
-> Last updated: 2026-07-23 · Reflects: Phases 0–24 + the 2026-07 hardening pass.
+> Last updated: 2026-07-24 · Reflects: Phases 0–25 + the 2026-07 hardening pass.
 
 ## How the review was run
 

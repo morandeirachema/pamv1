@@ -34,7 +34,7 @@ de fósforo verde** sin concesiones, porque tocar un PAM debe *sentirse* serio.
 
 Construido fase a fase con una regla: **cada fase es funcional de principio a fin** — arranca,
 pasa los tests y se despliega como Infraestructura-como-Código. El **[roadmap](ROADMAP.md)**
-abarca de la 0 a la 24 y **se han entregado las veinticinco fases** — desde el proxy SSH JIT y el
+abarca de la 0 a la 25 y **se han entregado las veintiséis fases** — desde el proxy SSH JIT y el
 RBAC, pasando por el login AD/Entra/OIDC, los objetivos Windows, el quórum de break-glass, la
 adaptación OT/industrial, las herramientas NIS2, escala/HA y la consola 5250 completa, hasta un
 subsistema de configuración con hot-swap y RBAC de perfiles personalizados, un **bróker de
@@ -141,7 +141,7 @@ resultado.
 
 ## Qué funciona hoy
 
-Fases 0–24, agrupadas por área. Cada capacidad está cubierta por tests y se despliega como código.
+Fases 0–25, agrupadas por área. Cada capacidad está cubierta por tests y se despliega como código.
 
 ### Identidad y acceso
 
@@ -172,7 +172,7 @@ Fases 0–24, agrupadas por área. Cada capacidad está cubierta por tests y se 
 
 ### Configuración y la consola de gestión
 
-- **Consola de gestión AS/400** — una consola completa consciente de roles en fósforo verde: Sign On, un menú principal numerado y pantallas `Work with…` para objetivos y concesiones, credenciales (revelar/prestar/rotar/reconciliar), sesiones activas (monitor en vivo + corte), solicitudes de acceso a cuatro ojos, usuarios y perfiles, MFA, descubrimiento, reconciliación, auditoría (filtro + exportación CSV), break-glass, **perfiles de permisos**, **configuración del sistema**, **config efectiva + exportación a IaC** y **secretos de aplicación** — opciones numéricas (`4=Borrar`, `5=Ver`), teclas F, líneas de barrido. Es **orientada al teclado** (el ratón es opcional): el foco cae en el campo de cada pantalla, `Esc` vuelve atrás, `↑/↓` mueven entre filas. El menú muestra solo lo que tu rol permite.
+- **Consola de gestión AS/400** — una consola completa consciente de roles en fósforo verde: Sign On, un menú principal numerado y pantallas `Work with…` para objetivos y concesiones, credenciales (revelar/prestar/rotar/reconciliar), sesiones activas (monitor en vivo + corte + un **panel de observación en directo**), solicitudes de acceso a cuatro ojos (ticket, aprobaciones N-de-M, ventanas programadas), usuarios y perfiles, MFA, descubrimiento, reconciliación, auditoría (filtro + exportación CSV), break-glass, **perfiles de permisos**, **configuración del sistema**, **config efectiva + exportación a IaC**, **secretos de aplicación**, **cajas fuertes (safes)**, **campañas de certificación** y **analítica de riesgo** — opciones numéricas (`4=Borrar`, `5=Ver`), teclas F, líneas de barrido. Es **orientada al teclado** (el ratón es opcional): el foco cae en el campo de cada pantalla, `Esc` vuelve atrás, `↑/↓` mueven entre filas. El menú muestra solo lo que tu rol permite.
 
 <p align="center">
   <img src="docs/img/portal-app-secrets.svg" alt="Trabajar con secretos de aplicación — pantalla de la consola 5250" width="720">
@@ -248,7 +248,7 @@ ves la credencial. Las grabaciones van a `PAM_RECORDING_DIR`; desactiva el proxy
 
 ## Hoja de ruta
 
-Se han entregado las veinticinco fases (0–24) — detalle por fase en **[ROADMAP.md](ROADMAP.md)**:
+Se han entregado las veintiséis fases (0–25) — detalle por fase en **[ROADMAP.md](ROADMAP.md)**:
 
 | Fase | Tema | Estado |
 |---|---|---|
@@ -277,6 +277,7 @@ Se han entregado las veinticinco fases (0–24) — detalle por fase en **[ROADM
 | 22 | Privilegio Cero Permanente (certificados SSH efímeros de corta vida) | ✅ entregada |
 | 23 | Analítica de amenazas privilegiadas (riesgo conductual + respuesta automática) | ✅ entregada |
 | 24 | API de secretos para aplicaciones (entrega estilo Conjur para apps sin agente) | ✅ entregada |
+| 25 | Paridad de la consola (safes, campañas, analítica de riesgo, visor de sesiones en directo) | ✅ entregada |
 
 ## Cobertura frente al PAM comercial (CyberArk, Wallix, …)
 

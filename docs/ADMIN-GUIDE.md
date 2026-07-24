@@ -8,7 +8,7 @@ procedure, and read the logs and audit trail.
 > admin-facing behavior changes (config, deployment, management, logging). Add a
 > row to the [change log](#12-change-log) with each update.
 >
-> Last updated: 2026-07-23 · Reflects: Phases 0–24 + the 2026-07 hardening pass — through the AI-agent access broker (13), the PostgreSQL database session proxy (15), live monitoring + command control (16), safes + dependent-account propagation (17), optional CyberArk Conjur secret sourcing (18), access certification campaigns (19), the ITSM/ticketing gate (20), richer approval workflows (21), Zero Standing Privilege via ephemeral SSH certificates (22), privileged threat analytics (23), and the Conjur-style application-secrets API (24) — plus the post-24 hardening: an HMAC-chained audit trail with signed checkpoints (§9.2), revocation that terminates live sessions (§7), verified upstream-DB TLS, and per-IP proxy auth throttling. The console is keyboard-first. See the [ROADMAP](../ROADMAP.md).
+> Last updated: 2026-07-24 · Reflects: Phases 0–25 + the 2026-07 hardening pass — through the AI-agent access broker (13), the PostgreSQL database session proxy (15), live monitoring + command control (16), safes + dependent-account propagation (17), optional CyberArk Conjur secret sourcing (18), access certification campaigns (19), the ITSM/ticketing gate (20), richer approval workflows (21), Zero Standing Privilege via ephemeral SSH certificates (22), privileged threat analytics (23), the Conjur-style application-secrets API (24), and console parity (25: 5250 screens for safes, campaigns, risk analytics, and a live session viewer) — plus the post-24 hardening: an HMAC-chained audit trail with signed checkpoints (§9.2), revocation that terminates live sessions (§7), verified upstream-DB TLS, and per-IP proxy auth throttling. The console is keyboard-first. See the [ROADMAP](../ROADMAP.md).
 
 > ⚠️ **Educational / pre-production.** pamv1 is a learning project and is
 > currently intended for **pre-production** use. It has not been security-audited.
@@ -641,6 +641,10 @@ curl -H "X-API-Key: $PAM_API_KEY" -X PUT http://localhost:8080/api/targets/7/saf
   -d '{"safe_id":1}'      # target 7 is now reachable only by safe members
 ```
 
+All of this is also operable from the console: **Work with Safes** (menu 16)
+lists/creates/deletes safes and manages members, and **Work with Targets**
+option **8** assigns a target to (or clears it from) a safe.
+
 Placing a target in a safe **restricts** it to the safe's members (plus any
 direct grants) — an empty safe leaves its targets open. Clear a target's safe
 with `{"safe_id":null}`. Delegate ownership by adding a `can_manage` member; they
@@ -1113,7 +1117,9 @@ evidence). Replay with [asciinema](https://asciinema.org/): `asciinema play <fil
 Beyond after-the-fact recordings, a supervisor can **watch a session as it
 happens** and policy can **block a dangerous command mid-stream**.
 
-**Live monitoring.** `GET /api/sessions/{id}/stream` streams a live session's
+**Live monitoring.** In the console, **Work with Active Sessions** option **5**
+opens a view-only watch pane on a session. The underlying endpoint is
+`GET /api/sessions/{id}/stream`, which streams a live session's
 output as [Server-Sent Events](https://developer.mozilla.org/docs/Web/API/Server-sent_events)
 (requires `CapReadAudit`; the watch is audited `session.monitor`). List the live
 sessions first to get an id, then follow one:
@@ -1184,6 +1190,10 @@ curl -sX POST https://pam.example/api/campaigns/1/items/8/decision \
 curl -sX POST https://pam.example/api/campaigns/1/close -H "X-API-Key: $PAM_API_KEY"
 ```
 
+The whole flow is also in the console: **Certification campaigns** (menu 17) —
+F6 snapshots a new campaign (with an optional due date), option **5** on a
+campaign opens the item review (certify / revoke per item), option **8** closes it.
+
 Management (create / decide / close) requires `CapManageUsers`; **reading** a
 campaign and its items requires `CapReadAudit`, so an **auditor** can review the
 attestation evidence without being able to change access. Every decision is
@@ -1209,6 +1219,9 @@ curl -s https://pam.example/api/analytics/risk -H "X-API-Key: $PAM_API_KEY"
 curl -s "https://pam.example/api/analytics/risk?min_level=high&window_min=1440" \
   -H "X-API-Key: $PAM_API_KEY"
 ```
+
+The same view is in the console as **Risk analytics** (menu 18), with the
+minimum-level and window filters on-screen.
 
 To run it continuously, enable the background worker. Each pass scores the window
 and, for a **newly elevated** high/critical actor, appends an
@@ -1280,6 +1293,7 @@ scores in your environment.
 
 | Date | Change |
 |---|---|
+| 2026-07-24 | **Phase 25 — console parity.** New 5250 screens: *Work with Safes* (menu 16, incl. member management and target assignment via *Work with Targets* option 8), *Certification campaigns* (menu 17: snapshot / certify / revoke / close), *Risk analytics* (menu 18), and a **live session watch pane** (*Active Sessions* option 5). The file-request form gained the Phase 20/21 fields (ticket, N-of-M approvals, scheduled window). Portal-only — no new routes, schema, or env. §5, §9.4, §9.6, §9.7 |
 | 2026-07-23 | **In-portal RDP viewer.** The portal now vendors the Apache Guacamole JS client (`/static/guacamole-common.min.js`, see `NOTICE`) and renders RDP on a canvas — *Work with Targets* → option **7**, `Ctrl+Alt+Q` to disconnect. Adds `POST /api/rdp-token` (short-lived WS token, audited `rdp.token`) and widens the portal CSP for the canvas (`img-src data: blob:`, `script-src 'self'`). Verification: [RDP-TESTING.md](RDP-TESTING.md). See §5 → *RDP*. |
 | 2026-07-23 | **Bundled guacd (RDP broker).** The Docker compose runs a hardened `guacd` service (`PAM_GUACD_ADDR=guacd:4822` wired in); the raw K8s manifests add `deploy/k8s/guacd.yaml` (Deployment + ClusterIP + NetworkPolicy); the Helm chart adds it under `guacd.enabled=true`. Internal-only in every case. See §5 → *RDP*. |
 | 2026-07-23 | Doc-quality pass: added a contents index; de-staled §1 Concepts (Windows/PostgreSQL targets, DB proxy, custom profiles) and the `protocol`/`secret_type` type-lists; standardized on "PAM token"; fixed undefined `$TOKEN` in examples; header currency |

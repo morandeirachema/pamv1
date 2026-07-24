@@ -48,6 +48,10 @@
   form.inline { display: inline; }
   label { display: block; }
   .indent { margin-left: 4ch; }
+  /* Live session watch pane (Phase 16 monitoring viewer). */
+  .watchpane { height: 55vh; overflow-y: auto; background: #020402;
+    border: 1px solid #123c1f; padding: 4px 6px; white-space: pre-wrap;
+    word-break: break-all; margin: 4px 0; }
   /* In-portal RDP viewer overlay (Guacamole canvas). */
   .rdpwrap { position: fixed; inset: 0; z-index: 50; background: #050705;
     display: flex; flex-direction: column; }
@@ -83,6 +87,9 @@
   let apps = [], appGrants = [], grantsApp = 0, newApp = null;
   let viewCred = null, grantsTarget = 0, newUser = null, mfaInfo = null, mfaEnroll = null, recoveryCodes = [], discovered = null, reconcileReport = null;
   let profiles = [], configItems = [], configNote = "", effCfg = null, iacText = "", iacFormat = "";
+  let safes = [], safeMembers = [], membersSafe = 0, safeTarget = null;
+  let campaigns = [], campView = null, risk = null, riskMin = "", riskWin = "";
+  let watchSess = null, watchAbort = null, watchText = "";
   let liveTimer = null;
 
   // The Apache Guacamole client (vendored) powers the in-portal RDP viewer. It is
@@ -143,7 +150,7 @@
   const optVal = (form, id) => (form["o" + id]?.value || "").trim();
 
   // --- async openers: fetch the screen's data, then render it. Also used by F5. ---
-  async function openTargets() { try { targets = await api("GET", "/api/targets"); } catch (e) { targets = []; } go("targets"); }
+  async function openTargets() { try { [targets, safes] = await Promise.all([api("GET", "/api/targets"), api("GET", "/api/safes").catch(() => safes)]); } catch (e) { targets = []; } go("targets"); }
   async function openCreds() { try { [targets, creds] = await Promise.all([api("GET", "/api/targets").catch(() => []), api("GET", "/api/credentials")]); } catch (e) { creds = []; } go("creds"); }
   async function openSessions() { try { sessions = await api("GET", "/api/sessions"); } catch (e) { sessions = []; } go("sessions"); }
   async function openCheckouts() { try { [targets, checkouts] = await Promise.all([api("GET", "/api/targets").catch(() => []), api("GET", "/api/checkouts?active=true")]); } catch (e) { checkouts = []; } go("checkouts"); }
@@ -181,7 +188,96 @@
     go("appgrants");
   }
 
+  // Safes console (Phase 17). Targets are loaded alongside so the safe screens
+  // can show how many targets each safe holds.
+  async function openSafes() {
+    try { [safes, targets] = await Promise.all([api("GET", "/api/safes"), api("GET", "/api/targets").catch(() => targets)]); }
+    catch (e) { safes = []; }
+    go("safes");
+  }
+  async function openSafeMembers(sid) {
+    membersSafe = sid; safeMembers = [];
+    try { safeMembers = await api("GET", `/api/safes/${sid}/members`); } catch (e) {}
+    go("safemembers");
+  }
+  // openTargetSafe opens the assign-target-to-safe screen, making sure the safe
+  // list is loaded for the picker.
+  async function openTargetSafe(t) {
+    safeTarget = t;
+    if (safes.length === 0) { try { safes = await api("GET", "/api/safes"); } catch (e) {} }
+    go("targetsafe");
+  }
+  // Certification campaigns console (Phase 19).
+  async function openCampaigns() { try { campaigns = await api("GET", "/api/campaigns"); } catch (e) { campaigns = []; } go("campaigns"); }
+  async function openCampaign(id) {
+    try { campView = await api("GET", `/api/campaigns/${id}`); } catch (e) { campView = null; }
+    go("campitems");
+  }
+  // Risk dashboard (Phase 23). A 404 means the analytics engine is not wired in.
+  async function openRisk() {
+    risk = null;
+    try {
+      const q = [riskMin && "min_level=" + riskMin, riskWin && "window_min=" + encodeURIComponent(riskWin)].filter(Boolean).join("&");
+      risk = await api("GET", "/api/analytics/risk" + (q ? "?" + q : ""));
+    } catch (e) { if (e.status === 404) say("THREAT ANALYTICS IS NOT ENABLED."); }
+    go("risk");
+  }
+
+  // stripCtl removes ANSI escape sequences and carriage returns from a live
+  // terminal frame so the watch pane shows readable text, not control codes.
+  const stripCtl = (t) => t.replace(/\x1b(?:\[[0-9;?]*[ -\/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\)?|[@-Z\\-_])/g, "").replace(/\r/g, "");
+
+  // appendWatch adds a live frame to the watch pane, keeping only the most
+  // recent output bounded so a long session cannot grow the DOM without limit.
+  function appendWatch(t) {
+    watchText = (watchText + stripCtl(t)).slice(-65536);
+    const pane = document.getElementById("watch-pane");
+    if (pane) { pane.textContent = watchText; pane.scrollTop = pane.scrollHeight; }
+  }
+  // stopWatch aborts the SSE stream and clears the viewer state; go() calls it
+  // whenever navigation leaves the watch screen.
+  function stopWatch() {
+    if (watchAbort) { watchAbort.abort(); watchAbort = null; }
+    watchSess = null; watchText = "";
+  }
+
+  // watchSession opens the live monitor for a session (Phase 16): it reads the
+  // GET /api/sessions/{id}/stream SSE endpoint with fetch — EventSource cannot
+  // send the X-API-Key header — and renders each output frame into the pane.
+  // The watch is view-only and is itself audited server-side (session.monitor).
+  async function watchSession(s) {
+    stopWatch();
+    watchSess = s;
+    go("sesswatch");
+    const ctrl = new AbortController();
+    watchAbort = ctrl;
+    try {
+      const res = await fetch(`/api/sessions/${s.id}/stream`, { headers: { "X-API-Key": apiKey }, signal: ctrl.signal });
+      if (!res.ok) throw new Error("STREAM UNAVAILABLE (" + res.status + ")");
+      const reader = res.body.getReader();
+      const dec = new TextDecoder();
+      let buf = "";
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, { stream: true });
+        let i;
+        while ((i = buf.indexOf("\n\n")) >= 0) {
+          const ev = buf.slice(0, i); buf = buf.slice(i + 2);
+          for (const line of ev.split("\n")) {
+            // The server escapes embedded newlines as a literal \n marker.
+            if (line.startsWith("data: ")) appendWatch(line.slice(6).replaceAll("\\n", "\n"));
+          }
+        }
+      }
+      if (screen === "sesswatch" && !ctrl.signal.aborted) { say("SESSION ENDED — STREAM CLOSED."); render(); }
+    } catch (e) {
+      if (screen === "sesswatch" && !ctrl.signal.aborted) { say("CPF9999: " + String(e.message || e).toUpperCase(), true); render(); }
+    }
+  }
+
   const targetName = (id) => { const t = targets.find((x) => x.id === id); return t ? t.name : id; };
+  const safeName = (id) => { if (!id) return "-"; const s = safes.find((x) => x.id === id); return s ? s.name : "safe " + id; };
 
   // reconcileIdentities revokes directory users who have been disabled upstream.
   async function reconcileIdentities() {
@@ -349,6 +445,9 @@ ${fkeys("")}
           line(13, can("manage_users"), "System configuration") +
           line(14, can("manage_users"), "Effective config & IaC export") +
           line(15, can("manage_users"), "Work with application secrets") +
+          line(16, can("read_inventory"), "Work with safes") +
+          line(17, can("read_audit"), "Certification campaigns") +
+          line(18, can("read_audit"), "Risk analytics") +
           "90. Sign off\n";
         term.innerHTML = `${head("PAMMAIN", "PAMV1 Main Menu")}
 Select one of the following:
@@ -365,7 +464,8 @@ ${fkeys("F3=Sign off   F5=Refresh")}`;
             "5": openRequests, "6": openReconcile, "7": () => go("discovery"),
             "8": openUsers, "9": openMfa, "10": openAudit, "11": () => go("breakglass"),
             "12": openProfiles, "13": openConfig, "14": openEffective,
-            "15": openApps, "90": signoff,
+            "15": openApps, "16": openSafes, "17": openCampaigns, "18": openRisk,
+            "90": signoff,
           };
           if (routes[c]) { try { await routes[c](); } catch (e) { say("CPF9999: " + e.message, true); render(); } }
           else { say("CPF0001: SELECTION " + c.toUpperCase() + " NOT VALID.", true); render(); }
@@ -378,11 +478,11 @@ ${fkeys("F3=Sign off   F5=Refresh")}`;
         const canConnect = can("connect");
         term.innerHTML = `${head("PAMWRKTGT", "Work with Targets")}
 Type options, press Enter.
-  <span class="cyan">${[canManage ? "4=Delete" : "", canManage ? "5=Work with grants" : "", canConnect ? "7=Open RDP (rdp targets)" : "", !canManage && !canConnect ? "(read-only role)" : ""].filter(Boolean).join("   ")}</span>
+  <span class="cyan">${[canManage ? "4=Delete" : "", canManage ? "5=Work with grants" : "", canConnect ? "7=Open RDP (rdp targets)" : "", canManage ? "8=Assign to safe" : "", !canManage && !canConnect ? "(read-only role)" : ""].filter(Boolean).join("   ")}</span>
 
 <form id="f-list"><table>
-<tr><th>Opt</th><th>ID</th><th>Name</th><th>Host</th><th>Port</th><th>OS</th><th>Proto</th><th>Approval</th></tr>
-${targets.map((t) => `<tr><td>${opt(t.id)}</td><td>${esc(t.id)}</td><td>${pad(t.name, 16)}</td><td>${pad(t.host, 20)}</td><td>${esc(t.port)}</td><td>${pad(t.os_type, 8)}</td><td>${pad(t.protocol, 6)}</td><td>${t.require_approval ? '<span class="amber">required</span>' : "-"}</td></tr>`).join("")}
+<tr><th>Opt</th><th>ID</th><th>Name</th><th>Host</th><th>Port</th><th>OS</th><th>Proto</th><th>Approval</th><th>Safe</th></tr>
+${targets.map((t) => `<tr><td>${opt(t.id)}</td><td>${esc(t.id)}</td><td>${pad(t.name, 16)}</td><td>${pad(t.host, 20)}</td><td>${esc(t.port)}</td><td>${pad(t.os_type, 8)}</td><td>${pad(t.protocol, 6)}</td><td>${t.require_approval ? '<span class="amber">required</span>' : "-"}</td><td class="cyan">${esc(safeName(t.safe_id))}</td></tr>`).join("")}
 </table>${targets.length ? "" : `<div class="cyan indent">(No targets defined.${canManage ? " Press F6 to add." : ""})</div>`}
 <input type="submit" hidden></form>
 ${fkeys(`F3=Exit   F5=Refresh${canManage ? "   F6=Add target" : ""}   F12=Cancel`)}`;
@@ -394,6 +494,7 @@ ${fkeys(`F3=Exit   F5=Refresh${canManage ? "   F6=Add target" : ""}   F12=Cancel
               if (o === "4") { await api("DELETE", `/api/targets/${t.id}`); say(`TARGET ${String(t.name).toUpperCase()} DELETED.`); }
               else if (o === "5") { return openGrants(t.id); }
               else if (o === "7") { return openRDP(t); }
+              else if (o === "8") { return openTargetSafe(t); }
               else if (o) { say("CPF0002: OPTION " + o.toUpperCase() + " NOT VALID.", true); }
             }
             await openTargets();
@@ -574,7 +675,7 @@ ${fkeys("F3=Exit   F5=Refresh   F12=Cancel")}`;
         const canKill = can("manage_targets");
         term.innerHTML = `${head("PAMWRKSSN", "Work with Active Sessions")}
 Live proxied sessions (auto-refresh 5s). Type options, press Enter.
-  <span class="cyan">${canKill ? "4=End session (kill)" : "(read-only)"}</span>
+  <span class="cyan">${[canKill ? "4=End session (kill)" : "", "5=Watch (live monitor)"].filter(Boolean).join("   ")}</span>
 
 <form id="f-list"><table>
 <tr><th>Opt</th><th>ID</th><th>Actor</th><th>Target</th><th>Proto</th><th>Remote</th><th>Started</th></tr>
@@ -588,6 +689,7 @@ ${fkeys("F3=Exit   F5=Refresh   F12=Cancel")}`;
             for (const s of sessions) {
               const o = optVal(ev.target, s.id);
               if (o === "4") { await api("DELETE", `/api/sessions/${s.id}`); say(`SESSION ${String(s.id).slice(0, 8)} ENDED.`); }
+              else if (o === "5") { return watchSession(s); }
               else if (o) { say("CPF0002: OPTION " + o.toUpperCase() + " NOT VALID.", true); }
             }
             await openSessions();
@@ -601,17 +703,30 @@ ${fkeys("F3=Exit   F5=Refresh   F12=Cancel")}`;
         }, 5000);
       },
 
+      sesswatch() {
+        back = "sessions";
+        const s = watchSess || {};
+        term.innerHTML = `${head("PAMWCHSSN", "Watch Session (live)")}
+Session <span class="white">${esc(String(s.id).slice(0, 8))}</span>  actor <span class="white">${esc(s.actor)}</span>  target <span class="white">${esc(s.target)}</span>  proto <span class="white">${esc(s.protocol)}</span>
+<span class="cyan">View-only supervision — keystrokes are not sent. This watch is audited (session.monitor).</span>
+<div id="watch-pane" class="watchpane">${esc(watchText)}</div>
+${fkeys("F3=Exit   F12=Stop watching")}`;
+        const pane = document.getElementById("watch-pane");
+        if (pane) pane.scrollTop = pane.scrollHeight;
+      },
+
       requests() {
         back = "main";
         const isApprover = can("approve");
         const tn = Object.fromEntries(targets.map((t) => [t.id, t.name]));
         term.innerHTML = `${head("PAMWRKREQ", "Work with Access Requests")}
 ${isApprover ? `Pending 4-eyes requests. Type options, press Enter.
-  <span class="cyan">5=Approve   6=Deny</span>
+  <span class="cyan">5=Approve   6=Deny</span>   <span class="cyan">Apprv = distinct approvals so far / required (N-of-M chains)</span>
 
 <form id="f-list"><table>
-<tr><th>Opt</th><th>ID</th><th>Requester</th><th>Target</th><th>Reason</th><th>Status</th><th>Expires</th></tr>
-${requests.map((r) => `<tr><td>${opt(r.id)}</td><td>${esc(r.id)}</td><td>${pad(r.requester, 12)}</td><td>${pad(tn[r.target_id] || r.target_id, 14)}</td><td>${pad(r.reason || "-", 16)}</td><td class="${r.status === "pending" ? "amber" : ""}">${esc(r.status)}</td><td class="cyan">${fmtTime(r.expires_at)}</td></tr>`).join("")}
+<tr><th>Opt</th><th>ID</th><th>Requester</th><th>Target</th><th>Reason</th><th>Ticket</th><th>Status</th><th>Apprv</th><th>Active from</th><th>Expires</th></tr>
+${requests.map((r) => { const n = r.approved_by ? r.approved_by.split(",").filter(Boolean).length : 0;
+  return `<tr><td>${opt(r.id)}</td><td>${esc(r.id)}</td><td>${pad(r.requester, 10)}</td><td>${pad(tn[r.target_id] || r.target_id, 12)}</td><td>${pad(r.reason || "-", 12)}</td><td>${pad(r.ticket || "-", 10)}</td><td class="${r.status === "pending" ? "amber" : ""}">${esc(r.status)}</td><td>${n}/${esc(r.required_approvals || 1)}</td><td class="cyan">${fmtTime(r.not_before)}</td><td class="cyan">${fmtTime(r.expires_at)}</td></tr>`; }).join("")}
 </table>${requests.length ? "" : `<div class="cyan indent">(No pending requests.)</div>`}
 <input type="submit" hidden></form>` : `<div class="cyan">You can file an access request for a target that requires approval.</div>`}
 ${fkeys(`F3=Exit   F5=Refresh   F6=File request   F12=Cancel`)}`;
@@ -638,15 +753,23 @@ Request approval to connect to a target (4-eyes / maintenance window).
 
 <form id="f-add" class="indent">
 <label>Target ID . . . . . :  <input name="target_id" type="number" min="1" size="6" required autofocus>   <span class="cyan">${targets.map((t) => `${t.id}=${esc(t.name)}`).join("  ") || "no targets visible"}</span></label>
-<label>Reason  . . . . . . :  <input name="reason" size="40"></label>
+<label>Reason  . . . . . . :  <input name="reason" size="40">   <span class="cyan">mandatory if PAM_REQUIRE_REASON is set</span></label>
+<label>Change ticket . . . :  <input name="ticket" size="16">   <span class="cyan">ITSM reference (e.g. CHG0012345); validated if configured</span></label>
+<label>Approvals needed  . :  <input name="approvals" type="number" min="1" size="4">   <span class="cyan">blank = policy default; ask for a stricter N-of-M chain</span></label>
+<label>Active from . . . . :  <input name="not_before" type="datetime-local">   <span class="cyan">optional — pre-approve a future maintenance window</span></label>
+<label>Active until  . . . :  <input name="not_after" type="datetime-local">   <span class="cyan">optional — end of the window (else the policy TTL)</span></label>
 <input type="submit" hidden>
 </form>
 ${fkeys("F3=Exit   F12=Cancel")}`;
         document.getElementById("f-add").onsubmit = async (ev) => {
           ev.preventDefault();
           const f = Object.fromEntries(new FormData(ev.target));
-          f.target_id = Number(f.target_id);
-          try { await api("POST", "/api/access-requests", f); say("ACCESS REQUEST FILED — awaiting approval."); await openRequests(); }
+          const body = { target_id: Number(f.target_id), reason: f.reason };
+          if (f.ticket) body.ticket = f.ticket;
+          if (f.approvals) body.approvals = Number(f.approvals);
+          if (f.not_before) body.not_before = new Date(f.not_before).toISOString();
+          if (f.not_after) body.not_after = new Date(f.not_after).toISOString();
+          try { await api("POST", "/api/access-requests", body); say("ACCESS REQUEST FILED — awaiting approval."); await openRequests(); }
           catch (e) { say("CPF9898: " + e.message, true); render(); }
         };
       },
@@ -1079,6 +1202,240 @@ ${fkeys("F3=Exit   F12=Cancel")}`;
           } catch (e) { say("CPF9898: " + e.message, true); render(); }
         };
       },
+
+      safes() {
+        back = "main";
+        const canManage = can("manage_targets");
+        const tCount = (id) => targets.filter((t) => t.safe_id === id).length;
+        term.innerHTML = `${head("PAMWRKSAF", "Work with Safes")}
+Named containers that group targets and delegate access: a safe member may
+connect to every target in the safe. Type options, press Enter.
+  <span class="cyan">${[canManage ? "4=Delete" : "", "5=Work with members"].filter(Boolean).join("   ")}</span>
+
+<form id="f-list"><table>
+<tr><th>Opt</th><th>ID</th><th>Name</th><th>Description</th><th>Targets</th><th>Created</th></tr>
+${safes.map((s) => `<tr><td>${opt(s.id)}</td><td>${esc(s.id)}</td><td>${pad(s.name, 16)}</td><td class="detail">${pad(s.description || "-", 24)}</td><td>${tCount(s.id)}</td><td class="cyan">${fmtTime(s.created_at)}</td></tr>`).join("")}
+</table>${safes.length ? "" : `<div class="cyan indent">(No safes.${canManage ? " Press F6 to add one, then assign targets from Work with Targets, option 8." : ""})</div>`}
+<input type="submit" hidden></form>
+<div class="cyan">Assign targets from Work with Targets (menu 1), option 8. Deleting a safe unassigns its targets.</div>
+${fkeys(`F3=Exit   F5=Refresh${canManage ? "   F6=Add safe" : ""}   F12=Cancel`)}`;
+        document.getElementById("f-list").onsubmit = async (ev) => {
+          ev.preventDefault();
+          try {
+            for (const s of safes) {
+              const o = optVal(ev.target, s.id);
+              if (o === "4") { await api("DELETE", `/api/safes/${s.id}`); say(`SAFE ${String(s.name).toUpperCase()} DELETED.`); }
+              else if (o === "5") { return openSafeMembers(s.id); }
+              else if (o) { say("CPF0002: OPTION " + o.toUpperCase() + " NOT VALID.", true); }
+            }
+            await openSafes();
+          } catch (e) { say("CPF9999: " + e.message, true); render(); }
+        };
+      },
+
+      safeadd() {
+        back = "safes";
+        term.innerHTML = `${head("PAMADDSAF", "Add Safe")}
+Create a container to group targets and delegate who may access them.
+
+<form id="f-add" class="indent">
+<label>Name  . . . . . . . :  <input name="name" size="20" required autofocus></label>
+<label>Description . . . . :  <input name="description" size="40"></label>
+<input type="submit" hidden>
+</form>
+${fkeys("F3=Exit   F12=Cancel")}`;
+        document.getElementById("f-add").onsubmit = async (ev) => {
+          ev.preventDefault();
+          const f = Object.fromEntries(new FormData(ev.target));
+          try { await api("POST", "/api/safes", f); say(`SAFE ${String(f.name).toUpperCase()} CREATED.`); await openSafes(); }
+          catch (e) { say("CPF9898: " + e.message, true); render(); }
+        };
+      },
+
+      safemembers() {
+        back = "safes";
+        const sf = safes.find((x) => x.id === membersSafe);
+        term.innerHTML = `${head("PAMSAFMBR", "Work with Safe Members")}
+Members of safe <span class="white">${esc(sf ? sf.name : membersSafe)}</span> (id ${esc(membersSafe)}) — each may connect to
+every target in the safe; a "manages" member may also edit this member list.
+Type options, press Enter.  <span class="cyan">4=Remove</span>
+
+<form id="f-list"><table>
+<tr><th>Opt</th><th>ID</th><th>Subject type</th><th>Subject</th><th>Manages safe</th></tr>
+${safeMembers.map((m) => `<tr><td>${opt(m.id)}</td><td>${esc(m.id)}</td><td>${pad(m.subject_type, 10)}</td><td>${pad(m.subject, 18)}</td><td>${m.can_manage ? '<span class="amber">yes</span>' : "-"}</td></tr>`).join("")}
+</table>${safeMembers.length ? "" : `<div class="cyan indent">(No members — only direct target grants admit access. Press F6 to add.)</div>`}
+<input type="submit" hidden></form>
+${fkeys("F3=Exit   F5=Refresh   F6=Add member   F12=Cancel")}`;
+        document.getElementById("f-list").onsubmit = async (ev) => {
+          ev.preventDefault();
+          try {
+            for (const m of safeMembers) {
+              const o = optVal(ev.target, m.id);
+              if (o === "4") { await api("DELETE", `/api/safes/${membersSafe}/members/${m.id}`); say(`MEMBER ${m.id} REMOVED.`); }
+              else if (o) { say("CPF0002: OPTION " + o.toUpperCase() + " NOT VALID.", true); }
+            }
+            await openSafeMembers(membersSafe);
+          } catch (e) { say("CPF9999: " + e.message, true); render(); }
+        };
+      },
+
+      safememberadd() {
+        back = "safemembers";
+        const sf = safes.find((x) => x.id === membersSafe);
+        term.innerHTML = `${head("PAMADDMBR", "Add Safe Member")}
+Grant a subject access to every target in safe <span class="white">${esc(sf ? sf.name : membersSafe)}</span>.
+
+<form id="f-add" class="indent">
+<label>Subject type  . . . :  <select name="subject_type"><option>role</option><option>user</option></select>   <span class="cyan">role, user</span></label>
+<label>Subject . . . . . . :  <input name="subject" size="24" required autofocus>   <span class="cyan">a role (admin/user/…) or a username</span></label>
+<label>Manages the safe  . :  <input name="can_manage" type="checkbox">   <span class="cyan">may add/remove members (delegated administration)</span></label>
+<input type="submit" hidden>
+</form>
+${fkeys("F3=Exit   F12=Cancel")}`;
+        document.getElementById("f-add").onsubmit = async (ev) => {
+          ev.preventDefault();
+          const f = Object.fromEntries(new FormData(ev.target));
+          const body = { subject_type: f.subject_type, subject: f.subject, can_manage: ev.target.can_manage.checked };
+          try { await api("POST", `/api/safes/${membersSafe}/members`, body); say("MEMBER ADDED."); await openSafeMembers(membersSafe); }
+          catch (e) { say("CPF9898: " + e.message, true); render(); }
+        };
+      },
+
+      targetsafe() {
+        back = "targets";
+        const t = safeTarget || {};
+        term.innerHTML = `${head("PAMTGTSAF", "Assign Target to Safe")}
+Placing target <span class="white">${esc(t.name)}</span> in a safe restricts it to the safe's members
+(plus any direct target grants).
+
+<form id="f-add" class="indent">
+<label>Safe  . . . . . . . :  <select name="safe_id" autofocus>
+<option value="">(none — remove from its safe)</option>
+${safes.map((s) => `<option value="${esc(s.id)}"${t.safe_id === s.id ? " selected" : ""}>${esc(s.id)} — ${esc(s.name)}</option>`).join("")}
+</select></label>
+<input type="submit" hidden>
+</form>${safes.length ? "" : `<div class="cyan indent">(No safes defined yet — create one in Work with Safes, menu 16.)</div>`}
+${fkeys("F3=Exit   F12=Cancel")}`;
+        document.getElementById("f-add").onsubmit = async (ev) => {
+          ev.preventDefault();
+          const v = ev.target.safe_id.value;
+          try {
+            await api("PUT", `/api/targets/${t.id}/safe`, { safe_id: v ? Number(v) : null });
+            say(`TARGET ${String(t.name).toUpperCase()} ${v ? "PLACED IN SAFE." : "REMOVED FROM ITS SAFE."}`);
+            await openTargets();
+          } catch (e) { say("CPF9898: " + e.message, true); render(); }
+        };
+      },
+
+      campaigns() {
+        back = "main";
+        const canManage = can("manage_users");
+        term.innerHTML = `${head("PAMWRKCMP", "Certification Campaigns")}
+Point-in-time access reviews: a campaign snapshots who has access to what; each
+item is certified (kept) or revoked (the grant is deleted). Type options, press Enter.
+  <span class="cyan">${["5=Review items", canManage ? "8=Close campaign" : ""].filter(Boolean).join("   ")}</span>
+
+<form id="f-list"><table>
+<tr><th>Opt</th><th>ID</th><th>Name</th><th>Status</th><th>Created by</th><th>Created</th><th>Due</th></tr>
+${campaigns.map((c) => `<tr><td>${opt(c.id)}</td><td>${esc(c.id)}</td><td>${pad(c.name, 18)}</td><td class="${c.status === "open" ? "amber" : "cyan"}">${esc(c.status)}</td><td>${pad(c.created_by, 12)}</td><td class="cyan">${fmtTime(c.created_at)}</td><td class="cyan">${fmtTime(c.due_at)}</td></tr>`).join("")}
+</table>${campaigns.length ? "" : `<div class="cyan indent">(No campaigns.${canManage ? " Press F6 to snapshot the current access grants into one." : ""})</div>`}
+<input type="submit" hidden></form>
+${fkeys(`F3=Exit   F5=Refresh${canManage ? "   F6=New campaign" : ""}   F12=Cancel`)}`;
+        document.getElementById("f-list").onsubmit = async (ev) => {
+          ev.preventDefault();
+          try {
+            for (const c of campaigns) {
+              const o = optVal(ev.target, c.id);
+              if (o === "5") { return openCampaign(c.id); }
+              else if (o === "8") { await api("POST", `/api/campaigns/${c.id}/close`, {}); say(`CAMPAIGN ${String(c.name).toUpperCase()} CLOSED.`); }
+              else if (o) { say("CPF0002: OPTION " + o.toUpperCase() + " NOT VALID.", true); }
+            }
+            await openCampaigns();
+          } catch (e) { say("CPF9999: " + e.message, true); render(); }
+        };
+      },
+
+      campaignadd() {
+        back = "campaigns";
+        term.innerHTML = `${head("PAMADDCMP", "New Certification Campaign")}
+Snapshots every current target grant and safe member as reviewable items.
+
+<form id="f-add" class="indent">
+<label>Name  . . . . . . . :  <input name="name" size="28" required autofocus>   <span class="cyan">e.g. 2026-Q3 access review</span></label>
+<label>Due date  . . . . . :  <input name="due" type="date" size="12">   <span class="cyan">optional</span></label>
+<input type="submit" hidden>
+</form>
+${fkeys("F3=Exit   F12=Cancel")}`;
+        document.getElementById("f-add").onsubmit = async (ev) => {
+          ev.preventDefault();
+          const f = Object.fromEntries(new FormData(ev.target));
+          const body = { name: f.name };
+          if (f.due) body.due_at = new Date(f.due + "T23:59:59").toISOString();
+          try {
+            const r = await api("POST", "/api/campaigns", body);
+            say(`CAMPAIGN CREATED — ${r.items ?? 0} ITEM(S) CAPTURED.`);
+            await openCampaigns();
+          } catch (e) { say("CPF9898: " + e.message, true); render(); }
+        };
+      },
+
+      campitems() {
+        back = "campaigns";
+        const cv = campView || { campaign: {}, items: [] };
+        const c = cv.campaign, items = cv.items || [];
+        const open = c.status === "open", canDecide = can("manage_users") && open;
+        const decided = items.filter((i) => i.decision !== "pending").length;
+        const dcls = { certified: "green", revoked: "red", pending: "amber" };
+        term.innerHTML = `${head("PAMCMPITM", "Review Campaign Items")}
+Campaign <span class="white">${esc(c.name)}</span> (id ${esc(c.id)}) — <span class="${open ? "amber" : "cyan"}">${esc(c.status)}</span>, ${decided}/${items.length} decided.
+${canDecide ? `Type options, press Enter.  <span class="cyan">5=Certify (keep)   6=Revoke (DELETES the underlying grant)</span>` : `<span class="cyan">${open ? "(read-only — deciding needs manage_users)" : "(campaign closed — decisions are final)"}</span>`}
+
+<form id="f-list"><table>
+<tr><th>Opt</th><th>Item</th><th>Kind</th><th>Subject</th><th>Access</th><th>Decision</th><th>By</th></tr>
+${items.map((i) => `<tr><td>${canDecide && i.decision === "pending" ? opt(i.id) : ""}</td><td>${esc(i.id)}</td><td>${pad(i.kind, 12)}</td><td>${pad(i.subject_type + ":" + i.subject, 18)}</td><td class="detail">${esc(i.detail)}</td><td class="${dcls[i.decision] || ""}">${esc(i.decision)}</td><td>${pad(i.decided_by || "-", 10)}</td></tr>`).join("")}
+</table>${items.length ? "" : `<div class="cyan indent">(No items — there were no target grants or safe members to review when the campaign was created.)</div>`}
+<input type="submit" hidden></form>
+${fkeys("F3=Exit   F5=Refresh   F12=Cancel")}`;
+        document.getElementById("f-list").onsubmit = async (ev) => {
+          ev.preventDefault();
+          try {
+            for (const i of items) {
+              const o = optVal(ev.target, i.id);
+              if (o === "5") { await api("POST", `/api/campaigns/${c.id}/items/${i.id}/decision`, { decision: "certify" }); say(`ITEM ${i.id} CERTIFIED.`); }
+              else if (o === "6") { await api("POST", `/api/campaigns/${c.id}/items/${i.id}/decision`, { decision: "revoke" }); say(`ITEM ${i.id} REVOKED — GRANT DELETED.`); }
+              else if (o) { say("CPF0002: OPTION " + o.toUpperCase() + " NOT VALID.", true); }
+            }
+            await openCampaign(c.id);
+          } catch (e) { say("CPF9999: " + e.message, true); render(); }
+        };
+      },
+
+      risk() {
+        back = "main";
+        const r = risk;
+        const lcls = { critical: "red", high: "amber", medium: "white" };
+        const sigs = (f) => (f.signals || []).map((s) => `${s.name}=${s.points}`).join(" ");
+        term.innerHTML = `${head("PAMRISK", "Risk Analytics")}
+Behavioral risk over the recent audit window — every point traces to a named
+signal (break-glass, blocked commands, auth failures, off-hours, velocity).
+
+<form id="f-filter" class="indent">
+<label>Minimum level . . . :  <select name="min">${["", "medium", "high", "critical"].map((l) => `<option value="${l}"${riskMin === l ? " selected" : ""}>${l || "(all)"}</option>`).join("")}</select>   Window (min) . . :  <input name="win" size="6" inputmode="numeric" value="${esc(riskWin)}" placeholder="default">   <span class="cyan">Enter=Rescore</span></label>
+<input type="submit" hidden>
+</form>
+${r ? `<div class="white">Window: ${esc(r.window_minutes)} min   Events scored: ${esc(r.scored_events)}   Actors flagged: ${(r.findings || []).length}</div>
+<table>
+<tr><th>Actor</th><th>Score</th><th>Level</th><th>Signals</th><th>Events</th><th>Last activity</th></tr>
+${(r.findings || []).map((f) => `<tr><td>${pad(f.actor, 16)}</td><td>${esc(f.score)}</td><td class="${lcls[f.level] || "green"}">${esc(f.level)}</td><td class="detail cyan">${esc(sigs(f))}</td><td>${esc(f.events)}</td><td class="cyan">${fmtTime(f.last_ts)}</td></tr>`).join("")}
+</table>${(r.findings || []).length ? "" : `<div class="cyan indent">(No actors at or above the selected level in this window.)</div>`}` : `<div class="cyan indent">(No data — threat analytics may be disabled.)</div>`}
+${fkeys("F3=Exit   F5=Refresh   F12=Cancel")}`;
+        document.getElementById("f-filter").onsubmit = async (ev) => {
+          ev.preventDefault();
+          riskMin = ev.target.min.value;
+          riskWin = ev.target.win.value.trim();
+          try { await openRisk(); } catch (e) { say("CPF9999: " + e.message, true); render(); }
+        };
+      },
     })[screen]();
     focusPrimary();
   }
@@ -1103,13 +1460,14 @@ ${fkeys("F3=Exit   F12=Cancel")}`;
     if (s !== "credview") viewCred = null;
     if (s !== "usercreated") newUser = null;
     if (s !== "appcreated") newApp = null;
+    if (s !== "sesswatch") stopWatch();
     stopLive();
     screen = s; render(); msg = ""; msgErr = false;
   }
-  function signoff() { stopLive(); apiKey = ""; me = null; sessionStorage.removeItem("pam_api_key"); say("SIGN OFF COMPLETE."); go("signon"); }
+  function signoff() { stopLive(); stopWatch(); apiKey = ""; me = null; sessionStorage.removeItem("pam_api_key"); say("SIGN OFF COMPLETE."); go("signon"); }
 
-  const refreshers = { targets: openTargets, creds: openCreds, sessions: openSessions, checkouts: openCheckouts, users: openUsers, mfa: openMfa, audit: openAudit, reconcile: openReconcile, requests: openRequests, grants: () => openGrants(grantsTarget), profiles: openProfiles, config: openConfig, effective: openEffective, apps: openApps, appgrants: () => openAppGrants(grantsApp) };
-  const adders = { targets: () => go("targetadd"), creds: () => go("credadd"), grants: () => go("grantadd"), users: () => go("useradd"), requests: () => go("requestadd"), profiles: () => go("profileadd"), config: () => go("configset"), apps: () => go("appadd"), appgrants: () => go("appgrantadd") };
+  const refreshers = { targets: openTargets, creds: openCreds, sessions: openSessions, checkouts: openCheckouts, users: openUsers, mfa: openMfa, audit: openAudit, reconcile: openReconcile, requests: openRequests, grants: () => openGrants(grantsTarget), profiles: openProfiles, config: openConfig, effective: openEffective, apps: openApps, appgrants: () => openAppGrants(grantsApp), safes: openSafes, safemembers: () => openSafeMembers(membersSafe), campaigns: openCampaigns, campitems: () => campView && openCampaign(campView.campaign.id), risk: openRisk };
+  const adders = { targets: () => go("targetadd"), creds: () => go("credadd"), grants: () => go("grantadd"), users: () => go("useradd"), requests: () => go("requestadd"), profiles: () => go("profileadd"), config: () => go("configset"), apps: () => go("appadd"), appgrants: () => go("appgrantadd"), safes: () => go("safeadd"), safemembers: () => go("safememberadd"), campaigns: () => go("campaignadd") };
 
   window.addEventListener("keydown", async (ev) => {
     // While the RDP viewer is open it owns the keyboard (its own capture-phase
